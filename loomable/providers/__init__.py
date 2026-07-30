@@ -27,6 +27,9 @@ Example
 from .anthropic import AnthropicProvider
 from .embedders import AzureOpenAIEmbedder, Embedder, OpenAIEmbedder
 from .errors import PermanentProviderError, TransientProviderError
+from .gemini import GeminiProvider
+from .groq import GroqProvider
+from .ollama import OllamaProvider
 from .openai import AzureOpenAIProvider, OpenAIProvider
 from .resilient import ResilientModel, RetryPolicy
 
@@ -34,6 +37,9 @@ __all__ = [
     "OpenAIProvider",
     "AzureOpenAIProvider",
     "AnthropicProvider",
+    "GeminiProvider",
+    "GroqProvider",
+    "OllamaProvider",
     "Embedder",
     "OpenAIEmbedder",
     "AzureOpenAIEmbedder",

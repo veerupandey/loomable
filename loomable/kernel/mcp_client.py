@@ -1,9 +1,12 @@
 """MCP Client for the loomable agent framework.
 
-Implements the Model Context Protocol at the tools boundary (Req 4).
+Implements the Model Context Protocol at the tools boundary.
 On connect, enumerates exposed tools and data resources.
 Connection failures yield MCPConnectionError naming the server.
 Tool invocation errors yield MCPToolError naming the tool.
+
+Transports (stdio and SSE/HTTP) import the ``mcp`` SDK lazily so callers
+who configure no MCP servers never pay for the import.
 """
 
 from __future__ import annotations
@@ -50,18 +53,23 @@ class MCPClient:
     - connect(): establishes connection and enumerates capabilities
     - list_capabilities(): returns discovered tools and resources
     - call_tool(): invokes a named tool with arguments
+    - close(): terminates the transport for a session
 
     Error contract:
     - Failed connection raises MCPConnectionError naming the server_id.
     - Tool invocation failure raises MCPToolError naming the tool.
     """
 
+    def __init__(self) -> None:
+        # Live transport contexts keyed by server_id for invoke/close.
+        self._sessions: dict[str, Any] = {}
+
     async def connect(self, spec: MCPServerSpec) -> MCPSession:
         """Connect to an MCP server and enumerate its capabilities.
 
         Args:
             spec: Server specification dict containing at minimum a 'server_id'
-                  key, plus transport/auth configuration.
+                  or 'name' key, plus transport/auth configuration.
 
         Returns:
             An MCPSession with discovered capabilities.
@@ -122,42 +130,239 @@ class MCPClient:
 
         return result
 
+    async def close(self, session: MCPSession) -> None:
+        """Close a session and terminate its underlying transport.
+
+        Stops launched subprocesses and closes sockets. After close, the session
+        is no longer connected and tool calls will fail.
+        """
+        live = self._sessions.pop(session.server_id, None)
+        if live is not None:
+            cleanup = live.get("cleanup")
+            if cleanup is not None:
+                try:
+                    await cleanup()
+                except Exception:
+                    pass  # best-effort cleanup
+        session.connected = False
+
     # ------------------------------------------------------------------
-    # Internal methods — these form the integration seam for testing.
-    # In production, these would use the actual MCP protocol transport.
+    # Transport implementation
     # ------------------------------------------------------------------
+
+    def _select_transport(self, spec: MCPServerSpec) -> str:
+        """Determine the transport type from the spec.
+
+        Returns "stdio" or "http". Raises MCPConnectionError if unresolvable.
+        """
+        server_id = spec.get("server_id", spec.get("name", "unknown"))
+        transport = spec.get("transport")
+        if transport:
+            if transport == "stdio":
+                return "stdio"
+            if transport in ("sse", "http", "streamable-http"):
+                return "http"
+            raise MCPConnectionError(server_id)
+
+        # Infer from available fields
+        if spec.get("command"):
+            return "stdio"
+        if spec.get("url"):
+            return "http"
+        raise MCPConnectionError(server_id)
 
     async def _establish_connection(
         self, spec: MCPServerSpec
     ) -> MCPCapabilities:
         """Establish transport connection and enumerate capabilities.
 
-        This is the integration point for the actual MCP protocol.
-        Subclass or mock this method for testing.
-
-        Raises:
-            Exception: On any transport or protocol failure.
+        Imports the ``mcp`` SDK lazily at the point of use so callers who
+        never configure MCP servers never import it.
         """
-        # Default implementation attempts to use the spec to connect.
-        # For real usage, this would open stdio/SSE transport and call
-        # initialize + tools/list + resources/list per the MCP protocol.
-        raise NotImplementedError(
-            "MCPClient._establish_connection must be provided by a "
-            "concrete transport implementation or mocked for testing."
+        server_id = spec.get("server_id", spec.get("name", "unknown"))
+        transport_type = self._select_transport(spec)
+
+        if transport_type == "stdio":
+            return await self._connect_stdio(spec, server_id)
+        else:
+            return await self._connect_http(spec, server_id)
+
+    async def _connect_stdio(
+        self, spec: MCPServerSpec, server_id: str
+    ) -> MCPCapabilities:
+        """Connect via stdio transport (launches subprocess)."""
+        try:
+            from mcp import ClientSession
+            from mcp.client.stdio import StdioServerParameters, stdio_client
+        except ImportError as exc:
+            raise MCPConnectionError(server_id) from exc
+
+        command = spec["command"]
+        args = spec.get("args", [])
+        env = spec.get("env")
+
+        server_params = StdioServerParameters(
+            command=command,
+            args=args,
+            env=env,
         )
+
+        try:
+            # stdio_client returns an async context manager yielding (read, write) streams
+            transport_ctx = stdio_client(server_params)
+            streams = await transport_ctx.__aenter__()
+            read_stream, write_stream = streams
+
+            # Create and initialize the client session
+            session_ctx = ClientSession(read_stream, write_stream)
+            client_session = await session_ctx.__aenter__()
+            await client_session.initialize()
+
+            # Store for later invoke/close
+            self._sessions[server_id] = {
+                "client_session": client_session,
+                "session_ctx": session_ctx,
+                "transport_ctx": transport_ctx,
+                "cleanup": self._make_cleanup(session_ctx, transport_ctx),
+            }
+
+            # Enumerate tools and resources
+            return await self._enumerate_capabilities(client_session)
+
+        except MCPConnectionError:
+            raise
+        except Exception as exc:
+            raise MCPConnectionError(server_id) from exc
+
+    async def _connect_http(
+        self, spec: MCPServerSpec, server_id: str
+    ) -> MCPCapabilities:
+        """Connect via SSE/HTTP transport (remote server)."""
+        try:
+            from mcp import ClientSession
+        except ImportError as exc:
+            raise MCPConnectionError(server_id) from exc
+
+        url = spec["url"]
+        headers = spec.get("headers", {})
+
+        # Try streamablehttp first, fall back to sse_client
+        try:
+            from mcp.client.streamable_http import streamablehttp_client
+
+            transport_factory = streamablehttp_client
+        except ImportError:
+            try:
+                from mcp.client.sse import sse_client
+
+                transport_factory = sse_client
+            except ImportError as exc:
+                raise MCPConnectionError(server_id) from exc
+
+        try:
+            transport_ctx = transport_factory(url=url, headers=headers)
+            streams = await transport_ctx.__aenter__()
+            read_stream, write_stream = streams
+
+            session_ctx = ClientSession(read_stream, write_stream)
+            client_session = await session_ctx.__aenter__()
+            await client_session.initialize()
+
+            self._sessions[server_id] = {
+                "client_session": client_session,
+                "session_ctx": session_ctx,
+                "transport_ctx": transport_ctx,
+                "cleanup": self._make_cleanup(session_ctx, transport_ctx),
+            }
+
+            return await self._enumerate_capabilities(client_session)
+
+        except MCPConnectionError:
+            raise
+        except Exception as exc:
+            raise MCPConnectionError(server_id) from exc
+
+    async def _enumerate_capabilities(self, client_session: Any) -> MCPCapabilities:
+        """Enumerate tools and resources from the connected session."""
+        tools: list[dict[str, Any]] = []
+        resources: list[dict[str, Any]] = []
+
+        try:
+            tools_result = await client_session.list_tools()
+            for tool in tools_result.tools:
+                tools.append({
+                    "name": tool.name,
+                    "description": getattr(tool, "description", "") or "",
+                    "parameters": (
+                        tool.inputSchema if hasattr(tool, "inputSchema")
+                        else getattr(tool, "input_schema", {"type": "object", "properties": {}})
+                    ),
+                })
+        except Exception:
+            pass  # tools not available
+
+        try:
+            resources_result = await client_session.list_resources()
+            for resource in resources_result.resources:
+                resources.append({
+                    "uri": str(getattr(resource, "uri", "")),
+                    "name": getattr(resource, "name", ""),
+                    "description": getattr(resource, "description", ""),
+                })
+        except Exception:
+            pass  # resources not available
+
+        return MCPCapabilities(tools=tools, resources=resources)
 
     async def _invoke_tool(
         self, session: MCPSession, tool_name: str, args: dict[str, Any]
     ) -> ToolResult:
-        """Invoke a tool via the MCP protocol transport.
+        """Invoke a tool via the MCP protocol transport."""
+        if not session.connected:
+            raise MCPToolError(tool_name)
 
-        This is the integration point for actual tool calls.
-        Subclass or mock this method for testing.
+        live = self._sessions.get(session.server_id)
+        if live is None:
+            raise MCPToolError(tool_name)
 
-        Raises:
-            Exception: On any invocation failure.
-        """
-        raise NotImplementedError(
-            "MCPClient._invoke_tool must be provided by a "
-            "concrete transport implementation or mocked for testing."
-        )
+        client_session = live["client_session"]
+        try:
+            result = await client_session.call_tool(tool_name, args)
+        except Exception as exc:
+            raise MCPToolError(tool_name) from exc
+
+        # Map MCP result to kernel ToolResult
+        return self._map_call_result(result, tool_name)
+
+    def _map_call_result(self, result: Any, tool_name: str) -> ToolResult:
+        """Map an MCP CallToolResult to a kernel ToolResult."""
+        # MCP results have .content (list of content blocks) and .isError
+        is_error = getattr(result, "isError", False)
+
+        # Extract text content from result
+        content_parts: list[str] = []
+        for block in getattr(result, "content", []):
+            if hasattr(block, "text"):
+                content_parts.append(block.text)
+            elif hasattr(block, "data"):
+                content_parts.append(str(block.data))
+
+        text = "\n".join(content_parts) if content_parts else ""
+
+        if is_error:
+            return ToolResult(error=text or f"Tool '{tool_name}' returned an error")
+        return ToolResult(content=text)
+
+    @staticmethod
+    def _make_cleanup(session_ctx: Any, transport_ctx: Any):
+        """Create a cleanup coroutine for closing session and transport."""
+        async def _cleanup():
+            try:
+                await session_ctx.__aexit__(None, None, None)
+            except Exception:
+                pass
+            try:
+                await transport_ctx.__aexit__(None, None, None)
+            except Exception:
+                pass
+        return _cleanup

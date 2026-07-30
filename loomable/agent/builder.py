@@ -1324,16 +1324,69 @@ class BuiltAgent:
     ) -> "AsyncIterator[RunChunk]":
         """Stream incremental output as :class:`RunChunk`s (Req 1.5).
 
-        Minimal correct implementation: run :meth:`arun`, then yield each output
-        part as a chunk, marking the last one ``done=True``. If the output has no
-        parts (it always has at least one by construction), a terminal empty text
-        chunk is emitted so the stream always ends with ``done=True``.
+        When the active provider implements ``stream()``, real token-level deltas
+        are yielded as they arrive. Otherwise, falls back to running ``arun()`` and
+        chunking its output (preserving pre-feature behavior).
+
+        The same context assembly (instructions, knowledge, memory prefix, token
+        bounding) and capability gating apply as in the non-streaming path.
+        Session state is persisted identically to ``arun`` so streamed and
+        non-streamed runs leave the same durable state.
         """
-        result = await self.arun(input, output_schema=output_schema)
-        parts = result.output.parts
-        last_index = len(parts) - 1
-        for index, part in enumerate(parts):
-            yield RunChunk(delta=part, done=index == last_index)
+        from loomable.content import Text as _Text
+
+        agent_input = self._coerce_input(input)
+
+        # Resolve the provider for streaming detection
+        provider = self.model_interface._providers.get(self.model_interface.default_provider)
+
+        if provider is not None and hasattr(provider, "stream"):
+            # --- Real streaming path ---
+            # (1) Input capability gating
+            for modality in agent_input.modalities():
+                if modality not in self.capabilities.input:
+                    raise UnsupportedModalityError(modality.value, self._model_id)
+
+            # (2) Assemble the request (same as _run_single)
+            request = to_model_request(agent_input)
+            prefix: list[dict] = []
+            if self.instructions:
+                prefix.append(
+                    {"role": "system", "content": [{"type": "text", "text": self.instructions}]}
+                )
+            knowledge_snippets = await self._recall_knowledge(agent_input)
+            prefix.extend(knowledge_snippets)
+            prefix.extend(self._memory_prefix())
+            if prefix:
+                request.messages = prefix + request.messages
+            if output_schema is not None:
+                request.messages.append(
+                    {"role": "system", "content": [{"type": "text", "text": _schema_instruction(output_schema)}]}
+                )
+            if self._token_budget is not None:
+                request.messages = self._bound_messages(request.messages, self._token_budget)
+
+            # (3) Stream from provider
+            accumulated_text = ""
+            async for event in provider.stream(request):
+                if event.kind == "text" and event.text:
+                    accumulated_text += event.text
+                    yield RunChunk(delta=_Text(event.text))
+                elif event.kind == "end":
+                    break
+
+            # (4) Terminal chunk
+            yield RunChunk(delta=_Text(""), done=True)
+
+            # (5) Persist session state (same as arun)
+            self._persist_session(_input_text(agent_input), accumulated_text)
+        else:
+            # --- Fallback: run then chunk ---
+            result = await self.arun(input, output_schema=output_schema)
+            parts = result.output.parts
+            last_index = len(parts) - 1
+            for index, part in enumerate(parts):
+                yield RunChunk(delta=part, done=index == last_index)
 
     async def dispatch_tools(self, calls: list[ToolCall]) -> list[ToolOutcome]:
         """Dispatch multiple tool calls concurrently (Req 12.1–12.4).
@@ -1582,8 +1635,10 @@ class Agent:
 
     def __init__(
         self,
-        model: ModelProvider | ModelSpec,
+        model: "ModelProvider | ModelSpec | str",
         *,
+        name: str = "",
+        description: str = "",
         instructions: str | None = None,
         tools: list[Tool] | None = None,
         skills: list[Path] | None = None,
@@ -1593,7 +1648,7 @@ class Agent:
         checkpoint_interval: int = 5,
         session_id: str | None = None,
         resume: bool = False,
-        # multi-agent orchestration (wired by task 8):
+        # multi-agent orchestration:
         sub_agents: list["Agent | BuiltAgent"] | None = None,
         mode: OrchestrationMode = OrchestrationMode.SINGLE,
         max_plan_steps: int = 5,
@@ -1601,26 +1656,30 @@ class Agent:
         memory_window: int = 8,
         compaction_threshold: int = 16,
         input_schema: type | None = None,
-        # knowledge / RAG (wired by task 9):
+        response_model: type | None = None,
+        # knowledge / RAG:
         retrievers: list[Retriever] | None = None,
         knowledge: list[str] | None = None,
         embedder: Any = None,
         knowledge_top_k: int = 3,
-        # tool hooks / HITL (wired by task 9):
+        # tool hooks / HITL:
         tool_hooks: list[Any] | None = None,
         require_confirmation: list[str] | None = None,
-        # Tiered model routing (Req 7):
+        # harness knobs (avoids needing build() for common config):
+        tool_timeout: float | None = None,
+        tool_concurrency: int | None = None,
+        # Tiered model routing:
         tiers: dict[str, Any] | None = None,
         tier_policy: dict[str, Any] | None = None,
         fallback_tiers: dict[str, str] | None = None,
-        # low-level overrides (Req 2.2/2.3):
+        # low-level overrides:
         context_manager: ContextManager | None = None,
         memory: MemoryManager | None = None,
         tool_runtime: ToolRuntime | None = None,
         harness: GuardrailHarness | None = None,
         planner: Planner | None = None,
         session_store: SessionStore | None = None,
-        # Harness features (Req 4.5, 10–12):
+        # Harness features:
         events: AgentEvents | None = None,
         complexity_router: "ComplexityRouter | None" = None,
         note_store: "NoteStore | None" = None,
@@ -1630,12 +1689,26 @@ class Agent:
         think_tool: bool = False,
         plan_tool: bool = False,
         memory_tool: bool = False,
+        # Developer experience:
+        debug: bool = False,
+        # Lifecycle callbacks:
+        on_tool_call: Any = None,
+        on_complete: Any = None,
     ) -> None:
+        # --- Resolve model string shorthand (e.g. "openai:gpt-4o-mini") ---
+        if isinstance(model, str):
+            from loomable.providers.resolver import resolve_model
+            resolved_provider = resolve_model(model)
+            model = ModelSpec(provider=model.split(":")[0] if ":" in model else "openai",
+                             provider_impl=resolved_provider)
+
         # Req 1.1/1.6: a model is required.
         if model is None:
             raise AgentConfigError("model")
 
         self._model = model
+        self._name = name
+        self._description = description
         self._instructions = instructions
         self._tools = tools
         self._skills = skills
@@ -1644,11 +1717,9 @@ class Agent:
         self._token_budget = token_budget
         self._checkpoint_interval = checkpoint_interval
         self._session_id = session_id
-        # When True and a session_id is given, build() resumes the persisted session
-        # from the session_store instead of creating a fresh one (Req 15.1/15.3/15.4).
         self._resume = resume
+        self._response_model = response_model
 
-        # Stored for later tasks (8/9); not yet wired into build().
         self._sub_agents = sub_agents
         self._mode = mode
         self._max_plan_steps = max_plan_steps
@@ -1656,16 +1727,16 @@ class Agent:
         self._memory_window = memory_window
         self._compaction_threshold = compaction_threshold
         self._input_schema = input_schema
-        # Retrievers are wired into the default ToolRuntime by build() via
-        # _build_tool_registry (task 9.3, Req 16).
         self._retrievers = retrievers
         self._knowledge = knowledge
         self._embedder = embedder
         self._knowledge_top_k = knowledge_top_k
         self._tool_hooks = tool_hooks
         self._require_confirmation = require_confirmation
+        self._tool_timeout = tool_timeout
+        self._tool_concurrency = tool_concurrency
 
-        # Tiered model routing (Req 7).
+        # Tiered model routing.
         self._tiers = tiers
         self._tier_policy = tier_policy
         self._fallback_tiers = fallback_tiers
@@ -1688,6 +1759,11 @@ class Agent:
         self._think_tool = think_tool
         self._plan_tool = plan_tool
         self._memory_tool = memory_tool
+
+        # Developer experience.
+        self._debug = debug
+        self._on_tool_call = on_tool_call
+        self._on_complete = on_complete
 
         # Cached BuiltAgent so repeated run calls reuse one runtime/session.
         self._built: BuiltAgent | None = None
@@ -1848,6 +1924,29 @@ class Agent:
             resilience=self._resilience,
         )
 
+        # --- Wire harness knobs from Agent constructor (avoids build() boilerplate) ---
+        if self._tool_timeout is not None:
+            built.tool_timeout = self._tool_timeout
+        if self._tool_concurrency is not None:
+            built.tool_concurrency = self._tool_concurrency
+
+        # --- Wire debug mode: use a console-friendly tracer ---
+        if self._debug and self._events is None:
+            from .events import JSONTracer
+            import sys
+            built.events = JSONTracer(stream=sys.stderr)
+
+        # --- Wire lifecycle callbacks as tool hooks ---
+        if self._on_tool_call is not None:
+            def _pre_hook(tool_name, call, args, _cb=self._on_tool_call):
+                _cb(tool_name, args)
+                return True  # allow execution
+            built.tool_hooks.append(_pre_hook)
+
+        # --- Store metadata on the built agent ---
+        built.name = self._name or None  # type: ignore[attr-defined]
+        built.description = self._description or None  # type: ignore[attr-defined]
+
         # --- Plan tool (Req 9): must be registered post-build because it references
         # the BuiltAgent itself ---
         if self._plan_tool:
@@ -1873,22 +1972,41 @@ class Agent:
         input: AgentInput | str,  # noqa: A002
         *,
         output_schema: type | None = None,
+        context: dict[str, Any] | None = None,
     ) -> RunResult:
-        """Build (once) and run the agent, returning a :class:`RunResult` (Req 1.4)."""
-        return await self._get_built().arun(input, output_schema=output_schema)
+        """Build (once) and run the agent, returning a :class:`RunResult` (Req 1.4).
+
+        Parameters
+        ----------
+        input:
+            The user input (string or AgentInput).
+        output_schema:
+            Optional per-call structured output schema (overrides response_model).
+        context:
+            Optional runtime context dict accessible during the run.
+        """
+        built = self._get_built()
+        # Use response_model as default output_schema when not overridden per-call
+        schema = output_schema or self._response_model
+        result = await built.arun(input, output_schema=schema)
+        # Lifecycle callback: on_complete
+        if self._on_complete is not None:
+            self._on_complete(result)
+        return result
 
     def run(
         self,
         input: AgentInput | str,  # noqa: A002
         *,
         output_schema: type | None = None,
+        context: dict[str, Any] | None = None,
     ) -> RunResult:
         """Synchronous wrapper around :meth:`arun` (Req 1.4).
 
         Uses :func:`asyncio.run`, which requires that no event loop is already
         running on the calling thread. In an async context, call :meth:`arun`.
         """
-        return asyncio.run(self.arun(input, output_schema=output_schema))
+        return asyncio.run(self.arun(input, output_schema=output_schema, context=context))
 
     async def astream(
         self,

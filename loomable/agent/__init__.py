@@ -20,9 +20,11 @@ from .builder import (
     PostToolHook,
     ToolHook,
 )
+from .channels import Channel, ChannelMessage, InMemoryChannel
 from .context import RunContext, StopReason
 from .errors import (
     AgentConfigError,
+    HITLPause,
     InputValidationError,
     StructuredOutputError,
     ToolHookRejection,
@@ -32,6 +34,7 @@ from .events import AgentEvents, Event, JSONTracer, NoOpEvents
 from .media import image, video
 from .notes import Note, NoteStore, make_memory_tool
 from .orchestration import Orchestrator
+from .pipeline import Pipeline
 from .reasoning import make_plan_tool, make_think_tool
 from .routing import ComplexityRouter, RunStrategy
 from .run import RunChunk, RunResult
@@ -52,6 +55,11 @@ __all__ = [
     "StructuredOutputError",
     "InputValidationError",
     "ToolHookRejection",
+    "HITLPause",
+    "Channel",
+    "ChannelMessage",
+    "InMemoryChannel",
+    "Pipeline",
     "RunResult",
     "RunChunk",
     "RunContext",

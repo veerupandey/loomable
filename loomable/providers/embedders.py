@@ -101,6 +101,7 @@ class AzureOpenAIEmbedder:
     ----------
     deployment:
         The Azure deployment name (used in the request URL).
+        Defaults to the ``AZURE_OPENAI_EMBED_DEPLOYMENT_NAME`` environment variable.
     endpoint:
         The Azure resource endpoint (e.g. ``https://my-resource.openai.azure.com``).
         Defaults to the ``AZURE_OPENAI_ENDPOINT`` environment variable.
@@ -108,7 +109,8 @@ class AzureOpenAIEmbedder:
         The Azure API key (sent as the ``api-key`` header). Defaults to the
         ``AZURE_OPENAI_API_KEY`` environment variable.
     api_version:
-        The Azure API version query parameter.
+        The Azure API version query parameter. Defaults to the
+        ``AZURE_OPENAI_EMBED_API_VERSION`` environment variable, or ``2023-05-15``.
     default_headers:
         Optional extra headers merged into every request.
     timeout:
@@ -117,15 +119,23 @@ class AzureOpenAIEmbedder:
 
     def __init__(
         self,
-        deployment: str,
+        deployment: str | None = None,
         *,
         endpoint: str | None = None,
         api_key: str | None = None,
-        api_version: str = "2024-08-01-preview",
+        api_version: str | None = None,
         default_headers: dict[str, str] | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
     ) -> None:
-        self.deployment = deployment
+        self.deployment = (
+            deployment if deployment is not None
+            else os.environ.get("AZURE_OPENAI_EMBED_DEPLOYMENT_NAME")
+        )
+        if not self.deployment:
+            raise ValueError(
+                "Azure embedding deployment is required: pass deployment=... "
+                "or set AZURE_OPENAI_EMBED_DEPLOYMENT_NAME."
+            )
         resolved_endpoint = (
             endpoint if endpoint is not None else os.environ.get("AZURE_OPENAI_ENDPOINT")
         )
@@ -137,7 +147,10 @@ class AzureOpenAIEmbedder:
         self._api_key = (
             api_key if api_key is not None else os.environ.get("AZURE_OPENAI_API_KEY")
         )
-        self._api_version = api_version
+        self._api_version = (
+            api_version if api_version is not None
+            else os.environ.get("AZURE_OPENAI_EMBED_API_VERSION", "2023-05-15")
+        )
         self._default_headers = dict(default_headers or {})
         self._timeout = timeout
 

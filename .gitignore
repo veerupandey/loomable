@@ -14,6 +14,9 @@ venv/
 .env
 .env.*
 
+# Kiro
+.kiro/
+
 # IDE
 .idea/
 .vscode/
@@ -25,3 +28,6 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Checkpoints
+.checkpoints/

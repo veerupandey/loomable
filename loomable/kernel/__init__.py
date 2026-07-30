@@ -53,6 +53,7 @@ from loomable.kernel.models import (
     ModelResponse,
     OnboardingRequest,
     Session,
+    StreamEvent,
     StructuredSummary,
     ToolCall,
     ToolError,
@@ -106,6 +107,7 @@ __all__ = [
     # Models - Tools
     "ModelRequest",
     "ModelResponse",
+    "StreamEvent",
     "ToolCall",
     "ToolError",
     "ToolOutcome",

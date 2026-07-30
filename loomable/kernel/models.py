@@ -279,3 +279,23 @@ class ModelResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
     usage: dict[str, int] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Streaming models
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class StreamEvent:
+    """An incremental unit yielded during provider streaming.
+
+    - kind="text": a text delta (``text`` is populated).
+    - kind="tool_call": an assembled tool call delta (``tool_call`` is populated).
+    - kind="end": the terminal event carrying final ``usage``.
+    """
+
+    kind: Literal["text", "tool_call", "end"]
+    text: str = ""
+    tool_call: ToolCall | None = None
+    usage: dict[str, int] = field(default_factory=dict)
