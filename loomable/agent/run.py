@@ -15,10 +15,13 @@ Depends only on the standard library and ``loomable.content``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loomable.agent.events import Event
 from loomable.content import AgentOutput, MediaPart
+
+if TYPE_CHECKING:
+    from loomable.flow.loop import VerdictResult
 
 
 @dataclass
@@ -54,6 +57,7 @@ class RunResult:
     structured: object | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     trace: list[Event] = field(default_factory=list)
+    verification: "VerdictResult | None" = None
 
 
 @dataclass

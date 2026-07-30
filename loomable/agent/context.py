@@ -17,7 +17,7 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from .events import AgentEvents, NoOpEvents
 
@@ -69,6 +69,22 @@ class RunContext:
     max_steps: int = 6
     token_budget: int | None = None
     loop_repeat_threshold: int = 3
+
+    # --- Flow-engine extensions (additive, defaults preserve existing behavior) ---
+
+    #: Typed dependency injection object (Req 3). Any Python object (dataclass,
+    #: Pydantic model, or plain value) made available to tools and nodes that
+    #: declare they accept it. ``None`` when not supplied (the default).
+    deps: Any = None
+
+    #: SharedState handle set when running inside a Flow. Allows nodes and tools
+    #: to read/write the flow's shared state. ``None`` outside a flow context.
+    shared_state: Any = None
+
+    #: Shared MemoryStore instance (Req 12.2). When a Flow has a memory store
+    #: attached, it is set here so every node that accepts it can read/write
+    #: memory. ``None`` when no memory is configured.
+    memory: Any = None
 
     # --- internal state (not part of the public constructor) ---
     _cancelled: bool = field(default=False, init=False, repr=False)

@@ -1,12 +1,17 @@
 """Unit test asserting the kernel remains independent of the additive layers.
 
 # Feature: agent-api, Property 16
+# Feature: agent-ergonomics, Property 17
 
 Property 16: Kernel remains independent — the ``loomable.kernel`` package tree
 must import nothing from the additive convenience layers ``loomable.agent``,
 ``loomable.content``, or ``loomable.serve``.
 
+Property 17: Kernel remains independent — assert ``loomable.kernel`` imports
+nothing from ``loomable.agent``/``content``/``serve``/``providers``.
+
 Validates: Req 1.7, 2.4, 7.7, 8.6, 10.3
+Validates: Requirements 9.2, 9.3
 """
 
 import ast
@@ -22,6 +27,7 @@ FORBIDDEN_PREFIXES = (
     "loomable.agent",
     "loomable.content",
     "loomable.serve",
+    "loomable.providers",
 )
 
 KERNEL_DIR = Path(loomable.kernel.__file__).parent
@@ -67,7 +73,7 @@ def test_kernel_file_does_not_import_additive_layers(path: Path):
     assert not forbidden, (
         f"{path.relative_to(KERNEL_DIR.parent)} imports forbidden additive "
         f"layer(s): {forbidden}. The kernel must remain independent of "
-        f"loomable.agent/content/serve."
+        f"loomable.agent/content/serve/providers."
     )
 
 
@@ -84,7 +90,7 @@ def test_kernel_tree_imports_no_additive_layer_aggregate():
             violations[str(path.relative_to(KERNEL_DIR.parent))] = forbidden
 
     assert not violations, (
-        "Kernel files import additive layers (loomable.agent/content/serve): "
+        "Kernel files import additive layers (loomable.agent/content/serve/providers): "
         f"{violations}"
     )
 

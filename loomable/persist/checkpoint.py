@@ -294,6 +294,42 @@ class JsonFileCheckpointer:
 # ---------------------------------------------------------------------------
 
 
+class InMemoryCheckpointer:
+    """An in-memory Checkpointer for testing only.
+
+    Stores checkpoints in a plain dict — all data is lost on process exit.
+    Use JsonFileCheckpointer or SQLiteCheckpointer for durable persistence.
+
+    This class exists so that tests can exercise checkpoint/resume logic
+    without touching the filesystem or SQLite.
+    """
+
+    def __init__(self, max_checkpoints: int | None = None) -> None:
+        self._store: dict[str, list[Checkpoint]] = {}
+        self._max_checkpoints = max_checkpoints
+
+    async def put(self, cp: Checkpoint) -> None:
+        """Store a checkpoint in memory."""
+        thread_list = self._store.setdefault(cp.thread_id, [])
+        thread_list.append(cp)
+
+        if self._max_checkpoints is not None:
+            excess = len(thread_list) - self._max_checkpoints
+            if excess > 0:
+                self._store[cp.thread_id] = thread_list[excess:]
+
+    async def get(self, thread_id: str) -> Checkpoint | None:
+        """Get the latest checkpoint for a thread."""
+        thread_list = self._store.get(thread_id)
+        if not thread_list:
+            return None
+        return thread_list[-1]
+
+    async def list(self, thread_id: str) -> list[Checkpoint]:
+        """List all checkpoints for a thread in commit order."""
+        return list(self._store.get(thread_id, []))
+
+
 class SQLiteCheckpointer:
     """A Checkpointer backed by stdlib sqlite3.
 

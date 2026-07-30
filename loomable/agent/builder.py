@@ -10,9 +10,9 @@ constructs default implementations for every kernel subsystem that was not suppl
 Missing or invalid required fields raise :class:`AgentConfigError` naming the field
 before any run is attempted (Req 1.6).
 
-The actual run flow (``arun`` / ``astream`` and capability gating) is implemented by
-task 3.2; :class:`BuiltAgent` here exposes read access to the composed subsystems
-(Req 2.1) and provides run-method stubs.
+Multi-agent orchestration is now handled via ``loomable.flow.Flow``. The agent
+retains only single-agent auto-escalation: single-shot → tool-loop → self-plan
+(via the Flow engine) (Req 14.4, 17.3).
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -226,20 +225,7 @@ def _validate_structured(text: str, output_schema: type) -> object:
     return data
 
 
-class OrchestrationMode(Enum):
-    """Multi-agent orchestration mode (fully wired by task 8).
 
-    ``SINGLE`` runs this agent's own loop with no sub-agents and is the default.
-    The remaining modes are placeholders for parallel/route/coordinate teams.
-    """
-
-    SINGLE = "single"
-    PARALLEL = "parallel"
-    ROUTE = "route"
-    COORDINATE = "coordinate"
-    #: Autonomous: the agent plans the task itself, runs the steps as concurrent
-    #: internal subagents, and synthesizes — no pre-supplied sub_agents needed.
-    PLAN = "plan"
 
 
 @dataclass
@@ -287,16 +273,12 @@ class BuiltAgent:
     # Enabled by build() only when the developer supplied an explicit session_id, so
     # runs with an auto-generated session id do not incur persistence.
     persist_session: bool = False
-    # Retained for later tasks (run flow, hooks/HITL, orchestration, sessions):
+    # Retained for later tasks (run flow, hooks/HITL, sessions):
     instructions: str | None = None
     harness: GuardrailHarness | None = None
     planner: Planner | None = None
     session_store: SessionStore | None = None
-    # Multi-agent orchestration (task 8): populated when sub-agents are configured.
-    sub_agents: list["BuiltAgent"] | None = None
-    mode: OrchestrationMode = OrchestrationMode.SINGLE
-    # Autonomous PLAN mode: max number of steps the agent decomposes a task into.
-    max_plan_steps: int = 5
+
     # Conversational memory (Req 15): when the agent has a session, recent turns are
     # injected into each request so it remembers across calls. ``memory_window`` caps
     # how many recent turns are replayed (0 = all). Set ``use_memory=False`` to disable.
@@ -350,7 +332,7 @@ class BuiltAgent:
     events: AgentEvents = field(default_factory=NoOpEvents)
 
     # Opt-in complexity router (Req 10.2/10.3): when set, arun consults it before
-    # mode selection (SINGLE→_run_single, TOOL_LOOP→_run_tool_loop, PLAN→AutoPlan).
+    # mode selection (SINGLE→_run_single, TOOL_LOOP→_run_tool_loop, PLAN→_run_plan).
     complexity_router: "ComplexityRouter | None" = None
 
     # Durable note store for the memory tool (Req 7 notes).
@@ -358,6 +340,15 @@ class BuiltAgent:
 
     # Loop-repeat threshold for no-progress detection (Req 3.1/3.2).
     loop_repeat_threshold: int = 3
+
+    # --- Output verification (Req 4.2–4.4) ---
+    # When a Verifier is configured, it is evaluated against the final output.
+    # The VerdictResult is recorded on RunResult.verification.
+    # When retry_on_failure is True and verification fails, the agent re-runs with
+    # the failure detail appended to context, up to max_verify_retries times.
+    verifier: Any = None  # Verifier | Callable | None
+    retry_on_failure: bool = False
+    max_verify_retries: int = 1
 
     # Transport resilience config (stored for reference; wrapping happens at build time).
     resilience: "RetryPolicy | None" = None
@@ -406,41 +397,47 @@ class BuiltAgent:
         input: AgentInput | str,  # noqa: A002
         *,
         output_schema: type | None = None,
+        context: "RunContext | None" = None,
     ) -> RunResult:
         """Run the agent once and return a :class:`RunResult`.
 
-        The flow (Req 1.4, 4.1–4.4, 5.1/5.4, 6.3/6.4):
+        The flow (Req 1.4, 4.1–4.4, 5.1/5.4, 6.3/6.4, 14.4, 17.3):
 
         1. Wrap a bare-string ``input`` via :meth:`AgentInput.from_text`.
         2. Validate every input modality is declared in ``capabilities.input``
            *before* touching the provider; raise :class:`UnsupportedModalityError`
            naming the modality and model otherwise (no provider call).
-        3. Bridge to a ``ModelRequest`` (prepending ``instructions`` as a leading
-           system message when set) and invoke the model interface.
-        4. Rebuild an :class:`AgentOutput` from the response.
+        3. Route by complexity: single-shot, tool-loop, or self-plan (via Flow).
+        4. When the complexity router selects PLAN, the agent builds and runs a
+           plan→map→synthesize Flow using the flow engine.
         5. Validate every output modality is declared in ``capabilities.output``;
            raise :class:`UnsupportedModalityError` otherwise.
 
-        When ``output_schema`` is provided, the request is hinted to produce JSON and
-        the response text is parsed/validated into ``output_schema``; the validated
-        object is set on ``RunResult.structured`` (Req 13.1/13.2), while the normal
-        text ``output`` remains populated. A parse or validation failure raises
-        :class:`StructuredOutputError` naming the failure (Req 13.3). With no schema,
-        behavior is unchanged and ``structured`` stays ``None`` (Req 13.4).
-
-        When this agent is configured for multi-agent orchestration (``mode`` is not
-        ``SINGLE`` and ``sub_agents`` are present), the run is delegated to an
-        :class:`~loomable.agent.orchestration.Orchestrator` (task 8, Req 11).
+        Parameters
+        ----------
+        input:
+            The user input — a plain string or a structured :class:`AgentInput`.
+        output_schema:
+            Optional Pydantic/dataclass schema for structured output validation.
+        context:
+            Optional :class:`RunContext` for flow-engine integration (Req 1.2).
+            When ``None`` (the default), a fresh context is created internally so
+            existing callers are unaffected.
         """
         agent_input = self._coerce_input(input)
 
         # --- Build a RunContext per run (Req 4.5, 11.1) ---
-        ctx = RunContext(
-            events=self.events,
-            max_steps=self.max_tool_iterations,
-            token_budget=self._token_budget,
-            loop_repeat_threshold=self.loop_repeat_threshold,
-        )
+        # When a context is supplied externally (flow-engine integration), use it
+        # so deps/shared_state propagate. Otherwise create a fresh one internally.
+        if context is not None:
+            ctx = context
+        else:
+            ctx = RunContext(
+                events=self.events,
+                max_steps=self.max_tool_iterations,
+                token_budget=self._token_budget,
+                loop_repeat_threshold=self.loop_repeat_threshold,
+            )
 
         # --- Emit run_start event (Req 11.1) ---
         ctx.events.emit(Event(
@@ -449,47 +446,29 @@ class BuiltAgent:
             attributes={"gen_ai.operation.name": "chat"},
         ))
 
-        # Route by orchestration mode. Every mode returns a RunResult, and this one
-        # agent persists the task + final answer into its own session/memory at the
-        # end — so memory is managed centrally on the single agent (Req 11, 15).
-        if self.mode is OrchestrationMode.PLAN:
-            # Autonomous: the agent plans the task, runs the steps as concurrent
-            # internal subagents, and synthesizes (no pre-supplied sub_agents).
-            from .autoplan import AutoPlan  # local import avoids a circular import
+        # Route: single-shot / tool-loop / self-plan. Multi-agent orchestration is
+        # now handled via Flow (Req 14.4, 17.3). The agent keeps only single-agent
+        # auto-escalation.
+        # --- Consult the complexity_router before mode selection (Req 10.2/10.3) ---
+        if self.complexity_router is not None:
+            from .routing import RunStrategy
 
-            result = await AutoPlan(self, max_steps=self.max_plan_steps).run(
-                agent_input, output_schema=output_schema
-            )
-        elif self.mode is not OrchestrationMode.SINGLE and self.sub_agents:
-            # Team of pre-supplied sub-agents (parallel / route / coordinate).
-            from .orchestration import Orchestrator
+            has_tools = bool(self.tool_runtime._tools)
+            strategy = self.complexity_router.classify(agent_input, has_tools=has_tools)
 
-            result = await Orchestrator(self.sub_agents, self.mode).run(agent_input)
-        else:
-            # --- Consult the complexity_router before mode selection (Req 10.2/10.3) ---
-            if self.complexity_router is not None:
-                from .routing import RunStrategy
-
-                has_tools = bool(self.tool_runtime._tools)
-                strategy = self.complexity_router.classify(agent_input, has_tools=has_tools)
-
-                if strategy == RunStrategy.SINGLE:
-                    result = await self._run_single(agent_input, output_schema=output_schema, ctx=ctx)
-                elif strategy == RunStrategy.PLAN:
-                    from .autoplan import AutoPlan
-
-                    result = await AutoPlan(self, max_steps=self.max_plan_steps).run(
-                        agent_input, output_schema=output_schema
-                    )
-                else:
-                    # TOOL_LOOP (default)
-                    result = await self._run_tool_loop(agent_input, output_schema=output_schema, ctx=ctx)
+            if strategy == RunStrategy.SINGLE:
+                result = await self._run_single(agent_input, output_schema=output_schema, ctx=ctx)
+            elif strategy == RunStrategy.PLAN:
+                result = await self._run_plan(agent_input, output_schema=output_schema, ctx=ctx)
             else:
-                # Default behavior (Req 10.3): tool-loop if tools exist, else single-shot.
-                if self.tool_runtime._tools:
-                    result = await self._run_tool_loop(agent_input, output_schema=output_schema, ctx=ctx)
-                else:
-                    result = await self._run_single(agent_input, output_schema=output_schema, ctx=ctx)
+                # TOOL_LOOP (default)
+                result = await self._run_tool_loop(agent_input, output_schema=output_schema, ctx=ctx)
+        else:
+            # Default behavior (Req 10.3): tool-loop if tools exist, else single-shot.
+            if self.tool_runtime._tools:
+                result = await self._run_tool_loop(agent_input, output_schema=output_schema, ctx=ctx)
+            else:
+                result = await self._run_single(agent_input, output_schema=output_schema, ctx=ctx)
 
         # --- Emit run_end event (Req 11.1) ---
         ctx.events.emit(Event(
@@ -502,6 +481,58 @@ class BuiltAgent:
         # --- Copy trace onto RunResult (Req 12.1) ---
         if hasattr(self.events, "trace"):
             result.trace = self.events.trace
+
+        # --- Output verification (Req 4.2–4.4) ---
+        # When a verifier is configured, evaluate it against the final output and
+        # record the verdict on the RunResult. When retry_on_failure is enabled and
+        # the verifier reports failure, re-run with the failure detail appended to
+        # context up to max_verify_retries times.
+        if self.verifier is not None:
+            from loomable.flow.loop import CallableVerifier, Verifier, VerdictResult
+
+            # Resolve the verifier: callable → CallableVerifier adapter
+            resolved_verifier: Verifier
+            if callable(self.verifier) and not isinstance(self.verifier, Verifier):
+                resolved_verifier = CallableVerifier(self.verifier)
+            else:
+                resolved_verifier = self.verifier
+
+            verdict = resolved_verifier.check(result.output, ctx)
+            result.verification = verdict
+
+            # Retry on failure when enabled (Req 4.3)
+            if not verdict.ok and self.retry_on_failure:
+                retries_left = self.max_verify_retries
+                while not verdict.ok and retries_left > 0:
+                    retries_left -= 1
+                    # Append the failure detail to the input for self-correction
+                    retry_input_text = (
+                        f"{_input_text(agent_input)}\n\n"
+                        f"[Verification failed: {verdict.detail}]"
+                    )
+                    retry_agent_input = self._coerce_input(retry_input_text)
+
+                    # Re-run via the same routing logic
+                    if self.complexity_router is not None:
+                        from .routing import RunStrategy
+
+                        has_tools = bool(self.tool_runtime._tools)
+                        strategy = self.complexity_router.classify(retry_agent_input, has_tools=has_tools)
+                        if strategy == RunStrategy.SINGLE:
+                            result = await self._run_single(retry_agent_input, output_schema=output_schema, ctx=ctx)
+                        elif strategy == RunStrategy.PLAN:
+                            result = await self._run_plan(retry_agent_input, output_schema=output_schema, ctx=ctx)
+                        else:
+                            result = await self._run_tool_loop(retry_agent_input, output_schema=output_schema, ctx=ctx)
+                    else:
+                        if self.tool_runtime._tools:
+                            result = await self._run_tool_loop(retry_agent_input, output_schema=output_schema, ctx=ctx)
+                        else:
+                            result = await self._run_single(retry_agent_input, output_schema=output_schema, ctx=ctx)
+
+                    # Re-verify
+                    verdict = resolved_verifier.check(result.output, ctx)
+                    result.verification = verdict
 
         # Persist conversational + session state after the run so it survives across
         # calls via the kernel SessionStore (Req 15.2): the input is recorded as a
@@ -763,6 +794,120 @@ class BuiltAgent:
         elif isinstance(content, str) and content in pinned_contents:
             return True
         return False
+
+    async def _run_plan(
+        self,
+        agent_input: AgentInput,
+        *,
+        output_schema: type | None = None,
+        ctx: RunContext | None = None,
+    ) -> RunResult:
+        """Execute the self-plan strategy via the Flow engine (Req 17.2, 17.3).
+
+        Builds a plan→map→synthesize Flow using :func:`plan_and_execute` from
+        ``loomable.flow.helpers``, replacing the removed ``AutoPlan`` class. The
+        planner, worker, and synthesizer are all backed by this agent's single-shot
+        path so the agent's session/tools/knowledge remain available.
+        """
+        from loomable.flow.helpers import plan_and_execute
+
+        task_text = _input_text(agent_input)
+
+        async def _planner(input: Any, **kwargs: Any) -> dict:
+            """Ask the model for a concise plan; return steps in shared state."""
+            import json as _json
+
+            plan_prompt = (
+                "You are a planner. Break the user's task into at most 5 concrete, "
+                "independent, actionable steps. Return ONLY a JSON array of short "
+                "imperative step strings (e.g. [\"Do X\", \"Do Y\"]). "
+                "No prose, no markdown, no code fences.\n\n"
+                f"Task: {task_text}"
+            )
+            result = await self._run_single(
+                AgentInput.from_text(plan_prompt), include_history=False, ctx=ctx
+            )
+            # Parse the plan response into a list of steps.
+            text = result.output.text().strip()
+            # Strip code fences if present.
+            if text.startswith("```"):
+                text = text.split("\n", 1)[-1] if "\n" in text else text
+                if text.endswith("```"):
+                    text = text[:-3]
+                text = text.strip()
+                if text.startswith("json"):
+                    text = text[len("json"):].strip()
+            try:
+                steps = _json.loads(text)
+                if not isinstance(steps, list):
+                    steps = [text]
+            except (ValueError, _json.JSONDecodeError):
+                # Fallback: split on newlines and strip bullets
+                steps = [
+                    line.strip().lstrip("-*•0123456789.) ")
+                    for line in text.splitlines()
+                    if line.strip() and not line.strip().startswith("#")
+                ]
+            return {"plan_steps": steps[:5]}
+
+        async def _worker(input: Any, **kwargs: Any) -> str:
+            """Run a single plan step through the agent's single-shot path."""
+            step = input if isinstance(input, str) else str(input)
+            prompt = (
+                f"Overall task:\n{task_text}\n\n"
+                f"Complete ONLY this step, concisely and concretely:\n{step}"
+            )
+            result = await self._run_single(
+                AgentInput.from_text(prompt), include_history=False, ctx=ctx
+            )
+            return result.output.text()
+
+        async def _synthesizer(input: Any, **kwargs: Any) -> str:
+            """Combine step results into a final cohesive answer."""
+            # input contains the shared state; extract step results
+            state_data = input if isinstance(input, dict) else {}
+            pieces = state_data.get("map", []) or []
+            combined = "\n".join(f"- {p}" for p in pieces) if pieces else str(input)
+            prompt = (
+                f"Original task:\n{task_text}\n\n"
+                f"Results from the planned steps:\n{combined}\n\n"
+                "Integrate these into one cohesive, well-structured final answer."
+            )
+            result = await self._run_single(
+                AgentInput.from_text(prompt),
+                output_schema=output_schema,
+                include_history=False,
+                ctx=ctx,
+            )
+            return result.output.text()
+
+        # Build and run the plan→map→synthesize flow.
+        flow = plan_and_execute(
+            planner=_planner,
+            workers=_worker,
+            synthesizer=_synthesizer,
+            session_id=self.session.session_id,
+        )
+        flow_result = await flow.arun(AgentInput.from_text(task_text))
+
+        # Wrap the flow result back into a RunResult with this agent's session.
+        from loomable.content import AgentOutput, Text
+
+        output_text = flow_result.output.text() if flow_result.output else ""
+        output = AgentOutput(parts=[Text(output_text)])
+
+        # Structured output validation if requested.
+        structured: object | None = None
+        if output_schema is not None:
+            structured = _validate_structured(output_text, output_schema)
+
+        return RunResult(
+            output=output,
+            session_id=self.session.session_id,
+            usage=flow_result.usage,
+            tool_activity=[],
+            structured=structured,
+        )
 
     async def _run_single(
         self,
@@ -1648,10 +1793,6 @@ class Agent:
         checkpoint_interval: int = 5,
         session_id: str | None = None,
         resume: bool = False,
-        # multi-agent orchestration:
-        sub_agents: list["Agent | BuiltAgent"] | None = None,
-        mode: OrchestrationMode = OrchestrationMode.SINGLE,
-        max_plan_steps: int = 5,
         use_memory: bool = True,
         memory_window: int = 8,
         compaction_threshold: int = 16,
@@ -1685,6 +1826,10 @@ class Agent:
         note_store: "NoteStore | None" = None,
         loop_repeat_threshold: int = 3,
         resilience: "RetryPolicy | None" = None,
+        # Output verification (Req 4.2–4.4):
+        verifier: Any = None,
+        retry_on_failure: bool = False,
+        max_verify_retries: int = 1,
         use_llm_summarizer: bool = False,
         think_tool: bool = False,
         plan_tool: bool = False,
@@ -1720,9 +1865,6 @@ class Agent:
         self._resume = resume
         self._response_model = response_model
 
-        self._sub_agents = sub_agents
-        self._mode = mode
-        self._max_plan_steps = max_plan_steps
         self._use_memory = use_memory
         self._memory_window = memory_window
         self._compaction_threshold = compaction_threshold
@@ -1755,6 +1897,9 @@ class Agent:
         self._note_store = note_store
         self._loop_repeat_threshold = loop_repeat_threshold
         self._resilience = resilience
+        self._verifier = verifier
+        self._retry_on_failure = retry_on_failure
+        self._max_verify_retries = max_verify_retries
         self._use_llm_summarizer = use_llm_summarizer
         self._think_tool = think_tool
         self._plan_tool = plan_tool
@@ -1866,9 +2011,6 @@ class Agent:
         # state from the same store instance used for save() after each run (Req 15).
         session = self._build_session(config, session_store)
 
-        # --- Build sub-agents for multi-agent orchestration (task 8, Req 11.1) ---
-        built_sub_agents = self._build_sub_agents()
-
         # --- Tiered model routing (Req 7): construct router if tiers configured ---
         router: ModelRouter | None = None
         if self._tiers:
@@ -1898,9 +2040,6 @@ class Agent:
             harness=harness,
             planner=planner,
             session_store=session_store,
-            sub_agents=built_sub_agents,
-            mode=self._mode,
-            max_plan_steps=self._max_plan_steps,
             use_memory=self._use_memory,
             memory_window=self._memory_window,
             compaction_threshold=self._compaction_threshold,
@@ -1922,6 +2061,9 @@ class Agent:
             note_store=self._note_store,
             loop_repeat_threshold=self._loop_repeat_threshold,
             resilience=self._resilience,
+            verifier=self._verifier,
+            retry_on_failure=self._retry_on_failure,
+            max_verify_retries=self._max_verify_retries,
         )
 
         # --- Wire harness knobs from Agent constructor (avoids build() boilerplate) ---
@@ -2208,23 +2350,6 @@ class Agent:
                 errors.append(err)
 
         return registry, errors
-
-    def _build_sub_agents(self) -> list[BuiltAgent] | None:
-        """Build the child agents for orchestration (Req 11.1).
-
-        Each entry may be an :class:`Agent` (built via its own :meth:`build`) or an
-        already-:class:`BuiltAgent`. Returns ``None`` when no sub-agents are
-        configured so the single-agent run path is preserved unchanged.
-        """
-        if not self._sub_agents:
-            return None
-        built: list[BuiltAgent] = []
-        for sub_agent in self._sub_agents:
-            if isinstance(sub_agent, Agent):
-                built.append(sub_agent.build())
-            else:
-                built.append(sub_agent)
-        return built
 
     def _build_session(
         self, config: AgentConfig, session_store: SessionStore

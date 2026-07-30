@@ -1,11 +1,12 @@
 # Loomable — High-Level API Reference
 
-A lightweight, production-grade agent framework. Build agents in 3 lines, scale to multi-agent pipelines with memory, streaming, and tool orchestration.
+A lightweight, production-grade agent framework. Build agents in 3 lines, scale to multi-agent workflows with memory, streaming, and tool orchestration.
 
 ---
 
 ## Table of Contents
 
+- [Progressive Disclosure (Levels 0–7)](#progressive-disclosure-levels-07)
 - [Quick Start](#quick-start)
 - [Agent](#agent)
 - [Tools](#tools)
@@ -13,14 +14,229 @@ A lightweight, production-grade agent framework. Build agents in 3 lines, scale 
 - [Memory](#memory)
 - [Structured Output](#structured-output)
 - [Streaming](#streaming)
-- [Multi-Agent Orchestration](#multi-agent-orchestration)
-- [Pipeline](#pipeline)
-- [Channels](#channels)
+- [Flow Engine](#flow-engine)
 - [Knowledge / RAG](#knowledge--rag)
 - [Production Hardening](#production-hardening)
 - [MCP Integration](#mcp-integration)
 - [Serving](#serving)
 - [Checkpointing](#checkpointing)
+
+---
+
+## Progressive Disclosure (Levels 0–7)
+
+The API is designed so you start simple and add capabilities incrementally — never rewrite into a new DSL. Each level adds configuration to the level below.
+
+### Level 0: Agent in 3 lines
+
+The simplest possible agent. No tools, no loops, no config.
+
+```python
+from loomable.agent import Agent
+
+agent = Agent(model="openai:gpt-4o-mini")
+result = agent.run("What is the capital of France?")
+print(result.output.text())
+```
+
+No optimizer, no engine, no checkpointer, no verifier, no deps, no memory. Just works.
+
+### Level 1: Agent + Tools (auto-escalates)
+
+Add tools and the agent automatically uses its tool loop. No strategy selection needed.
+
+```python
+from loomable.agent import Agent, tool
+
+@tool
+def search(query: str) -> str:
+    """Search the web."""
+    return f"Results for: {query}"
+
+agent = Agent(model="openai:gpt-4o-mini", tools=[search])
+result = agent.run("Find the latest AI news")
+```
+
+The complexity router auto-escalates: simple inputs get single-shot responses, complex inputs trigger the tool loop or self-plan — all transparent.
+
+### Level 2: Agent + Verifier (output guardrail)
+
+Add a Verifier to gate outputs against a machine-readable success condition.
+
+```python
+from loomable.agent import Agent
+from loomable.flow import Verifier, VerdictResult
+
+def check_citation(output, context) -> bool:
+    """Ensure the output contains a citation."""
+    return "[source]" in output.text()
+
+agent = Agent(
+    model="openai:gpt-4o-mini",
+    verifier=check_citation,
+    retry_on_failure=True,
+    max_verify_retries=2,
+)
+result = agent.run("Explain quantum computing with citations")
+# On failure, retries with feedback; result.verification shows outcome
+```
+
+A plain callable `(output, context) -> bool` works. No import ceremony required for the simple case.
+
+### Level 3: Loop (repeat until verified)
+
+Wrap any Runnable in a Loop for iterative refinement with explicit termination.
+
+```python
+from loomable.flow import Loop, Verifier, VerdictResult
+
+def quality_check(output, context):
+    if "excellent" in str(output).lower():
+        return VerdictResult(ok=True)
+    return VerdictResult(ok=False, detail="Needs more polish")
+
+loop = Loop(agent, verifier=quality_check, max_iterations=3)
+result = await loop.arun("Write an excellent summary of AI trends")
+# Repeats up to 3 times, feeding failure detail forward for self-correction
+```
+
+The Loop is itself a Runnable — usable standalone or as a node in a Flow.
+
+### Level 4: Flow with sequential list shorthand
+
+Compose multiple agents/functions into a sequential workflow. The simplest Flow — just a list.
+
+```python
+from loomable.flow import Flow
+
+def research(input):
+    return f"Research findings about: {input}"
+
+def write(input):
+    return f"Article based on: {input}"
+
+def edit(input):
+    return f"Polished: {input}"
+
+flow = Flow([research, write, edit])
+result = await flow.arun("AI agents in 2025")
+```
+
+Or use the `sequential()` helper (replaces the old `Pipeline`):
+
+```python
+from loomable.flow import sequential
+
+flow = sequential(research, write, edit)
+result = await flow.arun("AI agents in 2025")
+```
+
+Zero-config: no engine, optimizer, memory, or checkpointer needed.
+
+### Level 5: Flow with parallel engine
+
+Run independent branches concurrently. The engine handles supersteps automatically.
+
+```python
+from loomable.flow import Flow, Edge
+
+flow = Flow(
+    {"research": researcher, "analyze": analyst, "synthesize": writer},
+    edges=[
+        Edge(source="research", target="synthesize"),
+        Edge(source="analyze", target="synthesize"),
+    ],
+    engine="auto",  # auto-selects ParallelEngine (research & analyze are independent)
+)
+result = await flow.arun("Compare AI frameworks")
+```
+
+Or use the `parallel()` helper for the fully-concurrent broadcast pattern:
+
+```python
+from loomable.flow import parallel
+
+flow = parallel(researcher, analyst, writer)
+result = await flow.arun("Analyze the AI market")
+```
+
+Engine selection is automatic by default: linear chains get Sequential, independent branches get Parallel, a manager node gets Hierarchical.
+
+### Level 6: Flow with optimizer, memory, checkpointer
+
+Add optimization, shared memory, and durable checkpointing for production workflows.
+
+```python
+from loomable.flow import Flow, Optimizer, TieredMemoryStore, MemoryStore
+from loomable.persist import JsonFileCheckpointer
+
+flow = Flow(
+    {"research": researcher, "draft": writer, "review": reviewer},
+    edges=[
+        Edge(source="research", target="draft"),
+        Edge(source="draft", target="review"),
+    ],
+    optimizer=True,  # enables parallelization, dead-node elimination, CSE, model-tier rules
+    memory=TieredMemoryStore(),
+    checkpointer=JsonFileCheckpointer(".checkpoints"),
+    session_id="article-v1",
+)
+result = await flow.arun("Write a technical article")
+
+# Inspect the optimization
+plan = flow.explain()
+print(plan)  # shows original vs optimized topology + applied rules
+```
+
+Everything is opt-in. An unoptimized, memory-free, uncheckpointed flow runs identically to one without these options.
+
+### Level 7: Custom engine, HITL, observability
+
+Full control: custom execution engines, human-in-the-loop gates, and context-snapshot observability.
+
+```python
+from loomable.flow import (
+    Flow, Node, Edge, FlowPaused,
+    ExecutionEngine, ContextSnapshotConfig,
+)
+from loomable.persist import JsonFileCheckpointer
+
+# Custom engine (satisfies the ExecutionEngine protocol)
+class MyStreamingEngine:
+    async def run(self, flow, input, state, context):
+        # Custom execution logic — dependency-driven, streaming, etc.
+        ...
+
+# Human-in-the-loop: mark a node as requiring confirmation
+flow = Flow(
+    {
+        "draft": Node(node_id="draft", runnable=writer),
+        "publish": Node(node_id="publish", runnable=publisher, require_confirmation=True),
+    },
+    edges=[Edge(source="draft", target="publish")],
+    engine=MyStreamingEngine(),
+    checkpointer=JsonFileCheckpointer(".checkpoints"),
+    session_id="pub-flow",
+    events=my_event_emitter,  # receives node_start/node_end + context_snapshot events
+)
+
+try:
+    result = await flow.arun("Publish the quarterly report")
+except FlowPaused as paused:
+    # Flow paused before 'publish' — checkpoint saved, process can exit
+    # Later: resume with approval decision
+    ...
+```
+
+Context-snapshot observability (opt-in, zero overhead when disabled):
+
+```python
+from loomable.flow import ContextSnapshotConfig
+
+# Enable snapshots to see exactly what context each node received
+config = ContextSnapshotConfig(enabled=True, metadata_only=False)
+# Attach via events emitter — diagnose "green trace but wrong output" failures
+```
 
 ---
 
@@ -230,19 +446,6 @@ agent = Agent(
 # The model can now write/read/recall durable notes across sessions
 ```
 
-### Universal Memory (works for agents, pipelines, sub-agents)
-
-```python
-# Same pattern everywhere — session_id is the key
-pipeline = Pipeline(steps=[agent1, agent2], session_id="conv-1")
-pipeline.run("Write about AI")
-pipeline.run("Make it shorter")  # → remembers
-
-coordinator = Agent(model="...", sub_agents=[a, b], mode="coordinate", session_id="s1")
-coordinator.run("Research")
-coordinator.run("Follow up")  # → sub-agents see history
-```
-
 ---
 
 ## Structured Output
@@ -286,129 +489,88 @@ async for chunk in agent.astream("Tell me about AI"):
 
 ---
 
-## Multi-Agent Orchestration
+## Flow Engine
 
-### Modes
+The unified composition model replacing the previous `Pipeline`, `Orchestrator`, and `AutoPlan` classes. One primitive (`Runnable`), one composition path (`Flow`).
+
+### Core Concepts
+
+| Concept | What |
+|---------|------|
+| `Runnable` | The protocol everything implements: `arun(input, *, context) -> RunResult` |
+| `Loop` | Repeat a Runnable until a Verifier passes or a cap is hit |
+| `Flow` | A directed graph of Runnables with shared state and pluggable engines |
+| `Node` | A vertex in a Flow wrapping one Runnable |
+| `Edge` | A directed connection between nodes (optionally gated by a condition) |
+| `Map` | Fan-out one Runnable over a runtime list |
+| `Router` | Select which downstream node(s) run next |
+
+### Convenience Constructors
 
 ```python
-from loomable.agent import Agent
+from loomable.flow import sequential, parallel, route, coordinate, plan_and_execute
 
-researcher = Agent(model="openai:gpt-4o-mini", name="researcher", tools=[search])
-writer = Agent(model="anthropic:claude-sonnet-4-20250514", name="writer")
-analyst = Agent(model="groq:llama-3.3-70b-versatile", name="analyst")
+# Sequential chain (replaces Pipeline)
+flow = sequential(step_a, step_b, step_c)
+
+# Concurrent broadcast (replaces Orchestrator PARALLEL)
+flow = parallel(researcher, analyst, writer)
+
+# Predicate routing (replaces Orchestrator ROUTE)
+flow = route(chooser_fn, {"research": researcher, "write": writer})
+
+# Hierarchical delegation (replaces Orchestrator COORDINATE)
+flow = coordinate(workers=[researcher, analyst], manager=synthesizer)
+
+# Plan → Map → Synthesize (replaces AutoPlan)
+flow = plan_and_execute(planner, worker, synthesizer)
 ```
 
-**PARALLEL** — broadcast to all, run concurrently, aggregate:
+### Engines
+
+| Engine | When |
+|--------|------|
+| `SequentialEngine` | Linear chain — one node at a time |
+| `ParallelEngine` | Independent branches — BSP supersteps |
+| `HierarchicalEngine` | Manager delegates to workers |
+| `engine="auto"` | Auto-selected from topology |
+
+### SharedState + Reducers
+
 ```python
-team = Agent(model="openai:gpt-4o-mini", sub_agents=[researcher, writer, analyst], mode="parallel")
-result = await team.arun("Analyze the AI market")
+from loomable.flow import SharedState, overwrite, append, merge
+
+# Default: overwrite (last-write-wins)
+# append: accumulate into a list
+# merge: shallow dict merge
+# Custom: any (existing, incoming) -> merged function
 ```
 
-**ROUTE** — select one sub-agent, run only that one:
-```python
-router = Agent(model="openai:gpt-4o-mini", sub_agents=[researcher, writer], mode="route")
-```
-
-**COORDINATE** — run all in parallel, then leader synthesizes:
-```python
-lead = Agent(model="openai:gpt-4o-mini", sub_agents=[researcher, writer], mode="coordinate")
-```
-
-**PLAN** — autonomous decomposition → parallel subagents → synthesis:
-```python
-planner = Agent(model="openai:gpt-4o-mini", mode="plan", max_plan_steps=5, tools=[search])
-result = await planner.arun("Compare 3 frameworks step by step and write a recommendation")
-```
-
-### Complexity Router (auto-escalation)
+### Full Package Exports
 
 ```python
-from loomable.agent import ComplexityRouter
-
-agent = Agent(
-    model="openai:gpt-4o-mini",
-    tools=[search],
-    complexity_router=ComplexityRouter(),
+from loomable.flow import (
+    # Core
+    Runnable, FunctionRunnable,
+    # Tier 2
+    Loop, Verifier, VerdictResult, AlwaysOkVerifier, CallableVerifier,
+    # Tier 3
+    Flow, FlowPlan, Node, Edge, Map, Router,
+    # State
+    SharedState, Reducer, overwrite, append, merge,
+    # Engines
+    ExecutionEngine, SequentialEngine, ParallelEngine, HierarchicalEngine,
+    # Optimizer
+    Optimizer, OptimizationRule,
+    # Memory
+    MemoryStore, Tier, TieredMemoryStore,
+    # HITL
+    FlowPaused,
+    # Observability
+    ContextSnapshotConfig, MessageDisposition, MessageSnapshot,
+    # Helpers
+    sequential, parallel, route, coordinate, plan_and_execute,
 )
-# Simple input → single-shot
-# Medium input → tool loop (ReAct)
-# Complex input → auto-plan with parallel subagents
-```
-
-### Think Tool (scratchpad reasoning)
-
-```python
-agent = Agent(model="openai:gpt-4o-mini", tools=[search], think_tool=True)
-# Model gets a zero-side-effect scratchpad for reasoning before acting
-```
-
-### Plan Tool (runtime escalation)
-
-```python
-agent = Agent(model="openai:gpt-4o-mini", tools=[search], plan_tool=True)
-# Model can choose to decompose a hard task mid-run
-```
-
----
-
-## Pipeline
-
-Sequential multi-agent execution with optional iterative refinement and memory.
-
-### Basic Pipeline
-
-```python
-from loomable.agent import Pipeline
-
-pipeline = Pipeline(steps=[researcher, writer])
-result = await pipeline.run("Write about AI agents")
-```
-
-### With Iterative Refinement
-
-```python
-from loomable.agent import Pipeline, InMemoryChannel
-
-feedback = InMemoryChannel(name="feedback")
-pipeline = Pipeline(
-    steps=[researcher, writer, critic],
-    feedback_channel=feedback,
-    max_iterations=3,
-    stop_condition=lambda text: "APPROVED" in text,
-)
-result = await pipeline.run("Write a polished article")
-# critic loops back until it says APPROVED (or max_iterations hit)
-```
-
-### With Memory (multi-turn follow-up)
-
-```python
-pipeline = Pipeline(steps=[researcher, writer], session_id="article-project")
-await pipeline.run("Write about frameworks")
-await pipeline.run("Add a comparison table")  # remembers the article
-await pipeline.run("Now shorten the intro")   # still remembers
-```
-
----
-
-## Channels
-
-Decoupled message-passing between agents. Protocol-based — swap in Redis/Kafka later.
-
-```python
-from loomable.agent import InMemoryChannel, ChannelMessage
-
-channel = InMemoryChannel(name="research-to-writer")
-
-# Agent A writes
-await channel.send(ChannelMessage(sender="researcher", content="findings..."))
-
-# Agent B reads
-msg = await channel.receive(timeout=5.0)
-print(msg.content)  # "findings..."
-
-# Inspect history
-history = await channel.peek()
 ```
 
 ---
@@ -591,9 +753,10 @@ from loomable.persist import PendingAction, Checkpoint
 
 ## Architecture Principles
 
-- **Lean**: no mandatory deps beyond stdlib + httpx
+- **Lean**: no mandatory deps beyond stdlib + httpx; flow-engine adds zero new mandatory dependencies
 - **Decoupled**: every feature is a Protocol with a zero-dep default
 - **Plug-and-play**: swap backends (vector DB, checkpointer, channels) without code changes
-- **Kernel independence**: `loomable.kernel` imports nothing from edge layers
+- **Kernel independence**: `loomable.kernel` imports nothing from edge layers; the flow-engine does not modify kernel
 - **Opt-in everything**: unconfigured features have zero overhead
 - **Fault isolation**: one tool/subagent/server failure never cascades
+- **Progressive disclosure**: start with 3 lines, scale to multi-agent DAGs without rewriting

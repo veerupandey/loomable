@@ -5,10 +5,9 @@ primitives without modifying ``loomable.kernel``:
 
 - ``Agent`` builder and ``BuiltAgent`` runtime wrapper
 - ``ModelSpec`` declarative model configuration
-- ``OrchestrationMode`` multi-agent orchestration modes
 - ``AgentConfigError`` for invalid/missing builder configuration
 
-It depends on ``loomable.kernel`` and ``loomable.content``.
+Multi-agent orchestration is now handled via ``loomable.flow.Flow`` (Req 14.4).
 """
 
 from .builder import (
@@ -16,7 +15,6 @@ from .builder import (
     BuiltAgent,
     GatedDispatchResult,
     ModelSpec,
-    OrchestrationMode,
     PostToolHook,
     ToolHook,
 )
@@ -33,8 +31,6 @@ from .errors import (
 from .events import AgentEvents, Event, JSONTracer, NoOpEvents
 from .media import image, video
 from .notes import Note, NoteStore, make_memory_tool
-from .orchestration import Orchestrator
-from .pipeline import Pipeline
 from .reasoning import make_plan_tool, make_think_tool
 from .routing import ComplexityRouter, RunStrategy
 from .run import RunChunk, RunResult
@@ -46,8 +42,6 @@ __all__ = [
     "BuiltAgent",
     "GatedDispatchResult",
     "ModelSpec",
-    "OrchestrationMode",
-    "Orchestrator",
     "ToolHook",
     "PostToolHook",
     "AgentConfigError",
@@ -59,7 +53,6 @@ __all__ = [
     "Channel",
     "ChannelMessage",
     "InMemoryChannel",
-    "Pipeline",
     "RunResult",
     "RunChunk",
     "RunContext",

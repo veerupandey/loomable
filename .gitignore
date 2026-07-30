@@ -25,6 +25,9 @@ venv/
 # pytest
 .pytest_cache/
 
+# Hypothesis
+.hypothesis/
+
 # OS
 .DS_Store
 Thumbs.db

@@ -26,7 +26,7 @@ class RunStrategy(Enum):
 
     SINGLE = "single"  # no tools needed; single-shot completion
     TOOL_LOOP = "tool_loop"  # default ReAct loop with tool use
-    PLAN = "plan"  # escalate to AutoPlan (plan → subagents → synthesize)
+    PLAN = "plan"  # escalate to plan_and_execute Flow (plan → map → synthesize)
 
 
 class ModelClassifier(Protocol):

@@ -250,15 +250,15 @@ class TestRuntimeContext:
 
 
 class TestSubAgents:
-    """Test sub_agents without a separate Team class."""
+    """Test sub_agents have been removed — orchestration is now via Flow."""
 
-    def test_sub_agents_stored(self):
-        child1 = Agent(model=ModelSpec(provider="t", provider_impl=FakeProvider()), name="child1")
-        child2 = Agent(model=ModelSpec(provider="t", provider_impl=FakeProvider()), name="child2")
-        parent = Agent(
-            model=ModelSpec(provider="t", provider_impl=FakeProvider()),
-            sub_agents=[child1, child2],
-            mode="parallel",
-            name="parent",
-        )
-        assert len(parent._sub_agents) == 2
+    def test_sub_agents_param_removed(self):
+        """Verify that sub_agents is no longer a valid Agent parameter (Req 14.4)."""
+        import pytest
+
+        with pytest.raises(TypeError, match="sub_agents"):
+            Agent(
+                model=ModelSpec(provider="t", provider_impl=FakeProvider()),
+                sub_agents=[],
+                name="parent",
+            )

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from loomable.agent import Agent, BuiltAgent, ModelSpec, OrchestrationMode
+from loomable.agent import Agent, BuiltAgent, ModelSpec
 from loomable.agent.errors import AgentConfigError
 from loomable.content import Modality, ModelCapabilities
 from loomable.kernel.context import ContextManager
@@ -80,10 +80,6 @@ class TestBuilderDefaults:
     def test_new_session_created_when_no_session_id(self):
         built = Agent(model=_FakeProvider()).build()
         assert built.session.session_id.startswith("session-")
-
-    def test_default_mode_is_single(self):
-        agent = Agent(model=_FakeProvider())
-        assert agent._mode is OrchestrationMode.SINGLE
 
 
 # ---------------------------------------------------------------------------
