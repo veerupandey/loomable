@@ -13,7 +13,7 @@ by tier and complexity.
 | 04 | `04_agent_structured_io.py` | Pydantic input_schema + structured output_schema |
 | 05 | `05_agent_subagents.py` | Delegating subtasks to child agents via the plan tool |
 | 25 | `25_tough_auto_plan_demo.py` | Tough multi-part task: router → PLAN → dynamic worker fan-out |
-| 26 | `26_planner_subagents_pattern.py` | Clean planner → parallel subagents → synthesize (Z.AI ready) |
+| 26 | `26_planner_subagents_pattern.py` | High-level API: Agent + ComplexityRouter auto plan→subagents |
 
 ## Loops (Tier 2)
 
