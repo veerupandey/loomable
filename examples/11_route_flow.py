@@ -46,32 +46,14 @@ general_agent = Agent(
 )
 
 
-# --- Wrap agents in functions for flow compatibility ---
-
-
-async def bugfix(input, **kwargs):
-    result = await bugfix_agent.arun(str(input))
-    return result.output.text()
-
-
-async def feature(input, **kwargs):
-    result = await feature_agent.arun(str(input))
-    return result.output.text()
-
-
-async def general(input, **kwargs):
-    result = await general_agent.arun(str(input))
-    return result.output.text()
-
-
 # --- Build routed flow ---
 
 flow = route(
     chooser=classify_intent,
     choices={
-        "bugfix_handler": bugfix,
-        "feature_handler": feature,
-        "general_handler": general,
+        "bugfix_handler": bugfix_agent,
+        "feature_handler": feature_agent,
+        "general_handler": general_agent,
     },
 )
 

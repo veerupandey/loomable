@@ -56,32 +56,14 @@ polisher_agent = Agent(
 )
 
 
-# --- Wrap agents in functions for flow compatibility ---
+# --- Build loop with drafter agent ---
 
-
-async def researcher(input, **kwargs):
-    result = await researcher_agent.arun(str(input))
-    return result.output.text()
-
-
-async def drafter(input, **kwargs):
-    result = await drafter_agent.arun(str(input))
-    return result.output.text()
-
-
-async def polisher(input, **kwargs):
-    result = await polisher_agent.arun(str(input))
-    return result.output.text()
-
-
-# --- Build loop with drafter function ---
-
-draft_loop = Loop(body=drafter, verifier=quality_check, max_iterations=3)
+draft_loop = Loop(body=drafter_agent, verifier=quality_check, max_iterations=3)
 
 
 # --- Compose: research → draft_loop → polish ---
 
-pipeline = sequential(researcher, draft_loop, polisher)
+pipeline = sequential(researcher_agent, draft_loop, polisher_agent)
 
 print("Running: research → draft(loop) → polish\n")
 result = asyncio.run(pipeline.arun("The impact of artificial intelligence on healthcare"))

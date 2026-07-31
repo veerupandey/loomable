@@ -33,27 +33,9 @@ alternatives_agent = Agent(
 )
 
 
-# --- Wrap agents in functions for flow compatibility ---
-
-
-async def pros(input, **kwargs):
-    result = await pros_agent.arun(str(input))
-    return result.output.text()
-
-
-async def cons(input, **kwargs):
-    result = await cons_agent.arun(str(input))
-    return result.output.text()
-
-
-async def alternatives(input, **kwargs):
-    result = await alternatives_agent.arun(str(input))
-    return result.output.text()
-
-
 # --- Run in parallel ---
 
-flow = parallel(pros, cons, alternatives, session_id="analysis")
+flow = parallel(pros_agent, cons_agent, alternatives_agent, session_id="analysis")
 
 result = asyncio.run(flow.arun("Using microservices architecture"))
 print("=== Parallel Analysis Results ===\n")

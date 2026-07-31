@@ -91,12 +91,13 @@ def to_agent_input(value: Any) -> AgentInput:
     """Coerce a supported input value into an :class:`AgentInput`.
 
     Mirrors agno-style flexible input: an agent may be given a plain string, an
-    already-built :class:`AgentInput`, a Pydantic model, a dataclass instance, or a
-    plain ``dict``. Structured values are serialized to JSON and wrapped as a single
-    user message so the model receives the structured data as its input.
+    already-built :class:`AgentInput`, an :class:`AgentOutput`, a ``RunResult``,
+    a Pydantic model, a dataclass instance, or a plain ``dict``.
 
     - :class:`AgentInput` -> returned unchanged.
     - ``str`` -> a single user text message.
+    - :class:`AgentOutput` -> its ``.text()`` as a user message.
+    - ``RunResult`` -> its ``.output.text()`` as a user message.
     - Pydantic ``BaseModel`` -> its ``model_dump_json()`` as user text.
     - dataclass instance -> ``json.dumps(asdict(...))`` as user text.
     - ``dict`` -> ``json.dumps(...)`` as user text.
@@ -109,6 +110,19 @@ def to_agent_input(value: Any) -> AgentInput:
     if isinstance(value, str):
         return AgentInput.from_text(value)
 
+    # AgentOutput: extract the text content (framework's own output type).
+    if isinstance(value, AgentOutput):
+        return AgentInput.from_text(value.text())
+
+    # RunResult: unwrap to AgentOutput, then extract text.
+    # Import lazily to avoid circular dependency.
+    try:
+        from loomable.agent.run import RunResult
+        if isinstance(value, RunResult):
+            return AgentInput.from_text(value.output.text())
+    except ImportError:
+        pass
+
     # Pydantic model instance (lazy import so pydantic stays optional).
     try:
         import pydantic
@@ -119,8 +133,14 @@ def to_agent_input(value: Any) -> AgentInput:
         pass
 
     # Dataclass instance (not the class itself).
+    # Skip our own dataclasses (AgentOutput is handled above).
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return AgentInput.from_text(json.dumps(dataclasses.asdict(value)))
+        try:
+            return AgentInput.from_text(json.dumps(dataclasses.asdict(value)))
+        except (TypeError, ValueError):
+            # Fallback: if asdict/json fails (e.g. contains non-serializable fields),
+            # use str() representation.
+            return AgentInput.from_text(str(value))
 
     if isinstance(value, dict):
         return AgentInput.from_text(json.dumps(value))

@@ -43,34 +43,11 @@ manager_agent = Agent(
 )
 
 
-# --- Wrap agents in functions for flow compatibility ---
-
-
-async def security(input, **kwargs):
-    result = await security_agent.arun(str(input))
-    return result.output.text()
-
-
-async def performance(input, **kwargs):
-    result = await performance_agent.arun(str(input))
-    return result.output.text()
-
-
-async def ux_reviewer(input, **kwargs):
-    result = await ux_agent.arun(str(input))
-    return result.output.text()
-
-
-async def manager(input, **kwargs):
-    result = await manager_agent.arun(str(input))
-    return result.output.text()
-
-
 # --- Coordinate: workers → manager ---
 
 flow = coordinate(
-    workers=[security, performance, ux_reviewer],
-    manager=manager,
+    workers=[security_agent, performance_agent, ux_agent],
+    manager=manager_agent,
     session_id="system-review",
 )
 

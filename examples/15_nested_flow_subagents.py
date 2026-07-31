@@ -54,42 +54,14 @@ manager_agent = Agent(
 )
 
 
-# --- Wrap agents in functions for flow compatibility ---
-
-
-async def analyzer(input, **kwargs):
-    result = await analyzer_agent.arun(str(input))
-    return result.output.text()
-
-
-async def api_reviewer(input, **kwargs):
-    result = await api_reviewer_agent.arun(str(input))
-    return result.output.text()
-
-
-async def data_reviewer(input, **kwargs):
-    result = await data_reviewer_agent.arun(str(input))
-    return result.output.text()
-
-
-async def infra_reviewer(input, **kwargs):
-    result = await infra_reviewer_agent.arun(str(input))
-    return result.output.text()
-
-
-async def manager(input, **kwargs):
-    result = await manager_agent.arun(str(input))
-    return result.output.text()
-
-
 # --- Compose: analyze → coordinate(workers + manager) ---
 
 review_flow = coordinate(
-    workers=[api_reviewer, data_reviewer, infra_reviewer],
-    manager=manager,
+    workers=[api_reviewer_agent, data_reviewer_agent, infra_reviewer_agent],
+    manager=manager_agent,
 )
 
-full_pipeline = sequential(analyzer, review_flow, session_id="nested-review")
+full_pipeline = sequential(analyzer_agent, review_flow, session_id="nested-review")
 
 print("Running nested flow: analyze → coordinate(3 workers + manager)\n")
 result = asyncio.run(full_pipeline.arun(
