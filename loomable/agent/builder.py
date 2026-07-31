@@ -864,9 +864,9 @@ class BuiltAgent:
 
         async def _synthesizer(input: Any, **kwargs: Any) -> str:
             """Combine step results into a final cohesive answer."""
-            # input contains the shared state; extract step results
-            state_data = input if isinstance(input, dict) else {}
-            pieces = state_data.get("map", []) or []
+            from .reasoning import coalesce_map_pieces
+
+            pieces = coalesce_map_pieces(input, kwargs.get("context"))
             combined = "\n".join(f"- {p}" for p in pieces) if pieces else str(input)
             prompt = (
                 f"Original task:\n{task_text}\n\n"

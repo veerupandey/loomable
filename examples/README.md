@@ -12,6 +12,7 @@ by tier and complexity.
 | 03 | `03_agent_with_tools.py` | Function tools via `@tool`, automatic tool-use loop |
 | 04 | `04_agent_structured_io.py` | Pydantic input_schema + structured output_schema |
 | 05 | `05_agent_subagents.py` | Delegating subtasks to child agents via the plan tool |
+| 25 | `25_tough_auto_plan_demo.py` | Tough multi-part task: router → PLAN → dynamic worker fan-out |
 
 ## Loops (Tier 2)
 

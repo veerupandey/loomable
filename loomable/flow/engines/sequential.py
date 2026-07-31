@@ -161,8 +161,19 @@ class SequentialEngine:
             # Emit node_end event (Req 13.3)
             emit_node_end(context.events, node_id, start_t)
 
-            # Write output to state[node_id] (Req 7.1)
-            state.write(node_id, result.output)
+            # Write output to state[node_id] (Req 7.1).
+            # Prefer structured side-channels when present so plan→map→synthesize
+            # can pass lists/dicts (not only AgentOutput text summaries).
+            if result.metadata and "map_outputs" in result.metadata:
+                state.write(node_id, result.metadata["map_outputs"])
+            else:
+                state.write(node_id, result.output)
+
+            # Planner-style dict returns are also published under their own keys
+            # (belt-and-suspenders with FunctionRunnable's SharedState writes).
+            if result.metadata and isinstance(result.metadata.get("return_value"), dict):
+                for key, value in result.metadata["return_value"].items():
+                    state.write(key, value)
 
             # Store in sub_results
             sub_results[node_id] = result

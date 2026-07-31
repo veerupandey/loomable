@@ -11,7 +11,7 @@ Provides two reasoning tools that extend the agent's in-context capabilities:
 
 from __future__ import annotations
 
-__all__ = ["make_think_tool", "make_plan_tool"]
+__all__ = ["make_think_tool", "make_plan_tool", "coalesce_map_pieces"]
 
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +19,29 @@ from .tools import FunctionTool
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .builder import BuiltAgent
+
+
+def coalesce_map_pieces(input: Any, context: Any | None = None) -> list[Any]:
+    """Extract mapped worker outputs for a synthesizer node.
+
+    Prefers, in order:
+    1. A list passed directly as ``input`` (SequentialEngine state["map"])
+    2. ``input["map"]`` when ``input`` is a dict
+    3. ``context.shared_state["map"]`` when available
+    """
+    if isinstance(input, list):
+        return input
+    if isinstance(input, dict):
+        pieces = input.get("map")
+        if isinstance(pieces, list):
+            return pieces
+    if context is not None:
+        shared = getattr(context, "shared_state", None)
+        if shared is not None:
+            pieces = shared.get("map")
+            if isinstance(pieces, list):
+                return pieces
+    return []
 
 
 def make_think_tool() -> FunctionTool:
@@ -108,8 +131,7 @@ def make_plan_tool(agent: "BuiltAgent") -> FunctionTool:
 
         async def _synthesizer(input: Any, **kwargs: Any) -> str:
             """Combine step results into a final answer."""
-            state_data = input if isinstance(input, dict) else {}
-            pieces = state_data.get("map", []) or []
+            pieces = coalesce_map_pieces(input, kwargs.get("context"))
             combined = "\n".join(f"- {p}" for p in pieces) if pieces else str(input)
             prompt = (
                 f"Original task:\n{task}\n\n"

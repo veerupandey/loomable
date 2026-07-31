@@ -204,6 +204,7 @@ class MapNode:
         map_results: list[dict[str, Any]] = []
         map_errors: list[dict[str, Any]] = []
         successful_results: list["RunResult"] = []
+        map_outputs: list[Any] = []
 
         for idx, outcome in enumerate(outcomes):
             if outcome.error is not None:
@@ -226,6 +227,8 @@ class MapNode:
             else:
                 result = outcome.result
                 successful_results.append(result)
+                piece = self._extract_output_value(result)
+                map_outputs.append(piece)
                 map_results.append(
                     {
                         "index": idx,
@@ -234,6 +237,11 @@ class MapNode:
                         "result": result,
                     }
                 )
+
+        # Publish fan-out outputs for downstream synthesizers. SequentialEngine
+        # will prefer metadata["map_outputs"] when writing state[node_id].
+        if context is not None and context.shared_state is not None:
+            context.shared_state.write("map", map_outputs)
 
         # 5. Assemble final RunResult
         total = len(items)
@@ -256,11 +264,25 @@ class MapNode:
             metadata={
                 "map_results": map_results,
                 "map_errors": map_errors,
+                "map_outputs": map_outputs,
                 "map_total": total,
                 "map_succeeded": succeeded,
                 "map_failed": failed,
             },
         )
+
+    @staticmethod
+    def _extract_output_value(result: Any) -> Any:
+        """Normalize a per-item RunResult into a synthesizer-friendly value."""
+        if result is None:
+            return None
+        output = getattr(result, "output", None)
+        if output is not None and hasattr(output, "text"):
+            try:
+                return output.text()
+            except Exception:
+                return str(output)
+        return result
 
     def _make_factory(
         self,
