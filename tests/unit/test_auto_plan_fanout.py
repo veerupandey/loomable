@@ -11,11 +11,19 @@ from loomable.content import AgentInput
 from loomable.kernel.models import ModelRequest, ModelResponse
 
 
+# Strong enough for PLAN score threshold (>=4): many step cues + questions.
 TOUGH_TASK = (
-    "Compare and analyze Python, Rust, and Go for building web APIs, then "
-    "break down the work step by step covering performance, developer "
-    "experience, and ecosystem, and finally synthesize a recommendation."
+    "Compare and analyze Python, Rust, and Go for building web APIs. "
+    "Break down the work step by step. For each language cover performance, "
+    "developer experience, and ecosystem. Decompose into multiple steps. "
+    "First research, then compare, then conclude. "
+    "What are the tradeoffs? What should a team pick?"
 )
+
+
+class _AlwaysPlan:
+    def classify(self, agent_input, *, has_tools: bool) -> RunStrategy:
+        return RunStrategy.PLAN
 
 
 class _RoleAwareProvider:
@@ -61,7 +69,8 @@ def test_auto_plan_fans_out_workers_and_synthesizes() -> None:
     provider = _RoleAwareProvider()
     agent = Agent(
         model=ModelSpec(provider="test", provider_impl=provider),
-        complexity_router=ComplexityRouter(),
+        # Force PLAN so this test locks fan-out wiring, not heuristic thresholds.
+        complexity_router=ComplexityRouter(model_classifier=_AlwaysPlan()),
     )
     built = agent.build()
 
@@ -82,6 +91,8 @@ def test_auto_plan_fans_out_workers_and_synthesizes() -> None:
     assert provider.roles.count("worker") == 4
     assert provider.roles.count("synthesizer") == 1
     assert "FINAL:" in result.output.text()
+    assert result.metadata.get("run_strategy") == "plan"
+    assert result.metadata.get("plan_workers") == 4
     # Planner first, workers fan out, synthesizer last.
     assert provider.roles[0] == "planner"
     assert provider.roles[-1] == "synthesizer"

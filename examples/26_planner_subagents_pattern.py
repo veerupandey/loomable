@@ -4,11 +4,9 @@ High-level planner → subagents pattern
 You do NOT parse agent output by hand.
 You do NOT wire planner / worker / synthesizer yourself.
 
-  Agent + ComplexityRouter
-    → framework plans
-    → runs subagents
-    → passes results between them
-    → returns one final answer
+After Z.AI A/B experiments, the default ComplexityRouter is efficiency-biased:
+it only auto-plans when signals are strong. To demo the plan→subagents path
+reliably, this example forces PLAN via a tiny classifier.
 
 Setup (secrets stay in the environment — never in this file):
 
@@ -48,8 +46,13 @@ def make_provider() -> OpenAIProvider:
     )
 
 
-# Task wording matters: ComplexityRouter looks for cues like
-# "compare", "step by step", "for each", "break down", "decompose".
+class AlwaysPlan:
+    """Force the plan → parallel subagents → synthesize path."""
+
+    def classify(self, agent_input, *, has_tools: bool) -> RunStrategy:
+        return RunStrategy.PLAN
+
+
 TASK = (
     "Compare and analyze how to launch AI software that helps factories "
     "plan shop-floor work. Break down the work step by step. "
@@ -58,40 +61,34 @@ TASK = (
     "one clear CEO answer in plain English."
 )
 
-
-# ---------------------------------------------------------------------------
-# High-level API — one Agent, framework does the rest
-# ---------------------------------------------------------------------------
-
-router = ComplexityRouter()
+provider = make_provider()
+heuristic = ComplexityRouter()
+forced = ComplexityRouter(model_classifier=AlwaysPlan())
 
 agent = Agent(
-    model=make_provider(),
+    model=provider,
     instructions=(
         "Explain things in plain English. "
         "Use short sentences. Avoid jargon."
     ),
-    # When this returns PLAN, Loomable runs:
-    #   plan → parallel subagents → synthesize
-    # and passes outputs between them for you.
-    complexity_router=router,
-    # Optional: plan_tool=True  # model can call `plan` itself
+    # High-level API: framework owns plan → subagents → synthesize.
+    complexity_router=forced,
 )
 
 
 async def main() -> None:
-    strategy = router.classify(AgentInput.from_text(TASK), has_tools=False)
+    heur = heuristic.classify(AgentInput.from_text(TASK), has_tools=False)
     print("High-level Agent API")
-    print(f"  ComplexityRouter chose: {strategy.value}")
-    if strategy != RunStrategy.PLAN:
-        print("  Expected PLAN for this demo task — check task cues.")
-        raise SystemExit(1)
-    print("  framework will: plan → subagents → synthesize")
+    print(f"  default heuristic would choose: {heur.value}")
+    print("  this demo forces: plan  →  subagents  →  synthesize")
     print("-" * 60)
     print(f"Task: {TASK}\n")
 
     result = await agent.arun(TASK)
 
+    print("-" * 60)
+    print(f"run_strategy : {result.metadata.get('run_strategy')}")
+    print(f"plan_workers : {result.metadata.get('plan_workers')}")
     print("-" * 60)
     print(result.output.text())
     print("-" * 60)

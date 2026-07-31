@@ -1,0 +1,70 @@
+{
+  "provider": "glm-5.2",
+  "learning": {
+    "prefer_plan_for": [],
+    "prefer_single_for": [
+      "simple_launch",
+      "cue_rich_launch",
+      "short_faq",
+      "multi_compare"
+    ],
+    "lessons": [
+      "simple_launch: heuristic matched preference (single)",
+      "cue_rich_launch: judge preferred single (margin 2.0) but heuristic chose plan",
+      "short_faq: heuristic matched preference (single)",
+      "multi_compare: judge preferred single (margin 1.0) but heuristic chose plan"
+    ],
+    "router_tweaks": [
+      "Keep multi-topic asks on SINGLE when judge finds no quality lift.",
+      "Keep short FAQ / one-paragraph asks on SINGLE.",
+      "Continue logging run_strategy + plan_workers and re-run this harness."
+    ],
+    "mismatch_count": 2
+  },
+  "scoreboard": [
+    {
+      "task_id": "simple_launch",
+      "preferred": "single",
+      "judge_winner": "single",
+      "margin": 1.0,
+      "heuristic": "single",
+      "match": true,
+      "single_s": 25.8,
+      "plan_s": 66.8,
+      "plan_workers": 4
+    },
+    {
+      "task_id": "cue_rich_launch",
+      "preferred": "single",
+      "judge_winner": "single",
+      "margin": 2.0,
+      "heuristic": "plan",
+      "match": false,
+      "single_s": 45.4,
+      "plan_s": 63.6,
+      "plan_workers": 5
+    },
+    {
+      "task_id": "short_faq",
+      "preferred": "single",
+      "judge_winner": "tie",
+      "margin": 0.0,
+      "heuristic": "single",
+      "match": true,
+      "single_s": 10.6,
+      "plan_s": 21.3,
+      "plan_workers": 1
+    },
+    {
+      "task_id": "multi_compare",
+      "preferred": "single",
+      "judge_winner": "single",
+      "margin": 1.0,
+      "heuristic": "plan",
+      "match": false,
+      "single_s": 52.3,
+      "plan_s": 66.1,
+      "plan_workers": 5
+    }
+  ]
+}

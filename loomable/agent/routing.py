@@ -54,11 +54,23 @@ _SECTION_LIST_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Short-answer constraints: prefer a single shot (learned from Z.AI A/B + judge).
+_SHORT_ANSWER_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"\bone\s+short\s+paragraph\b", re.IGNORECASE),
+    re.compile(r"\bin\s+one\s+(?:short\s+)?paragraph\b", re.IGNORECASE),
+    re.compile(r"\bin\s+one\s+sentence\b", re.IGNORECASE),
+    re.compile(r"\bin\s+a\s+nutshell\b", re.IGNORECASE),
+    re.compile(r"\bTL;?DR\b", re.IGNORECASE),
+]
+
 # Threshold constants for the heuristic.
 _TOKEN_LENGTH_PLAN_THRESHOLD = 500  # rough token count (chars / 4) above which we consider PLAN
 _TOKEN_LENGTH_TOOL_THRESHOLD = 100  # below this, likely simple enough for SINGLE
 _QUESTION_COUNT_PLAN_THRESHOLD = 3  # 3+ questions suggest multi-step reasoning
 _STEP_CUE_PLAN_THRESHOLD = 2  # 2+ step cues suggest PLAN
+# Raised 3 → 4 after comparative Z.AI experiments: cue-rich tasks often got
+# equal/better quality from SINGLE at much lower cost, so require stronger signal.
+_PLAN_SCORE_THRESHOLD = 4
 
 
 class ComplexityRouter:
@@ -97,6 +109,10 @@ class ComplexityRouter:
 
         # Extract all text from the input messages.
         text = self._extract_text(agent_input)
+
+        # Short-answer constraints win: don't fan out a one-paragraph ask.
+        if any(pat.search(text) for pat in _SHORT_ANSWER_PATTERNS):
+            return RunStrategy.TOOL_LOOP if has_tools else RunStrategy.SINGLE
 
         # Compute complexity signals.
         token_estimate = len(text) // 4  # rough char-to-token ratio
@@ -148,8 +164,7 @@ class ComplexityRouter:
         elif step_cue_count >= 1:
             score += 1
 
-        # Threshold: score >= 3 triggers PLAN.
-        return score >= 3
+        return score >= _PLAN_SCORE_THRESHOLD
 
     @staticmethod
     def _extract_text(agent_input: "AgentInput") -> str:

@@ -13,30 +13,47 @@ export ZAI_MODEL="glm-5.2"
 python experiments/routing_ab.py
 ```
 
-For each task it runs three modes:
-- forced `single`
-- forced `plan`
-- heuristic router
+For each task it:
+1. Runs forced `single` and forced `plan`
+2. Asks an LLM judge which answer is better (A/B order randomized)
+3. Runs the heuristic router and checks whether it matched
 
-Then writes learnings to `/tmp/loomable_experiments/routing_ab.json`.
+Writes:
+- `/tmp/loomable_experiments/routing_ab_compare.json` (full)
+- `experiments/last_learning_summary.json` (scoreboard + lessons)
 
 ## Improve loop
 
-1. Add / edit tasks in `routing_ab.py`
-2. Run A/B on a real model
-3. Read lessons (coverage, latency, worker count, heuristic mistakes)
-4. Change router cues / thresholds OR plug in a model classifier
-5. Re-run and keep only changes that win on quality *and* cost
+1. Edit tasks in `routing_ab.py`
+2. Run on a real model
+3. Read lessons / mismatches
+4. Change router thresholds or inject a model classifier
+5. Re-run — keep only changes that win on quality *and* cost
 
-## What we learned (Z.AI glm-5.2 batch)
+## Latest Z.AI glm-5.2 learnings (comparative judge)
 
-| Task | Heuristic | Forced PLAN workers | Takeaway |
-|------|-----------|---------------------|----------|
-| simple launch | single | 5 | SINGLE already covered topics; PLAN ~2× slower |
-| cue-rich launch | plan | 5 | Heuristic correct; fan-out works |
-| short FAQ | single | 4 | Keep FAQ on SINGLE |
-| multi-compare | plan | 5 | PLAN works but keyword coverage same as SINGLE |
+| Task | Judge preferred | Heuristic | Match? |
+|------|-----------------|-----------|--------|
+| simple_launch | single | single | yes |
+| cue_rich_launch | single (margin 2) | plan | no |
+| short_faq | tie → single | single | yes |
+| multi_compare | single (margin 1) | plan | no |
 
-Keyword coverage alone is too weak to judge quality.
-Next experiments should add an LLM-as-judge for depth/structure,
-and keep logging `result.metadata["run_strategy"]` + `plan_workers`.
+Bias check (swapped A/B) still preferred SINGLE for cue-rich — not just position bias.
+
+**Takeaway:** On this model/batch, PLAN fan-out worked but often lost on quality/cost vs one strong SINGLE pass.
+
+**Router changes applied:**
+- PLAN score threshold raised `3 → 4` (fewer false PLAN escalations)
+- Short-answer constraints (`one short paragraph`, etc.) force SINGLE/TOOL_LOOP
+- Runs now log `run_strategy` + `plan_workers` for continued learning
+
+Force PLAN when you explicitly want fan-out:
+
+```python
+class AlwaysPlan:
+    def classify(self, agent_input, *, has_tools): 
+        return RunStrategy.PLAN
+
+Agent(..., complexity_router=ComplexityRouter(model_classifier=AlwaysPlan()))
+```

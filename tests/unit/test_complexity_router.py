@@ -48,11 +48,30 @@ class TestComplexityRouterDefaults:
         router = ComplexityRouter()
         text = (
             "First analyze the logs and then compare the error rates. "
-            "For each service, break down the response times."
+            "For each service, break down the response times. "
+            "Decompose into multiple steps. What failed? What recovered?"
         )
         agent_input = AgentInput.from_text(text)
         result = router.classify(agent_input, has_tools=True)
         assert result == RunStrategy.PLAN
+
+    def test_short_paragraph_ask_stays_single(self) -> None:
+        router = ComplexityRouter()
+        text = (
+            "Compare Python and Rust step by step, but answer in one short paragraph."
+        )
+        result = router.classify(AgentInput.from_text(text), has_tools=False)
+        assert result == RunStrategy.SINGLE
+
+    def test_cue_rich_without_extra_signal_can_stay_single(self) -> None:
+        """After Z.AI experiments, cue-only score=3 no longer forces PLAN."""
+        router = ComplexityRouter()
+        text = (
+            "Compare and analyze how to launch software. Break down the work "
+            "step by step. For each area cover pricing. Decompose into multiple steps."
+        )
+        result = router.classify(AgentInput.from_text(text), has_tools=False)
+        assert result == RunStrategy.SINGLE
 
     def test_long_input_with_cues_returns_plan(self) -> None:
         router = ComplexityRouter()

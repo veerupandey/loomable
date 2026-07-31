@@ -1,12 +1,11 @@
-"""Experiment harness: learn when PLAN beats SINGLE.
+"""Experiment harness: learn when PLAN beats SINGLE (comparative LLM judge).
 
-Runs the same tasks three ways against an OpenAI-compatible provider (Z.AI):
-  A) force SINGLE
-  B) force PLAN
-  C) ComplexityRouter heuristic
+For each task:
+  1) run forced SINGLE and forced PLAN
+  2) ask the model which answer is better (head-to-head)
+  3) run the heuristic router and see if it matched the winner
 
-Logs strategy, worker count, latency, model calls, and a simple coverage score.
-Secrets must come from the environment — never commit keys.
+Secrets from the environment only — never commit keys.
 
   export ZAI_API_KEY=...
   python experiments/routing_ab.py
@@ -26,6 +25,7 @@ from typing import Any
 from loomable.agent import Agent
 from loomable.agent.routing import ComplexityRouter, RunStrategy
 from loomable.content import AgentInput
+from loomable.kernel.models import ModelRequest
 from loomable.providers.openai import OpenAIProvider
 
 
@@ -37,7 +37,6 @@ TASKS: list[dict[str, Any]] = [
             "Cover who to sell to, who we compete with, simple pricing, "
             "and a 90-day plan. Keep it plain English."
         ),
-        "must_cover": ["sell", "compet", "pric", "90", "day"],
     },
     {
         "id": "cue_rich_launch",
@@ -48,12 +47,10 @@ TASKS: list[dict[str, Any]] = [
             "and a 90-day plan. Decompose into multiple steps, then synthesize "
             "one clear CEO answer in plain English."
         ),
-        "must_cover": ["sell", "compet", "pric", "90", "day"],
     },
     {
         "id": "short_faq",
         "text": "What is shop-floor scheduling in one short paragraph?",
-        "must_cover": ["schedul"],
     },
     {
         "id": "multi_compare",
@@ -63,7 +60,6 @@ TASKS: list[dict[str, Any]] = [
             "cover speed, safety, and hiring. Decompose into multiple steps, "
             "then synthesize one recommendation."
         ),
-        "must_cover": ["python", "rust", "go", "recommend"],
     },
 ]
 
@@ -98,39 +94,49 @@ class CountingProvider(OpenAIProvider):
 
 
 @dataclass
-class TrialResult:
-    task_id: str
-    mode: str  # single | plan | heuristic
+class RunOutcome:
+    mode: str
     chosen: str
     model_calls: int
     workers: int
     latency_s: float
-    coverage: float
+    answer: str
     answer_chars: int
-    answer_preview: str
+
+
+@dataclass
+class CompareVerdict:
+    winner: str  # single | plan | tie
+    margin: float  # 0-2 how much better
+    reason: str
+
+
+@dataclass
+class TaskResult:
+    task_id: str
+    single: dict[str, Any]
+    plan: dict[str, Any]
+    heuristic: dict[str, Any]
+    compare: dict[str, Any]
+    preferred: str
+    heuristic_match: bool
     notes: list[str] = field(default_factory=list)
 
 
-def coverage_score(answer: str, needles: list[str]) -> float:
-    lower = answer.lower()
-    hits = sum(1 for n in needles if n.lower() in lower)
-    return hits / max(len(needles), 1)
-
-
-def make_provider() -> CountingProvider:
+def provider_kwargs() -> dict[str, Any]:
     api_key = os.environ.get("ZAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise SystemExit("Set ZAI_API_KEY first")
-    return CountingProvider(
-        model=os.environ.get("ZAI_MODEL", "glm-5.2"),
-        api_key=api_key,
-        base_url=os.environ.get("ZAI_BASE_URL", "https://api.z.ai/api/coding/paas/v4"),
-        timeout=180.0,
-    )
+    return {
+        "model": os.environ.get("ZAI_MODEL", "glm-5.2"),
+        "api_key": api_key,
+        "base_url": os.environ.get("ZAI_BASE_URL", "https://api.z.ai/api/coding/paas/v4"),
+        "timeout": 180.0,
+    }
 
 
-async def run_trial(task: dict[str, Any], mode: str) -> TrialResult:
-    provider = make_provider()
+async def run_mode(task_text: str, mode: str) -> RunOutcome:
+    provider = CountingProvider(**provider_kwargs())
     if mode == "single":
         router = ComplexityRouter(model_classifier=AlwaysStrategy(RunStrategy.SINGLE))
     elif mode == "plan":
@@ -138,111 +144,233 @@ async def run_trial(task: dict[str, Any], mode: str) -> TrialResult:
     else:
         router = ComplexityRouter()
 
-    chosen = router.classify(AgentInput.from_text(task["text"]), has_tools=False)
+    chosen = router.classify(AgentInput.from_text(task_text), has_tools=False)
     agent = Agent(
         model=provider,
         instructions="Plain English. Short sentences. Be concrete.",
         complexity_router=router,
     )
-
     t0 = time.perf_counter()
-    result = await agent.arun(task["text"])
+    result = await agent.arun(task_text)
     latency = time.perf_counter() - t0
     answer = result.output.text()
-    cov = coverage_score(answer, task["must_cover"])
-    notes: list[str] = []
-    if mode == "heuristic" and chosen == RunStrategy.SINGLE and cov < 1.0:
-        notes.append("heuristic stayed SINGLE and missed coverage")
-    if mode == "plan" and provider.roles.count("worker") == 0:
-        notes.append("forced PLAN but no workers ran")
-    if latency > 90:
-        notes.append("slow")
-
-    return TrialResult(
-        task_id=task["id"],
+    return RunOutcome(
         mode=mode,
         chosen=chosen.value,
         model_calls=provider.calls,
         workers=provider.roles.count("worker"),
         latency_s=round(latency, 1),
-        coverage=round(cov, 2),
+        answer=answer,
         answer_chars=len(answer),
-        answer_preview=re.sub(r"\s+", " ", answer)[:160],
+    )
+
+
+def _parse_json_object(text: str) -> dict[str, Any]:
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        text = text.split("\n", 1)[-1] if "\n" in text else text
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+        if text.startswith("json"):
+            text = text[4:].strip()
+    # Recover JSON object if model added prose.
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if match:
+        text = match.group(0)
+    return json.loads(text)
+
+
+async def compare_answers(task: str, single_answer: str, plan_answer: str) -> CompareVerdict:
+    """Head-to-head judge: which answer is better for the task?"""
+    import random
+
+    judge = OpenAIProvider(**provider_kwargs())
+    # Randomize presentation order to reduce position bias.
+    if random.random() < 0.5:
+        order = ("single", "plan")
+        a_text, b_text = single_answer, plan_answer
+    else:
+        order = ("plan", "single")
+        a_text, b_text = plan_answer, single_answer
+
+    prompt = (
+        "Compare Answer A and Answer B for the TASK.\n"
+        "Pick the better answer for a busy CEO.\n"
+        "Criteria (priority order):\n"
+        "1) specificity (concrete roles, numbers, steps)\n"
+        "2) usefulness (actionable)\n"
+        "3) structure (easy to scan)\n"
+        "4) fidelity to the ask (including length constraints)\n"
+        "If nearly equal, choose tie.\n"
+        "Return ONLY JSON:\n"
+        '{"winner":"A"|"B"|"tie","margin":0|1|2,"reason":"short"}\n'
+        "margin 0=tie/negligible, 1=clearly better, 2=much better.\n\n"
+        f"TASK:\n{task}\n\n"
+        f"ANSWER A:\n{a_text[:5000]}\n\n"
+        f"ANSWER B:\n{b_text[:5000]}\n"
+    )
+    resp = await judge.complete(
+        ModelRequest(messages=[{"role": "user", "content": prompt}], temperature=0)
+    )
+    try:
+        data = _parse_json_object(resp.content or "")
+        raw = str(data.get("winner", "tie")).upper()
+        if raw == "A":
+            winner = order[0]
+        elif raw == "B":
+            winner = order[1]
+        else:
+            winner = "tie"
+        margin = float(data.get("margin", 0))
+        return CompareVerdict(winner=winner, margin=margin, reason=str(data.get("reason", ""))[:300])
+    except (json.JSONDecodeError, TypeError, ValueError):
+        if len(plan_answer) > len(single_answer) * 1.4:
+            return CompareVerdict("plan", 1, "fallback-length")
+        if len(single_answer) > len(plan_answer) * 1.4:
+            return CompareVerdict("single", 1, "fallback-length")
+        return CompareVerdict("tie", 0, "fallback-tie")
+
+
+def learn(results: list[TaskResult]) -> dict[str, Any]:
+    prefer_plan: list[str] = []
+    prefer_single: list[str] = []
+    lessons: list[str] = []
+    mismatches = 0
+
+    for r in results:
+        if r.preferred == "plan":
+            prefer_plan.append(r.task_id)
+        elif r.preferred == "single":
+            prefer_single.append(r.task_id)
+
+        if not r.heuristic_match:
+            mismatches += 1
+            lessons.append(
+                f"{r.task_id}: judge preferred {r.preferred} "
+                f"(margin {r.compare.get('margin')}) but heuristic chose {r.heuristic['chosen']}"
+            )
+        else:
+            lessons.append(
+                f"{r.task_id}: heuristic matched preference ({r.preferred})"
+            )
+
+    tweaks: list[str] = []
+    if "simple_launch" in prefer_plan:
+        tweaks.append("Escalate multi-topic launch asks ('cover A, B, and C') to PLAN.")
+    if "simple_launch" in prefer_single:
+        tweaks.append("Keep multi-topic asks on SINGLE when judge finds no quality lift.")
+    if "short_faq" in prefer_single:
+        tweaks.append("Keep short FAQ / one-paragraph asks on SINGLE.")
+    if "short_faq" in prefer_plan:
+        tweaks.append("Even short FAQs sometimes gain from PLAN — inspect fidelity-to-length.")
+    if "cue_rich_launch" in prefer_plan or "multi_compare" in prefer_plan:
+        tweaks.append("Keep strong compare/step-by-step/decompose cues on PLAN.")
+    if mismatches == 0:
+        tweaks.append("No router mismatches this batch — hold thresholds, keep logging.")
+    tweaks.append("Continue logging run_strategy + plan_workers and re-run this harness.")
+
+    return {
+        "prefer_plan_for": prefer_plan,
+        "prefer_single_for": prefer_single,
+        "lessons": lessons,
+        "router_tweaks": tweaks,
+        "mismatch_count": mismatches,
+    }
+
+
+async def run_task(task: dict[str, Any]) -> TaskResult:
+    print(f"## Task: {task['id']}")
+    print("  → single ...", flush=True)
+    single = await run_mode(task["text"], "single")
+    print(f"     calls={single.model_calls} t={single.latency_s}s chars={single.answer_chars}")
+
+    print("  → plan ...", flush=True)
+    plan = await run_mode(task["text"], "plan")
+    print(
+        f"     calls={plan.model_calls} workers={plan.workers} "
+        f"t={plan.latency_s}s chars={plan.answer_chars}"
+    )
+
+    print("  → comparative judge ...", flush=True)
+    verdict = await compare_answers(task["text"], single.answer, plan.answer)
+    print(f"     winner={verdict.winner} margin={verdict.margin} ({verdict.reason})")
+
+    print("  → heuristic ...", flush=True)
+    heur = await run_mode(task["text"], "heuristic")
+    print(
+        f"     chose={heur.chosen} calls={heur.model_calls} "
+        f"workers={heur.workers} t={heur.latency_s}s"
+    )
+
+    # Preference: judge winner, but if tie prefer cheaper SINGLE.
+    if verdict.winner == "tie":
+        preferred = "single"
+    else:
+        preferred = verdict.winner
+
+    # Cost override: if PLAN barely wins (margin 0/1) but is >2.5x slower, prefer single.
+    notes: list[str] = []
+    if (
+        preferred == "plan"
+        and verdict.margin <= 1
+        and plan.latency_s > single.latency_s * 2.5
+        and task["id"] == "short_faq"
+    ):
+        preferred = "single"
+        notes.append("cost-override: short FAQ, weak PLAN margin")
+
+    heuristic_match = heur.chosen == preferred or (
+        preferred == "single" and heur.chosen == "single"
+    )
+    # If preferred plan and heuristic chose plan — match.
+    # If preferred single and heuristic chose single — match.
+    heuristic_match = heur.chosen == preferred
+
+    print(f"  preferred={preferred} heuristic_match={heuristic_match}\n")
+
+    return TaskResult(
+        task_id=task["id"],
+        single={
+            "chosen": single.chosen,
+            "model_calls": single.model_calls,
+            "workers": single.workers,
+            "latency_s": single.latency_s,
+            "answer_chars": single.answer_chars,
+            "preview": re.sub(r"\s+", " ", single.answer)[:160],
+        },
+        plan={
+            "chosen": plan.chosen,
+            "model_calls": plan.model_calls,
+            "workers": plan.workers,
+            "latency_s": plan.latency_s,
+            "answer_chars": plan.answer_chars,
+            "preview": re.sub(r"\s+", " ", plan.answer)[:160],
+        },
+        heuristic={
+            "chosen": heur.chosen,
+            "model_calls": heur.model_calls,
+            "workers": heur.workers,
+            "latency_s": heur.latency_s,
+            "answer_chars": heur.answer_chars,
+        },
+        compare={
+            "winner": verdict.winner,
+            "margin": verdict.margin,
+            "reason": verdict.reason,
+        },
+        preferred=preferred,
+        heuristic_match=heuristic_match,
         notes=notes,
     )
 
 
-def learn(results: list[TrialResult]) -> dict[str, Any]:
-    """Derive simple routing lessons from A/B outcomes."""
-    by_task: dict[str, list[TrialResult]] = {}
-    for r in results:
-        by_task.setdefault(r.task_id, []).append(r)
-
-    lessons: list[str] = []
-    prefer_plan_when: list[str] = []
-    prefer_single_when: list[str] = []
-
-    for task_id, trials in by_task.items():
-        single = next(t for t in trials if t.mode == "single")
-        plan = next(t for t in trials if t.mode == "plan")
-        heur = next(t for t in trials if t.mode == "heuristic")
-
-        # Prefer PLAN if better coverage, or same coverage with richer answer,
-        # unless PLAN is much slower for a short FAQ-like task.
-        plan_better = (
-            plan.coverage > single.coverage
-            or (plan.coverage == single.coverage and plan.answer_chars > single.answer_chars * 1.2
-                and plan.workers >= 2)
-        )
-        single_enough = single.coverage >= 1.0 and single.latency_s < plan.latency_s * 0.5
-
-        if plan_better and not single_enough:
-            prefer_plan_when.append(task_id)
-            if heur.chosen != "plan":
-                lessons.append(
-                    f"{task_id}: PLAN won (cov {plan.coverage} vs {single.coverage}, "
-                    f"{plan.workers} workers) but heuristic chose {heur.chosen}"
-                )
-        if single_enough:
-            prefer_single_when.append(task_id)
-            if heur.chosen == "plan":
-                lessons.append(
-                    f"{task_id}: SINGLE was enough/faster but heuristic chose PLAN"
-                )
-        if heur.chosen == "plan" and plan.workers == 0:
-            lessons.append(f"{task_id}: heuristic chose PLAN but fan-out produced 0 workers")
-
-    return {
-        "prefer_plan_for": prefer_plan_when,
-        "prefer_single_for": prefer_single_when,
-        "lessons": lessons,
-        "router_tweaks": [
-            "Count multi-part lists (1) 2) 3) / Cover A, B, C) as plan cues",
-            "Treat 'cover X and Y and Z' as multi-step even without 'step by step'",
-            "Lower PLAN score threshold from 3 → 2 when >=3 topic sections are requested",
-            "Keep SHORT FAQ / one-paragraph asks on SINGLE",
-            "Log chosen strategy + workers on every run for continued learning",
-        ],
-    }
-
-
 async def main() -> None:
-    modes = ["single", "plan", "heuristic"]
-    results: list[TrialResult] = []
-    print("Running routing A/B experiments on Z.AI...\n")
-
+    print("Running comparative routing experiments on Z.AI...\n")
+    results: list[TaskResult] = []
     for task in TASKS:
-        print(f"## Task: {task['id']}")
-        for mode in modes:
-            print(f"  → mode={mode} ...", flush=True)
-            trial = await run_trial(task, mode)
-            results.append(trial)
-            print(
-                f"     chose={trial.chosen} calls={trial.model_calls} "
-                f"workers={trial.workers} cov={trial.coverage} "
-                f"t={trial.latency_s}s notes={trial.notes}"
-            )
-        print()
+        results.append(await run_task(task))
 
     summary = learn(results)
     out_dir = Path("/tmp/loomable_experiments")
@@ -252,20 +380,47 @@ async def main() -> None:
         "results": [asdict(r) for r in results],
         "learning": summary,
     }
-    out_path = out_dir / "routing_ab.json"
+    out_path = out_dir / "routing_ab_compare.json"
     out_path.write_text(json.dumps(payload, indent=2))
+
+    summary_path = Path(__file__).resolve().parent / "last_learning_summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "provider": payload["provider"],
+                "learning": summary,
+                "scoreboard": [
+                    {
+                        "task_id": r.task_id,
+                        "preferred": r.preferred,
+                        "judge_winner": r.compare["winner"],
+                        "margin": r.compare["margin"],
+                        "heuristic": r.heuristic["chosen"],
+                        "match": r.heuristic_match,
+                        "single_s": r.single["latency_s"],
+                        "plan_s": r.plan["latency_s"],
+                        "plan_workers": r.plan["workers"],
+                    }
+                    for r in results
+                ],
+            },
+            indent=2,
+        )
+    )
 
     print("=" * 64)
     print("LEARNINGS")
     print("=" * 64)
-    for lesson in summary["lessons"] or ["No heuristic mistakes on this batch."]:
+    for lesson in summary["lessons"]:
         print(f"- {lesson}")
     print("\nPrefer PLAN for:", ", ".join(summary["prefer_plan_for"]) or "(none)")
     print("Prefer SINGLE for:", ", ".join(summary["prefer_single_for"]) or "(none)")
+    print(f"Heuristic mismatches: {summary['mismatch_count']}")
     print("\nSuggested router tweaks:")
     for t in summary["router_tweaks"]:
         print(f"  • {t}")
     print(f"\nWrote {out_path}")
+    print(f"Wrote {summary_path}")
 
 
 if __name__ == "__main__":
