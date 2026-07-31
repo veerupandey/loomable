@@ -133,12 +133,22 @@ class Loop:
     Parameters
     ----------
     body:
-        The Runnable to execute on each iteration.
+        The Runnable to execute on each iteration. Mutually exclusive with
+        ``steps``.
+    steps:
+        A list of composable elements (Step, Condition, Parallel_Group,
+        Workflow) that are compiled into a sequential Workflow and used as
+        the loop body. Mutually exclusive with ``body``.
     verifier:
         A Verifier, a callable ``(output, context) -> bool``, or ``None``.
         When ``None``, an :class:`AlwaysOkVerifier` is used — the body runs
         exactly once (Req 5.4). A callable is automatically adapted via
         :class:`CallableVerifier`.
+    end_condition:
+        An ergonomic alias for ``verifier``. A callable receiving a
+        :class:`~loomable.agent.run.RunResult` and returning bool (True
+        means stop). Adapted into a :class:`CallableVerifier` internally.
+        Cannot be combined with ``verifier``.
     max_iterations:
         Maximum number of iterations before the loop stops regardless of
         the verifier outcome (Req 5.3). Defaults to 3.
@@ -146,17 +156,58 @@ class Loop:
 
     def __init__(
         self,
-        body: "Runnable",
+        body: "Runnable | None" = None,
         *,
+        steps: "list[Any] | None" = None,
         verifier: "Verifier | Callable[[AgentOutput, RunContext], bool] | None" = None,
+        end_condition: "Callable[[Any], bool] | None" = None,
         max_iterations: int = 3,
     ) -> None:
-        self._body = body
+        # --- Resolve body vs steps (Req 5.1, 5.2, 5.3) ---
+        if body is not None and steps is not None:
+            raise ValueError("Only one of 'body' or 'steps' may be specified")
+
+        if steps is not None:
+            # Compile steps list into a sequential Workflow and use as body
+            from loomable.flow.workflow import Workflow
+
+            self._body: "Runnable" = Workflow(
+                name="_loop_body",
+                steps=steps,
+            )
+        elif body is not None:
+            self._body = body
+        else:
+            raise ValueError("Either 'body' or 'steps' must be provided")
+
         self._max_iterations = max_iterations
 
-        # Resolve verifier: None → AlwaysOkVerifier; callable → CallableVerifier
-        if verifier is None:
-            self._verifier: Verifier = AlwaysOkVerifier()
+        # --- Resolve verifier / end_condition (Req 5.6, 5.7) ---
+        if end_condition is not None:
+            # Adapt end_condition (receives RunResult, returns bool) into a
+            # CallableVerifier (which receives AgentOutput + context).
+            # The end_condition receives the full RunResult from the body.
+            # We adapt it to the Verifier protocol which receives AgentOutput.
+            # Since the verifier.check() is called with (output, context), we
+            # need to bridge between the RunResult-based end_condition and
+            # the AgentOutput-based Verifier protocol.
+            _ec = end_condition
+
+            def _adapted_verifier(output: AgentOutput, context: RunContext) -> bool:
+                """Adapt end_condition to Verifier interface.
+
+                The end_condition callable expects a RunResult-like object.
+                We create a minimal RunResult wrapping the output for it.
+                """
+                from loomable.agent.run import RunResult as _RR
+
+                # Build a minimal RunResult so end_condition gets what it expects
+                result = _RR(output=output, session_id="")
+                return _ec(result)
+
+            self._verifier: Verifier = CallableVerifier(_adapted_verifier)
+        elif verifier is None:
+            self._verifier = AlwaysOkVerifier()
         elif callable(verifier) and not isinstance(verifier, Verifier):
             self._verifier = CallableVerifier(verifier)
         else:

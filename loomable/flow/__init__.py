@@ -22,6 +22,8 @@ Progressive-disclosure exports (from simplest to most advanced):
 - HITL: ``FlowPaused``
 - Observability: ``ContextSnapshotConfig``, ``MessageDisposition``, ``MessageSnapshot``
 - Helpers: ``sequential``, ``parallel``, ``route``, ``coordinate``, ``plan_and_execute``
+- Workflow Ergonomics: ``Step``, ``Workflow``, ``Condition``, ``ComposableElement``,
+  ``Parallel_Group``, ``FlowClass``, ``start``, ``listen``, ``router``
 """
 
 from .engines import (
@@ -47,6 +49,13 @@ from .observability import (
 from .optimizer import Optimizer, OptimizationRule
 from .runnable import FunctionRunnable, Runnable
 from .state import Reducer, SharedState, append, merge, overwrite
+
+# Workflow ergonomics: high-level composable classes
+from .step import Step
+from .workflow import Workflow
+from .condition import Condition, ComposableElement
+from .parallel_group import Parallel_Group
+from .flow_class import FlowClass, start, listen, router
 
 # Convenience aliases for progressive-disclosure naming (design spec)
 Map = MapNode
@@ -104,4 +113,14 @@ __all__ = [
     "route",
     "coordinate",
     "plan_and_execute",
+    # Workflow ergonomics (high-level composable classes)
+    "Step",
+    "Workflow",
+    "Condition",
+    "ComposableElement",
+    "Parallel_Group",
+    "FlowClass",
+    "start",
+    "listen",
+    "router",
 ]
