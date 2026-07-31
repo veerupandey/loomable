@@ -4,9 +4,11 @@ High-level planner → subagents pattern
 You do NOT parse agent output by hand.
 You do NOT wire planner / worker / synthesizer yourself.
 
-Just give the Agent a complexity router (or plan_tool=True).
-Loomable decides when to plan, creates subagents, passes results
-between them, and returns one final answer.
+  Agent + ComplexityRouter
+    → framework plans
+    → runs subagents
+    → passes results between them
+    → returns one final answer
 
 Setup (secrets stay in the environment — never in this file):
 
@@ -23,7 +25,8 @@ import asyncio
 import os
 
 from loomable.agent import Agent
-from loomable.agent.routing import ComplexityRouter
+from loomable.agent.routing import ComplexityRouter, RunStrategy
+from loomable.content import AgentInput
 from loomable.providers.openai import OpenAIProvider
 
 
@@ -45,9 +48,22 @@ def make_provider() -> OpenAIProvider:
     )
 
 
+# Task wording matters: ComplexityRouter looks for cues like
+# "compare", "step by step", "for each", "break down", "decompose".
+TASK = (
+    "Compare and analyze how to launch AI software that helps factories "
+    "plan shop-floor work. Break down the work step by step. "
+    "For each area cover: who to sell to, who we compete with, simple pricing, "
+    "and a 90-day plan. Decompose into multiple steps, then synthesize "
+    "one clear CEO answer in plain English."
+)
+
+
 # ---------------------------------------------------------------------------
 # High-level API — one Agent, framework does the rest
 # ---------------------------------------------------------------------------
+
+router = ComplexityRouter()
 
 agent = Agent(
     model=make_provider(),
@@ -55,24 +71,22 @@ agent = Agent(
         "Explain things in plain English. "
         "Use short sentences. Avoid jargon."
     ),
-    # When the task looks complex, Loomable auto-runs:
+    # When this returns PLAN, Loomable runs:
     #   plan → parallel subagents → synthesize
-    # Outputs are passed inside the framework. No manual parsing.
-    complexity_router=ComplexityRouter(),
-    # Optional alternative: let the model call a `plan` tool itself.
-    # plan_tool=True,
-)
-
-TASK = (
-    "Help me launch AI software that helps factories plan shop-floor work. "
-    "Cover who to sell to, who we compete with, simple pricing, "
-    "and a 90-day plan. Keep it plain English."
+    # and passes outputs between them for you.
+    complexity_router=router,
+    # Optional: plan_tool=True  # model can call `plan` itself
 )
 
 
 async def main() -> None:
+    strategy = router.classify(AgentInput.from_text(TASK), has_tools=False)
     print("High-level Agent API")
-    print("  complexity_router=on  →  auto plan → subagents → final answer")
+    print(f"  ComplexityRouter chose: {strategy.value}")
+    if strategy != RunStrategy.PLAN:
+        print("  Expected PLAN for this demo task — check task cues.")
+        raise SystemExit(1)
+    print("  framework will: plan → subagents → synthesize")
     print("-" * 60)
     print(f"Task: {TASK}\n")
 
