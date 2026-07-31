@@ -32,7 +32,7 @@ from .events import AgentEvents, Event, JSONTracer, NoOpEvents
 from .media import image, video
 from .notes import Note, NoteStore, make_memory_tool
 from .reasoning import make_plan_tool, make_think_tool
-from .routing import ComplexityRouter, RunStrategy
+from .routing import AlwaysPlan, ComplexityRouter, RunStrategy, always_plan
 from .run import RunChunk, RunResult
 from .summarize import LLMSummarizer
 from .tools import FunctionTool, MCPTool, tool
@@ -63,6 +63,8 @@ __all__ = [
     "JSONTracer",
     "ComplexityRouter",
     "RunStrategy",
+    "AlwaysPlan",
+    "always_plan",
     "NoteStore",
     "Note",
     "make_memory_tool",

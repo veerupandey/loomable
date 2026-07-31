@@ -1,12 +1,13 @@
 """
 High-level planner → subagents pattern
 
-You do NOT parse agent output by hand.
-You do NOT wire planner / worker / synthesizer yourself.
+Best API:
 
-After Z.AI A/B experiments, the default ComplexityRouter is efficiency-biased:
-it only auto-plans when signals are strong. To demo the plan→subagents path
-reliably, this example forces PLAN via a tiny classifier.
+  Agent(model=..., plan="always")   # force plan → parallel subagents → synthesize
+  Agent(model=..., plan=True)       # auto (ComplexityRouter)
+  Agent(model=..., plan="never")    # never auto-plan (default)
+
+No hand parsing. Framework passes outputs between stages.
 
 Setup (secrets stay in the environment — never in this file):
 
@@ -23,8 +24,6 @@ import asyncio
 import os
 
 from loomable.agent import Agent
-from loomable.agent.routing import ComplexityRouter, RunStrategy
-from loomable.content import AgentInput
 from loomable.providers.openai import OpenAIProvider
 
 
@@ -46,13 +45,6 @@ def make_provider() -> OpenAIProvider:
     )
 
 
-class AlwaysPlan:
-    """Force the plan → parallel subagents → synthesize path."""
-
-    def classify(self, agent_input, *, has_tools: bool) -> RunStrategy:
-        return RunStrategy.PLAN
-
-
 TASK = (
     "Compare and analyze how to launch AI software that helps factories "
     "plan shop-floor work. Break down the work step by step. "
@@ -61,26 +53,17 @@ TASK = (
     "one clear CEO answer in plain English."
 )
 
-provider = make_provider()
-heuristic = ComplexityRouter()
-forced = ComplexityRouter(model_classifier=AlwaysPlan())
-
 agent = Agent(
-    model=provider,
-    instructions=(
-        "Explain things in plain English. "
-        "Use short sentences. Avoid jargon."
-    ),
-    # High-level API: framework owns plan → subagents → synthesize.
-    complexity_router=forced,
+    model=make_provider(),
+    instructions="Explain in plain English. Short sentences. Avoid jargon.",
+    # High-level: framework owns plan → subagents → synthesize.
+    plan="always",
 )
 
 
 async def main() -> None:
-    heur = heuristic.classify(AgentInput.from_text(TASK), has_tools=False)
-    print("High-level Agent API")
-    print(f"  default heuristic would choose: {heur.value}")
-    print("  this demo forces: plan  →  subagents  →  synthesize")
+    print("High-level Agent API  —  plan=\"always\"")
+    print("  framework: plan → parallel subagents → synthesize")
     print("-" * 60)
     print(f"Task: {TASK}\n")
 
@@ -88,7 +71,9 @@ async def main() -> None:
 
     print("-" * 60)
     print(f"run_strategy : {result.metadata.get('run_strategy')}")
+    print(f"plan_trigger : {result.metadata.get('plan_trigger')}")
     print(f"plan_workers : {result.metadata.get('plan_workers')}")
+    print(f"plan_steps   : {result.metadata.get('plan_steps')}")
     print("-" * 60)
     print(result.output.text())
     print("-" * 60)

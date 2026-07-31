@@ -461,7 +461,12 @@ class BuiltAgent:
             if strategy == RunStrategy.SINGLE:
                 result = await self._run_single(agent_input, output_schema=output_schema, ctx=ctx)
             elif strategy == RunStrategy.PLAN:
-                result = await self._run_plan(agent_input, output_schema=output_schema, ctx=ctx)
+                result = await self._run_plan(
+                    agent_input,
+                    output_schema=output_schema,
+                    ctx=ctx,
+                    plan_trigger=getattr(self, "_plan_trigger", "router"),
+                )
             else:
                 # TOOL_LOOP (default)
                 result = await self._run_tool_loop(agent_input, output_schema=output_schema, ctx=ctx)
@@ -475,7 +480,15 @@ class BuiltAgent:
                 result = await self._run_single(agent_input, output_schema=output_schema, ctx=ctx)
 
         # Record routing choice so experiments / production can learn from outcomes.
-        if chosen_strategy is not None:
+        # Prefer plan-flow metadata when an empty-plan fallback already set strategy.
+        if chosen_strategy is not None and "plan_fallback" not in result.metadata:
+            result.metadata["run_strategy"] = chosen_strategy
+            if chosen_strategy == "plan":
+                result.metadata.setdefault(
+                    "plan_trigger",
+                    getattr(self, "_plan_trigger", "router"),
+                )
+        elif chosen_strategy is not None:
             result.metadata.setdefault("run_strategy", chosen_strategy)
 
         # --- Emit run_end event (Req 11.1) ---
@@ -521,22 +534,34 @@ class BuiltAgent:
                     retry_agent_input = self._coerce_input(retry_input_text)
 
                     # Re-run via the same routing logic
+                    retry_strategy = chosen_strategy
                     if self.complexity_router is not None:
                         from .routing import RunStrategy
 
                         has_tools = bool(self.tool_runtime._tools)
                         strategy = self.complexity_router.classify(retry_agent_input, has_tools=has_tools)
+                        retry_strategy = strategy.value
                         if strategy == RunStrategy.SINGLE:
                             result = await self._run_single(retry_agent_input, output_schema=output_schema, ctx=ctx)
                         elif strategy == RunStrategy.PLAN:
-                            result = await self._run_plan(retry_agent_input, output_schema=output_schema, ctx=ctx)
+                            result = await self._run_plan(
+                                retry_agent_input,
+                                output_schema=output_schema,
+                                ctx=ctx,
+                                plan_trigger="router",
+                            )
                         else:
                             result = await self._run_tool_loop(retry_agent_input, output_schema=output_schema, ctx=ctx)
                     else:
                         if self.tool_runtime._tools:
+                            retry_strategy = "tool_loop"
                             result = await self._run_tool_loop(retry_agent_input, output_schema=output_schema, ctx=ctx)
                         else:
+                            retry_strategy = "single"
                             result = await self._run_single(retry_agent_input, output_schema=output_schema, ctx=ctx)
+
+                    if retry_strategy is not None:
+                        result.metadata["run_strategy"] = retry_strategy
 
                     # Re-verify
                     verdict = resolved_verifier.check(result.output, ctx)
@@ -809,123 +834,25 @@ class BuiltAgent:
         *,
         output_schema: type | None = None,
         ctx: RunContext | None = None,
+        plan_trigger: str = "router",
     ) -> RunResult:
-        """Execute the self-plan strategy via the Flow engine (Req 17.2, 17.3).
-
-        Builds a plan→map→synthesize Flow using :func:`plan_and_execute` from
-        ``loomable.flow.helpers``, replacing the removed ``AutoPlan`` class. The
-        planner, worker, and synthesizer are all backed by this agent's single-shot
-        path so the agent's session/tools/knowledge remain available.
-        """
-        from loomable.flow.helpers import plan_and_execute
+        """Execute the self-plan strategy via the shared plan flow helper."""
+        from .reasoning import execute_plan_flow
 
         task_text = _input_text(agent_input)
-
-        async def _planner(input: Any, **kwargs: Any) -> dict:
-            """Ask the model for a concise plan; return steps in shared state."""
-            import json as _json
-
-            plan_prompt = (
-                "You are a planner. Break the user's task into at most 5 concrete, "
-                "independent, actionable steps. Return ONLY a JSON array of short "
-                "imperative step strings (e.g. [\"Do X\", \"Do Y\"]). "
-                "No prose, no markdown, no code fences.\n\n"
-                f"Task: {task_text}"
-            )
-            result = await self._run_single(
-                AgentInput.from_text(plan_prompt), include_history=False, ctx=ctx
-            )
-            # Parse the plan response into a list of steps.
-            text = result.output.text().strip()
-            # Strip code fences if present.
-            if text.startswith("```"):
-                text = text.split("\n", 1)[-1] if "\n" in text else text
-                if text.endswith("```"):
-                    text = text[:-3]
-                text = text.strip()
-                if text.startswith("json"):
-                    text = text[len("json"):].strip()
-            try:
-                steps = _json.loads(text)
-                if not isinstance(steps, list):
-                    steps = [text]
-            except (ValueError, _json.JSONDecodeError):
-                # Fallback: split on newlines and strip bullets
-                steps = [
-                    line.strip().lstrip("-*•0123456789.) ")
-                    for line in text.splitlines()
-                    if line.strip() and not line.strip().startswith("#")
-                ]
-            return {"plan_steps": steps[:5]}
-
-        async def _worker(input: Any, **kwargs: Any) -> str:
-            """Run a single plan step through the agent's single-shot path."""
-            step = input if isinstance(input, str) else str(input)
-            prompt = (
-                f"Overall task:\n{task_text}\n\n"
-                f"Complete ONLY this step, concisely and concretely:\n{step}"
-            )
-            result = await self._run_single(
-                AgentInput.from_text(prompt), include_history=False, ctx=ctx
-            )
-            return result.output.text()
-
-        async def _synthesizer(input: Any, **kwargs: Any) -> str:
-            """Combine step results into a final cohesive answer."""
-            from .reasoning import coalesce_map_pieces
-
-            pieces = coalesce_map_pieces(input, kwargs.get("context"))
-            combined = "\n".join(f"- {p}" for p in pieces) if pieces else str(input)
-            prompt = (
-                f"Original task:\n{task_text}\n\n"
-                f"Results from the planned steps:\n{combined}\n\n"
-                "Integrate these into one cohesive, well-structured final answer."
-            )
-            result = await self._run_single(
-                AgentInput.from_text(prompt),
-                output_schema=output_schema,
-                include_history=False,
-                ctx=ctx,
-            )
-            return result.output.text()
-
-        # Build and run the plan→map→synthesize flow.
-        flow = plan_and_execute(
-            planner=_planner,
-            workers=_worker,
-            synthesizer=_synthesizer,
-            session_id=self.session.session_id,
+        result = await execute_plan_flow(
+            self,
+            task_text,
+            max_steps=5,
+            output_schema=output_schema,
+            ctx=ctx,
+            plan_trigger=plan_trigger,
+            allow_tools=True,
         )
-        flow_result = await flow.arun(AgentInput.from_text(task_text))
-
-        # Wrap the flow result back into a RunResult with this agent's session.
-        from loomable.content import AgentOutput, Text
-
-        output_text = flow_result.output.text() if flow_result.output else ""
-        output = AgentOutput(parts=[Text(output_text)])
-
-        # Structured output validation if requested.
-        structured: object | None = None
-        if output_schema is not None:
-            structured = _validate_structured(output_text, output_schema)
-
-        plan_workers = 0
-        map_result = (flow_result.sub_results or {}).get("map")
-        if map_result is not None and getattr(map_result, "metadata", None):
-            outputs = map_result.metadata.get("map_outputs")
-            if isinstance(outputs, list):
-                plan_workers = len(outputs)
-            else:
-                plan_workers = int(map_result.metadata.get("map_total") or 0)
-
-        return RunResult(
-            output=output,
-            session_id=self.session.session_id,
-            usage=flow_result.usage,
-            tool_activity=[],
-            structured=structured,
-            metadata={"plan_workers": plan_workers},
-        )
+        # Structured output validation if requested (kept here to avoid cycles).
+        if output_schema is not None and result.structured is None:
+            result.structured = _validate_structured(result.output.text(), output_schema)
+        return result
 
     async def _run_single(
         self,
@@ -1841,6 +1768,8 @@ class Agent:
         # Harness features:
         events: AgentEvents | None = None,
         complexity_router: "ComplexityRouter | None" = None,
+        plan: bool | str = False,
+        plan_classifier: Any = None,
         note_store: "NoteStore | None" = None,
         loop_repeat_threshold: int = 3,
         resilience: "RetryPolicy | None" = None,
@@ -1912,6 +1841,8 @@ class Agent:
         # Harness features.
         self._events = events
         self._complexity_router = complexity_router
+        self._plan = plan
+        self._plan_classifier = plan_classifier
         self._note_store = note_store
         self._loop_repeat_threshold = loop_repeat_threshold
         self._resilience = resilience
@@ -2046,6 +1977,9 @@ class Agent:
             long_term = LongTermStore()
             self._index_knowledge_sync(long_term, self._knowledge, self._embedder)
 
+        # --- Resolve high-level plan= API into a ComplexityRouter ---
+        complexity_router = self._resolve_complexity_router()
+
         built = BuiltAgent(
             loop=None,
             model_interface=model_interface,
@@ -2075,7 +2009,7 @@ class Agent:
             knowledge_top_k=self._knowledge_top_k,
             _token_budget=self._token_budget,
             events=events,
-            complexity_router=self._complexity_router,
+            complexity_router=complexity_router,
             note_store=self._note_store,
             loop_repeat_threshold=self._loop_repeat_threshold,
             resilience=self._resilience,
@@ -2106,6 +2040,13 @@ class Agent:
         # --- Store metadata on the built agent ---
         built.name = self._name or None  # type: ignore[attr-defined]
         built.description = self._description or None  # type: ignore[attr-defined]
+        # Remember how PLAN was enabled for metadata.
+        plan_mode = self._plan if self._plan is not True else "auto"
+        if plan_mode is False:
+            plan_mode = "never"
+        built._plan_trigger = (  # type: ignore[attr-defined]
+            "forced" if plan_mode == "always" else "router"
+        )
 
         # --- Plan tool (Req 9): must be registered post-build because it references
         # the BuiltAgent itself ---
@@ -2120,6 +2061,40 @@ class Agent:
     # ------------------------------------------------------------------
     # Run flow (high-level wrappers delegating to BuiltAgent)
     # ------------------------------------------------------------------
+
+    def _resolve_complexity_router(self) -> "ComplexityRouter | None":
+        """Map the high-level ``plan=`` flag onto a ComplexityRouter.
+
+        ``plan`` values:
+          - False / "never" → no router (unless ``complexity_router=`` is set)
+          - True / "auto"   → ComplexityRouter (optional plan_classifier)
+          - "always"        → ComplexityRouter(AlwaysPlan())
+
+        ``complexity_router=`` remains supported for power users and is mutually
+        exclusive with a non-false ``plan`` value.
+        """
+        from .routing import AlwaysPlan, ComplexityRouter
+
+        plan = self._plan
+        if plan is True:
+            plan = "auto"
+        if plan is False:
+            plan = "never"
+        if not isinstance(plan, str) or plan not in {"auto", "always", "never"}:
+            raise AgentConfigError("plan")
+
+        if self._complexity_router is not None and plan != "never":
+            raise AgentConfigError("plan")
+
+        if self._complexity_router is not None:
+            return self._complexity_router
+
+        if plan == "never":
+            return None
+        if plan == "always":
+            return ComplexityRouter(model_classifier=AlwaysPlan())
+        # auto
+        return ComplexityRouter(model_classifier=self._plan_classifier)
 
     def _get_built(self) -> BuiltAgent:
         """Build the agent once and cache it for subsequent runs."""

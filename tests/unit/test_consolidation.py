@@ -181,9 +181,14 @@ class TestSelfPlanUsesFlow:
         original_run_plan = built._run_plan
         plan_called = []
 
-        async def _mock_run_plan(agent_input, *, output_schema=None, ctx=None):
+        async def _mock_run_plan(agent_input, *, output_schema=None, ctx=None, plan_trigger="router"):
             plan_called.append(True)
-            return await original_run_plan(agent_input, output_schema=output_schema, ctx=ctx)
+            return await original_run_plan(
+                agent_input,
+                output_schema=output_schema,
+                ctx=ctx,
+                plan_trigger=plan_trigger,
+            )
 
         built._run_plan = _mock_run_plan
 

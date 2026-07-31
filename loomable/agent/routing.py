@@ -11,7 +11,7 @@ Depends only on the standard library and ``loomable.content``.
 
 from __future__ import annotations
 
-__all__ = ["RunStrategy", "ComplexityRouter"]
+__all__ = ["RunStrategy", "ComplexityRouter", "AlwaysPlan", "always_plan"]
 
 import re
 from enum import Enum
@@ -33,6 +33,18 @@ class ModelClassifier(Protocol):
     """Protocol for an optional model-based classifier injected into the router."""
 
     def classify(self, agent_input: "AgentInput", *, has_tools: bool) -> RunStrategy: ...
+
+
+class AlwaysPlan:
+    """ModelClassifier that always selects the plan → subagents path."""
+
+    def classify(self, agent_input: "AgentInput", *, has_tools: bool) -> RunStrategy:
+        return RunStrategy.PLAN
+
+
+def always_plan() -> AlwaysPlan:
+    """Return a classifier that forces PLAN (for ``plan=\"always\"`` / demos)."""
+    return AlwaysPlan()
 
 
 # Cues that suggest multi-step or complex tasks requiring a plan.

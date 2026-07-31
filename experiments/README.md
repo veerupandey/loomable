@@ -51,9 +51,11 @@ Bias check (swapped A/B) still preferred SINGLE for cue-rich — not just positi
 Force PLAN when you explicitly want fan-out:
 
 ```python
-class AlwaysPlan:
-    def classify(self, agent_input, *, has_tools): 
-        return RunStrategy.PLAN
+from loomable.agent import Agent
 
-Agent(..., complexity_router=ComplexityRouter(model_classifier=AlwaysPlan()))
+Agent(model=provider, plan="always")   # force plan → subagents → synthesize
+Agent(model=provider, plan=True)       # auto via ComplexityRouter
+Agent(model=provider, plan="never")    # never auto-plan (default)
 ```
+
+`result.metadata` includes `run_strategy`, `plan_trigger`, `plan_steps`, `plan_workers`.
