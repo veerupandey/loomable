@@ -43,13 +43,16 @@ print(result.output.text())
 ### Installation
 
 ```bash
-pip install loomable
-```
+# From GitHub (recommended until published to PyPI)
+pip install "loomable @ git+https://github.com/veerupandey/loomable.git"
 
-Or with `uv`:
+# Or with uv
+uv add "loomable @ git+https://github.com/veerupandey/loomable.git"
 
-```bash
-uv add loomable
+# Or clone and install locally
+git clone https://github.com/veerupandey/loomable.git
+cd loomable
+pip install -e .
 ```
 
 ### Set up your provider
@@ -120,7 +123,9 @@ result = await loop.arun("Write a haiku about code.")
 ### Compose a flow
 
 ```python
-from loomable.flow import sequential, parallel, coordinate
+from loomable.flow import sequential, parallel, coordinate, Flow, Edge
+
+# --- Helpers (most common) ---
 
 # Sequential: research → draft → edit
 pipeline = sequential(research_fn, draft_fn, edit_fn)
@@ -133,8 +138,19 @@ team = coordinate(
     workers=[security_fn, performance_fn, ux_fn],
     manager=synthesize_fn,
 )
-
 result = await team.arun("Review this pull request")
+
+# --- Low-level Flow (custom graph topology) ---
+
+flow = Flow(
+    nodes={"research": research_fn, "draft": draft_fn, "review": review_fn},
+    edges=[
+        Edge(source="research", target="draft"),
+        Edge(source="research", target="review"),  # fan-out
+    ],
+    engine="parallel",
+)
+result = await flow.arun("Build a feature spec")
 ```
 
 ## Features
