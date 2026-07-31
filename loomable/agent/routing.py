@@ -48,6 +48,12 @@ _STEP_CUE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\bmultiple\s+steps\b", re.IGNORECASE),
 ]
 
+# Explicit numbered section lists (1. ... 2. ... 3. ...) often mean multi-part work.
+_SECTION_LIST_PATTERN = re.compile(
+    r"(?:(?:^|\n)\s*(?:\d+[\.\)]\s+\S+)){3,}",
+    re.IGNORECASE,
+)
+
 # Threshold constants for the heuristic.
 _TOKEN_LENGTH_PLAN_THRESHOLD = 500  # rough token count (chars / 4) above which we consider PLAN
 _TOKEN_LENGTH_TOOL_THRESHOLD = 100  # below this, likely simple enough for SINGLE
@@ -96,6 +102,8 @@ class ComplexityRouter:
         token_estimate = len(text) // 4  # rough char-to-token ratio
         question_count = text.count("?")
         step_cue_count = sum(1 for pat in _STEP_CUE_PATTERNS if pat.search(text))
+        if _SECTION_LIST_PATTERN.search(text):
+            step_cue_count += 1
 
         # Decision logic:
         # 1. If complexity signals are strong, escalate to PLAN (regardless of tools).

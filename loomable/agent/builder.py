@@ -450,11 +450,13 @@ class BuiltAgent:
         # now handled via Flow (Req 14.4, 17.3). The agent keeps only single-agent
         # auto-escalation.
         # --- Consult the complexity_router before mode selection (Req 10.2/10.3) ---
+        chosen_strategy: str | None = None
         if self.complexity_router is not None:
             from .routing import RunStrategy
 
             has_tools = bool(self.tool_runtime._tools)
             strategy = self.complexity_router.classify(agent_input, has_tools=has_tools)
+            chosen_strategy = strategy.value
 
             if strategy == RunStrategy.SINGLE:
                 result = await self._run_single(agent_input, output_schema=output_schema, ctx=ctx)
@@ -466,9 +468,15 @@ class BuiltAgent:
         else:
             # Default behavior (Req 10.3): tool-loop if tools exist, else single-shot.
             if self.tool_runtime._tools:
+                chosen_strategy = "tool_loop"
                 result = await self._run_tool_loop(agent_input, output_schema=output_schema, ctx=ctx)
             else:
+                chosen_strategy = "single"
                 result = await self._run_single(agent_input, output_schema=output_schema, ctx=ctx)
+
+        # Record routing choice so experiments / production can learn from outcomes.
+        if chosen_strategy is not None:
+            result.metadata.setdefault("run_strategy", chosen_strategy)
 
         # --- Emit run_end event (Req 11.1) ---
         ctx.events.emit(Event(
@@ -901,12 +909,22 @@ class BuiltAgent:
         if output_schema is not None:
             structured = _validate_structured(output_text, output_schema)
 
+        plan_workers = 0
+        map_result = (flow_result.sub_results or {}).get("map")
+        if map_result is not None and getattr(map_result, "metadata", None):
+            outputs = map_result.metadata.get("map_outputs")
+            if isinstance(outputs, list):
+                plan_workers = len(outputs)
+            else:
+                plan_workers = int(map_result.metadata.get("map_total") or 0)
+
         return RunResult(
             output=output,
             session_id=self.session.session_id,
             usage=flow_result.usage,
             tool_activity=[],
             structured=structured,
+            metadata={"plan_workers": plan_workers},
         )
 
     async def _run_single(
