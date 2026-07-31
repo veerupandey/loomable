@@ -80,6 +80,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
     from loomable.kernel.agent_loop import AgentLoop
     from loomable.providers.resilient import RetryPolicy
+    from loomable.toolkits._base import Toolkit
     from .notes import NoteStore
     from .routing import ComplexityRouter
 
@@ -1831,7 +1832,7 @@ class Agent:
         name: str = "",
         description: str = "",
         instructions: str | None = None,
-        tools: list[Tool] | None = None,
+        tools: "list[Tool | Toolkit] | None" = None,
         skills: list[Path] | None = None,
         mcp_servers: list[Any] | None = None,
         capabilities: ModelCapabilities | None = None,
@@ -2305,7 +2306,13 @@ class Agent:
         skill_errors: list[SkillLoadError] = []
 
         if self._tools:
-            registry.update({tool.name: tool for tool in self._tools})
+            from loomable.toolkits._base import Toolkit
+            for item in self._tools:
+                if isinstance(item, Toolkit):
+                    for ft in item.tools():
+                        registry[ft.name] = ft
+                else:
+                    registry[item.name] = item
 
         # --- Skills: discover + load via the kernel SkillLoader (Req 4.1–4.4) ---
         if self._skills:
