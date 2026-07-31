@@ -30,6 +30,8 @@ from typing import TYPE_CHECKING, Any
 from loomable.content import (
     AgentInput,
     AgentOutput,
+    MediaPart,
+    Message,
     Modality,
     ModelCapabilities,
     from_model_response,
@@ -394,8 +396,10 @@ class BuiltAgent:
 
     async def arun(
         self,
-        input: AgentInput | str,  # noqa: A002
+        input: "AgentInput | str",  # noqa: A002
         *,
+        images: "list[str | Path | MediaPart] | None" = None,
+        videos: "list[str | Path | MediaPart] | None" = None,
         output_schema: type | None = None,
         context: "RunContext | None" = None,
     ) -> RunResult:
@@ -417,6 +421,12 @@ class BuiltAgent:
         ----------
         input:
             The user input — a plain string or a structured :class:`AgentInput`.
+        images:
+            Optional list of images to include with the input. Each item can be:
+            - A file path (str or Path) — will be read and sent as inline bytes.
+            - A :class:`MediaPart` constructed via ``image(path=...)`` or ``Image(...)``.
+        videos:
+            Optional list of videos to include with the input. Same format as images.
         output_schema:
             Optional Pydantic/dataclass schema for structured output validation.
         context:
@@ -424,7 +434,7 @@ class BuiltAgent:
             When ``None`` (the default), a fresh context is created internally so
             existing callers are unaffected.
         """
-        agent_input = self._coerce_input(input)
+        agent_input = self._coerce_input(input, images=images, videos=videos)
 
         # --- Build a RunContext per run (Req 4.5, 11.1) ---
         # When a context is supplied externally (flow-engine integration), use it
@@ -541,7 +551,7 @@ class BuiltAgent:
         self._persist_session(_input_text(agent_input), result.output.text())
         return result
 
-    def _coerce_input(self, value: Any) -> AgentInput:
+    def _coerce_input(self, value: Any, *, images: list | None = None, videos: list | None = None) -> AgentInput:
         """Normalize any supported input into an :class:`AgentInput` (agno-style).
 
         Accepts a plain string, an :class:`AgentInput`, a Pydantic model, a dataclass
@@ -549,10 +559,46 @@ class BuiltAgent:
         inputs are validated/coerced against it first (plain strings and existing
         :class:`AgentInput` values pass through unchanged). Validation failures raise
         :class:`~loomable.agent.errors.InputValidationError`.
+
+        When ``images`` or ``videos`` are provided, they are appended as additional
+        media parts to the user message, enabling multimodal input with a simple API.
         """
         if self.input_schema is not None and not isinstance(value, (str, AgentInput)):
             value = self._validate_against_schema(value, self.input_schema)
-        return to_agent_input(value)
+        agent_input = to_agent_input(value)
+
+        # Append images/videos as additional media parts to the last user message.
+        if images or videos:
+            from .media import image as _make_image, video as _make_video
+
+            extra_parts: list = []
+            if images:
+                for img in images:
+                    if isinstance(img, MediaPart):
+                        extra_parts.append(img)
+                    elif isinstance(img, (str, Path)):
+                        extra_parts.append(_make_image(path=img))
+                    else:
+                        extra_parts.append(_make_image(data=img))
+            if videos:
+                for vid in videos:
+                    if isinstance(vid, MediaPart):
+                        extra_parts.append(vid)
+                    elif isinstance(vid, (str, Path)):
+                        extra_parts.append(_make_video(path=vid))
+                    else:
+                        extra_parts.append(_make_video(data=vid))
+
+            if extra_parts and agent_input.messages:
+                # Append to the last user message
+                last_msg = agent_input.messages[-1]
+                agent_input = AgentInput(
+                    messages=agent_input.messages[:-1] + [
+                        Message(role=last_msg.role, parts=last_msg.parts + extra_parts)
+                    ]
+                )
+
+        return agent_input
 
     def _validate_against_schema(self, value: Any, schema: type) -> Any:
         """Validate/coerce ``value`` against a Pydantic or dataclass ``schema``."""
@@ -2113,6 +2159,8 @@ class Agent:
         self,
         input: AgentInput | str,  # noqa: A002
         *,
+        images: "list[str | Path | Any] | None" = None,
+        videos: "list[str | Path | Any] | None" = None,
         output_schema: type | None = None,
         context: dict[str, Any] | None = None,
     ) -> RunResult:
@@ -2122,6 +2170,10 @@ class Agent:
         ----------
         input:
             The user input (string or AgentInput).
+        images:
+            Optional list of images (file paths or MediaPart instances).
+        videos:
+            Optional list of videos (file paths or MediaPart instances).
         output_schema:
             Optional per-call structured output schema (overrides response_model).
         context:
@@ -2130,7 +2182,7 @@ class Agent:
         built = self._get_built()
         # Use response_model as default output_schema when not overridden per-call
         schema = output_schema or self._response_model
-        result = await built.arun(input, output_schema=schema)
+        result = await built.arun(input, images=images, videos=videos, output_schema=schema)
         # Lifecycle callback: on_complete
         if self._on_complete is not None:
             self._on_complete(result)
@@ -2140,6 +2192,8 @@ class Agent:
         self,
         input: AgentInput | str,  # noqa: A002
         *,
+        images: "list[str | Path | Any] | None" = None,
+        videos: "list[str | Path | Any] | None" = None,
         output_schema: type | None = None,
         context: dict[str, Any] | None = None,
     ) -> RunResult:
@@ -2148,7 +2202,7 @@ class Agent:
         Uses :func:`asyncio.run`, which requires that no event loop is already
         running on the calling thread. In an async context, call :meth:`arun`.
         """
-        return asyncio.run(self.arun(input, output_schema=output_schema, context=context))
+        return asyncio.run(self.arun(input, images=images, videos=videos, output_schema=output_schema, context=context))
 
     async def astream(
         self,
