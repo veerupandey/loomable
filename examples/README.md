@@ -1,73 +1,79 @@
 # Loomable Examples
 
-End-to-end examples covering every feature of the loomable framework, organized
-by tier and complexity.
+Organized by complexity — start with agents, graduate to workflows, then advanced patterns.
 
-## Agents (Tier 1)
-
-| # | File | What it shows |
-|---|------|---------------|
-| 01 | `01_simple_agent.py` | Minimal 3-line agent — string in, string out |
-| 02 | `02_agent_think_plan.py` | Agent with `think` scratchpad and `plan` escalation tools |
-| 03 | `03_agent_with_tools.py` | Function tools via `@tool`, automatic tool-use loop |
-| 04 | `04_agent_structured_io.py` | Pydantic input_schema + structured output_schema |
-| 05 | `05_agent_subagents.py` | Delegating subtasks to child agents via the plan tool |
-
-## Loops (Tier 2)
-
-| # | File | What it shows |
-|---|------|---------------|
-| 06 | `06_simple_loop.py` | Basic Loop with a verifier — retry until correct |
-| 07 | `07_loop_with_tools.py` | Loop where the body agent uses tools each iteration |
-| 08 | `08_loop_subagent_delegation.py` | Loop that spawns subagents per iteration |
-
-## Flows (Tier 3)
-
-| # | File | What it shows |
-|---|------|---------------|
-| 09 | `09_sequential_flow.py` | Sequential pipeline: research → draft → edit |
-| 10 | `10_parallel_flow.py` | Parallel branches merging results |
-| 11 | `11_route_flow.py` | Router node directing to different handlers |
-| 12 | `12_coordinate_flow.py` | Hierarchical: workers + manager synthesis |
-| 13 | `13_plan_and_execute_flow.py` | Dynamic plan → map → synthesize |
-| 14 | `14_complex_flow_with_loops.py` | Flow nodes that are themselves Loops |
-| 15 | `15_nested_flow_subagents.py` | Multi-level flows with agent nodes |
-
-## Memory
-
-| # | File | What it shows |
-|---|------|---------------|
-| 16 | `16_agent_memory.py` | Conversational memory + compaction across runs |
-| 17 | `17_flow_memory.py` | TieredMemoryStore shared across flow nodes |
-| 18 | `18_knowledge_rag.py` | Embedder + knowledge docs for RAG recall |
-
-## MCP & Skills
-
-| # | File | What it shows |
-|---|------|---------------|
-| 19 | `19_mcp_agent.py` | Agent with MCP server tools |
-| 20 | `20_mcp_in_flow.py` | MCP tools available inside a flow |
-| 21 | `21_skills_agent.py` | Loading skill directories |
-
-## Advanced
-
-| # | File | What it shows |
-|---|------|---------------|
-| 22 | `22_tiered_routing.py` | Model tier selection + fallback |
-| 23 | `23_hitl_approval.py` | Human-in-the-loop pause + resume |
-| 24 | `24_full_production_agent.py` | All features combined: tools, memory, routing, verification |
-
----
-
-## Running
+## Getting Started
 
 ```bash
-# Set your provider API key
-export OPENAI_API_KEY=sk-...
+# Set your Azure OpenAI credentials
+cp .env.example .env  # Edit with your keys
 
 # Run any example
-uv run python examples/01_simple_agent.py
+uv run python examples/01_agents/simple_agent.py
 ```
 
-All examples use a `FakeProvider` by default so they run without an API key.
-To use a real provider, swap `FakeProvider` for `OpenAIProvider` (commented in each file).
+All examples use `AzureOpenAIProvider` which reads credentials from `.env`.
+
+## 01_agents/ — Single Agent Patterns
+
+| File | What it shows |
+|------|---------------|
+| `simple_agent.py` | Minimal 3-line agent — string in, string out |
+| `think_and_plan.py` | Think scratchpad + plan tool for reasoning |
+| `function_tools.py` | @tool decorator, automatic tool-use loop |
+| `structured_io.py` | Pydantic input validation + structured output |
+| `subagent_delegation.py` | Plan tool decomposes tasks into parallel subtasks |
+
+## 02_workflows/ — Multi-Step Pipelines (Recommended)
+
+The **recommended** way to build multi-agent systems. Declarative, composable, inspectable.
+
+| File | What it shows |
+|------|---------------|
+| `sequential_pipeline.py` | Step + Workflow — named steps in a pipeline |
+| `parallel_execution.py` | Parallel_Group — concurrent steps with merged results |
+| `conditional_branching.py` | Condition — if/else branching based on state |
+| `loops_and_iteration.py` | Loop with steps, end_condition, and verifiers |
+| `nested_workflows.py` | Workflow inside Workflow — composing pipelines |
+| `flowclass_event_driven.py` | @start/@listen/@router — class-based event-driven flows |
+
+## 03_advanced_flows/ — Low-Level Engine Helpers
+
+Direct access to the flow engine primitives. Use these when you need fine-grained control.
+
+| File | What it shows |
+|------|---------------|
+| `sequential_helper.py` | `sequential()` — raw pipeline helper |
+| `parallel_helper.py` | `parallel()` — concurrent execution helper |
+| `routing.py` | `route()` — dynamic branching by classifier function |
+| `coordinate.py` | `coordinate()` — workers + manager synthesis |
+| `plan_and_execute.py` | `plan_and_execute()` — dynamic decomposition |
+| `flow_with_loops.py` | Loop nodes inside a sequential flow |
+| `nested_flows.py` | Multi-level flow composition |
+| `custom_engine_hitl.py` | Tool approval hooks + safety blocking |
+
+## 04_memory/ — Persistence and Recall
+
+| File | What it shows |
+|------|---------------|
+| `agent_memory.py` | Conversational memory with compaction |
+| `flow_memory.py` | TieredMemoryStore shared across flow nodes |
+| `knowledge_rag.py` | Embeddings + knowledge docs for RAG recall |
+
+## 05_integrations/ — External Systems
+
+| File | What it shows |
+|------|---------------|
+| `mcp_agent.py` | MCP server tools in an agent |
+| `mcp_in_flow.py` | MCP tools in a flow pipeline |
+| `skills_agent.py` | Loading skill directories |
+| `multimodal.py` | Text + image + document analysis |
+| `parallel_tool_calls.py` | Concurrent tool dispatch |
+| `toolkits.py` | Built-in FileTools, SQLTools, PythonTools |
+
+## 06_production/ — Real-World Patterns
+
+| File | What it shows |
+|------|---------------|
+| `tiered_routing.py` | Multi-model tiers with automatic fallback |
+| `full_production_agent.py` | All features combined in one agent |

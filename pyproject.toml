@@ -16,6 +16,10 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
 ]
+pdf = ["pypdf"]
+url = ["httpx", "beautifulsoup4"]
+web = ["duckduckgo-search"]
+toolkits = ["pypdf", "httpx", "beautifulsoup4", "duckduckgo-search"]
 
 [dependency-groups]
 dev = [
