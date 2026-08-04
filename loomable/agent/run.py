@@ -19,6 +19,9 @@ from typing import TYPE_CHECKING, Any
 
 from loomable.agent.events import Event
 from loomable.content import AgentOutput, MediaPart
+from loomable.content.parts import Modality
+from loomable.media import Audio, File, Image, Video
+from loomable.media.types import _MediaBase
 
 if TYPE_CHECKING:
     from loomable.flow.loop import VerdictResult
@@ -58,6 +61,68 @@ class RunResult:
     metadata: dict[str, Any] = field(default_factory=dict)
     trace: list[Event] = field(default_factory=list)
     verification: "VerdictResult | None" = None
+
+    # --- Convenience properties for multimodal output access (Req 6) ---
+
+    @property
+    def text(self) -> str:
+        """Return the concatenated text from model output (Req 6.1)."""
+        return self.output.text()
+
+    @property
+    def images(self) -> list[Image]:
+        """Return all images: model-generated first, then tool-generated (Req 6.2, 6.6)."""
+        return self._collect_media(Modality.IMAGE, Image)
+
+    @property
+    def audio(self) -> list[Audio]:
+        """Return all audio: model-generated first, then tool-generated (Req 6.3, 6.6)."""
+        return self._collect_media(Modality.AUDIO, Audio)
+
+    @property
+    def videos(self) -> list[Video]:
+        """Return all videos: model-generated first, then tool-generated (Req 6.4, 6.6)."""
+        return self._collect_media(Modality.VIDEO, Video)
+
+    @property
+    def files(self) -> list[File]:
+        """Return all files from tool metadata only (Req 6.7).
+
+        Models do not generate arbitrary files, so only tool metadata is checked.
+        """
+        result: list[File] = []
+        for outcome in self.tool_activity:
+            if outcome.result is not None:
+                media_items = outcome.result.metadata.get("media", [])
+                for item in media_items:
+                    if isinstance(item, File):
+                        result.append(item)
+        return result
+
+    def _collect_media(
+        self, modality: Modality, media_cls: type[_MediaBase]
+    ) -> list[Any]:
+        """Collect media of a given modality from model output and tool metadata.
+
+        Ordering: model-generated media first, then tool-generated media in
+        invocation order (Req 6.6). Returns empty list when none present (Req 6.5).
+        """
+        result: list[Any] = []
+
+        # 1. Model media first: iterate output parts filtered by modality
+        for part in self.output.parts:
+            if part.modality is modality:
+                result.append(media_cls.from_media_part(part))
+
+        # 2. Tool media second: iterate tool_activity in invocation order
+        for outcome in self.tool_activity:
+            if outcome.result is not None:
+                media_items = outcome.result.metadata.get("media", [])
+                for item in media_items:
+                    if isinstance(item, media_cls):
+                        result.append(item)
+
+        return result
 
 
 @dataclass

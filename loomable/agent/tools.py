@@ -27,6 +27,7 @@ from typing import Any, Callable, get_type_hints
 from loomable.kernel.contracts import Tool
 from loomable.kernel.mcp_client import MCPSession
 from loomable.kernel.models import ToolResult
+from loomable.media.types import _MediaBase
 
 #: Mapping from Python types to JSON-schema type names.
 _JSON_TYPES: dict[type, str] = {
@@ -49,6 +50,51 @@ def _json_type(annotation: Any) -> str:
     if origin is dict:
         return "object"
     return _JSON_TYPES.get(annotation, "string")
+
+
+def _extract_media(value: Any) -> list[_MediaBase] | None:
+    """Extract media instances from a tool return value.
+
+    - If ``value`` is a ``_MediaBase`` instance, returns ``[value]``.
+    - If ``value`` is a list, filters for ``_MediaBase`` instances; returns the
+      non-empty filtered list or ``None``.
+    - Otherwise returns ``None`` (no media detected).
+    """
+    if isinstance(value, _MediaBase):
+        return [value]
+    if isinstance(value, list):
+        media_items = [item for item in value if isinstance(item, _MediaBase)]
+        return media_items if media_items else None
+    return None
+
+
+def _media_summary(items: list[_MediaBase]) -> str:
+    """Produce a text summary describing a list of media items.
+
+    Single item: ``"[Image: png, url=https://...]"`` or
+    ``"[Image: png, filepath=chart.png]"``
+
+    Multiple items: ``"[2 media items: Image(png), Audio(wav)]"``
+    """
+    def _describe_one(item: _MediaBase) -> str:
+        class_name = type(item).__name__
+        fmt = item.format or "unknown"
+        if item.url is not None:
+            return f"[{class_name}: {fmt}, url={item.url}]"
+        elif item.filepath is not None:
+            return f"[{class_name}: {fmt}, filepath={item.filepath}]"
+        else:
+            return f"[{class_name}: {fmt}, content=<bytes>]"
+
+    if len(items) == 1:
+        return _describe_one(items[0])
+
+    parts = []
+    for item in items:
+        class_name = type(item).__name__
+        fmt = item.format or "unknown"
+        parts.append(f"{class_name}({fmt})")
+    return f"[{len(items)} media items: {', '.join(parts)}]"
 
 
 def _build_parameters_schema(func: Callable[..., Any]) -> dict[str, Any]:
@@ -110,6 +156,11 @@ class FunctionTool(Tool):
         Sync functions are executed in a worker thread so they never block the event
         loop. Any exception is captured as an error :class:`ToolResult` naming the
         tool so a single tool failure stays isolated.
+
+        If the return value is a :class:`_MediaBase` instance (or a list containing
+        them), the media items are stored in ``ToolResult.metadata["media"]`` and a
+        text summary is produced for the ``content`` field. Non-media return values
+        are wrapped unchanged.
         """
         try:
             if self._is_async:
@@ -118,6 +169,14 @@ class FunctionTool(Tool):
                 result = await asyncio.to_thread(self._func, **args)
         except Exception as exc:  # noqa: BLE001 - isolate tool failures
             return ToolResult(error=f"Tool '{self.name}' failed: {exc}")
+
+        # Media detection
+        media_items = _extract_media(result)
+        if media_items is not None:
+            return ToolResult(
+                content=_media_summary(media_items),
+                metadata={"media": media_items},
+            )
         return ToolResult(content=result)
 
 

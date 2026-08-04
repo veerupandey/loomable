@@ -153,6 +153,87 @@ def _input_text(agent_input: AgentInput) -> str:
     return "".join(pieces)
 
 
+# ---------------------------------------------------------------------------
+# Media coercion dispatch (Req 3.1–3.5, 4.1–4.2)
+# ---------------------------------------------------------------------------
+
+#: Mapping from target modality name to the high-level Media_Class constructor.
+_MODALITY_CLASS_MAP: dict[str, type] = {}  # populated lazily to avoid circular imports
+
+#: Default MIME types for each modality when no format/extension can be inferred.
+_MODALITY_FALLBACK_MIME: dict[str, str] = {
+    "image": "image/png",
+    "video": "video/mp4",
+    "audio": "audio/wav",
+}
+
+
+def _get_modality_class(target_modality: str):
+    """Return the Media_Class for the given modality string, importing lazily."""
+    if not _MODALITY_CLASS_MAP:
+        from loomable.media import Audio as _Audio, Image as _Image, Video as _Video
+
+        _MODALITY_CLASS_MAP["image"] = _Image
+        _MODALITY_CLASS_MAP["video"] = _Video
+        _MODALITY_CLASS_MAP["audio"] = _Audio
+    return _MODALITY_CLASS_MAP[target_modality]
+
+
+def _coerce_media_item(item: "Any", target_modality: str) -> "MediaPart":
+    """Dispatch a single media input item to a :class:`MediaPart`.
+
+    Handles the following input types:
+
+    - ``_MediaBase`` instance → call ``.to_media_part()``
+    - ``MediaPart`` → pass-through (already the target type)
+    - ``str`` starting with ``http://`` or ``https://`` → construct Media_Class(url=item)
+    - ``str`` (other) → construct Media_Class(filepath=item)
+    - ``bytes`` → construct Media_Class(content=item)
+
+    Args:
+        item: The input media item to coerce.
+        target_modality: One of ``"image"``, ``"video"``, ``"audio"`` — determines
+            which high-level Media_Class to use for string/bytes inputs.
+
+    Returns:
+        A ``MediaPart`` ready for inclusion in an ``AgentInput`` message.
+    """
+    from loomable.media.types import _MediaBase
+
+    # Already a MediaPart: pass through unchanged.
+    if isinstance(item, MediaPart):
+        return item
+
+    # A high-level Media_Class instance (Image, Audio, Video, File): convert.
+    if isinstance(item, _MediaBase):
+        return item.to_media_part()
+
+    # Determine the appropriate Media_Class for string/bytes construction.
+    media_cls = _get_modality_class(target_modality)
+    fallback_mime = _MODALITY_FALLBACK_MIME.get(target_modality)
+
+    if isinstance(item, str):
+        if item.startswith("http://") or item.startswith("https://"):
+            return media_cls(url=item).to_media_part()
+        else:
+            return media_cls(filepath=item).to_media_part()
+
+    if isinstance(item, bytes):
+        # For raw bytes with no extension hint, supply a fallback mime_type
+        # consistent with the target modality to satisfy MediaPart validation.
+        return media_cls(content=item, mime_type=fallback_mime).to_media_part()
+
+    # Fallback for Path objects.
+    if isinstance(item, Path):
+        return media_cls(filepath=item).to_media_part()
+
+    raise TypeError(
+        f"Cannot coerce {type(item).__name__!r} to a MediaPart for modality "
+        f"'{target_modality}'. Expected str, bytes, Path, MediaPart, or a "
+        f"Media class instance."
+    )
+
+
 def _schema_instruction(output_schema: type) -> str:
     """Build a lightweight, provider-agnostic instruction asking for JSON output.
 
@@ -372,6 +453,10 @@ class BuiltAgent:
     # and are always replayed in the memory prefix regardless of the rolling window.
     pinned_steps: set[int] = field(default_factory=set)
 
+    # Multimodal feedback (Req 7.5): when True, tool-generated media is injected
+    # into the conversation so the model can reason about it in subsequent turns.
+    _feedback_media: bool = True
+
     @property
     def _model_id(self) -> str:
         """The model identifier used in capability-error messages."""
@@ -401,6 +486,7 @@ class BuiltAgent:
         *,
         images: "list[str | Path | MediaPart] | None" = None,
         videos: "list[str | Path | MediaPart] | None" = None,
+        audio: "list[str | Path | MediaPart] | None" = None,
         output_schema: type | None = None,
         context: "RunContext | None" = None,
     ) -> RunResult:
@@ -428,6 +514,10 @@ class BuiltAgent:
             - A :class:`MediaPart` constructed via ``image(path=...)`` or ``Image(...)``.
         videos:
             Optional list of videos to include with the input. Same format as images.
+        audio:
+            Optional list of audio files to include with the input. Each item can be:
+            - A file path (str or Path) — will be read and sent as inline bytes.
+            - A :class:`MediaPart` constructed via ``Audio(...)`` or similar.
         output_schema:
             Optional Pydantic/dataclass schema for structured output validation.
         context:
@@ -435,7 +525,11 @@ class BuiltAgent:
             When ``None`` (the default), a fresh context is created internally so
             existing callers are unaffected.
         """
-        agent_input = self._coerce_input(input, images=images, videos=videos)
+        # Early capability gating for audio (Req 4.4): raise before coercion/model call.
+        if audio and Modality.AUDIO not in self.capabilities.input:
+            raise UnsupportedModalityError("audio", self._model_id)
+
+        agent_input = self._coerce_input(input, images=images, videos=videos, audio=audio)
 
         # --- Build a RunContext per run (Req 4.5, 11.1) ---
         # When a context is supplied externally (flow-engine integration), use it
@@ -552,7 +646,14 @@ class BuiltAgent:
         self._persist_session(_input_text(agent_input), result.output.text())
         return result
 
-    def _coerce_input(self, value: Any, *, images: list | None = None, videos: list | None = None) -> AgentInput:
+    def _coerce_input(
+        self,
+        value: Any,
+        *,
+        images: list | None = None,
+        videos: list | None = None,
+        audio: list | None = None,
+    ) -> AgentInput:
         """Normalize any supported input into an :class:`AgentInput` (agno-style).
 
         Accepts a plain string, an :class:`AgentInput`, a Pydantic model, a dataclass
@@ -561,34 +662,26 @@ class BuiltAgent:
         :class:`AgentInput` values pass through unchanged). Validation failures raise
         :class:`~loomable.agent.errors.InputValidationError`.
 
-        When ``images`` or ``videos`` are provided, they are appended as additional
-        media parts to the user message, enabling multimodal input with a simple API.
+        When ``images``, ``videos``, or ``audio`` are provided, they are appended as
+        additional media parts to the user message, enabling multimodal input with a
+        simple API. Each item is dispatched via :func:`_coerce_media_item`.
         """
         if self.input_schema is not None and not isinstance(value, (str, AgentInput)):
             value = self._validate_against_schema(value, self.input_schema)
         agent_input = to_agent_input(value)
 
-        # Append images/videos as additional media parts to the last user message.
-        if images or videos:
-            from .media import image as _make_image, video as _make_video
-
+        # Append images/videos/audio as additional media parts to the last user message.
+        if images or videos or audio:
             extra_parts: list = []
             if images:
                 for img in images:
-                    if isinstance(img, MediaPart):
-                        extra_parts.append(img)
-                    elif isinstance(img, (str, Path)):
-                        extra_parts.append(_make_image(path=img))
-                    else:
-                        extra_parts.append(_make_image(data=img))
+                    extra_parts.append(_coerce_media_item(img, "image"))
             if videos:
                 for vid in videos:
-                    if isinstance(vid, MediaPart):
-                        extra_parts.append(vid)
-                    elif isinstance(vid, (str, Path)):
-                        extra_parts.append(_make_video(path=vid))
-                    else:
-                        extra_parts.append(_make_video(data=vid))
+                    extra_parts.append(_coerce_media_item(vid, "video"))
+            if audio:
+                for aud in audio:
+                    extra_parts.append(_coerce_media_item(aud, "audio"))
 
             if extra_parts and agent_input.messages:
                 # Append to the last user message
@@ -1316,6 +1409,13 @@ class BuiltAgent:
             _tool_dispatch_t0 = time.monotonic()
             gated_result = await self.dispatch_tools_gated(calls_to_dispatch)
             _tool_dispatch_duration = (time.monotonic() - _tool_dispatch_t0) * 1000
+
+            # Annotate outcomes with tool_name for display/access convenience.
+            call_name_map = {tc.id: tc.tool_name for tc in calls_to_dispatch}
+            for outcome in gated_result.outcomes:
+                if outcome.result is not None and "tool_name" not in outcome.result.metadata:
+                    outcome.result.metadata["tool_name"] = call_name_map.get(outcome.call_id, "")
+
             tool_activity.extend(gated_result.outcomes)
 
             # Emit tool_call event (Req 11.3).
@@ -1361,6 +1461,36 @@ class BuiltAgent:
                     "content": [{"type": "text", "text": result_content}],
                     "tool_call_id": outcome.call_id,
                 })
+
+            # --- Feedback injection: inject tool-generated media into the
+            # conversation so the model can reason about it (Req 7.1–7.5). ---
+            if self._feedback_media:
+                from loomable.content.capabilities import _part_to_content
+
+                for outcome in gated_result.outcomes:
+                    if outcome.result is None:
+                        continue
+                    media_items = outcome.result.metadata.get("media", [])
+                    if not media_items:
+                        continue
+                    # Find the tool result message for this outcome's call_id.
+                    # It was just appended above, so scan from the end.
+                    tool_msg = None
+                    for msg in reversed(request.messages):
+                        if (
+                            msg.get("role") == "tool"
+                            and msg.get("tool_call_id") == outcome.call_id
+                        ):
+                            tool_msg = msg
+                            break
+                    if tool_msg is None:
+                        continue
+                    for media_item in media_items:
+                        modality = getattr(media_item, "_modality", None)
+                        if modality is not None and modality in self.capabilities.input:
+                            part = media_item.to_media_part()
+                            content_entry = _part_to_content(part)
+                            tool_msg["content"].append(content_entry)
 
             # Append error messages for blocked calls (guardrail rejections).
             # Map blocked tool_names back to their call_ids from the original request.
@@ -1831,14 +1961,19 @@ class Agent:
         *,
         name: str = "",
         description: str = "",
+        role: str = "",
+        goal: str = "",
         instructions: str | None = None,
         tools: "list[Tool | Toolkit] | None" = None,
+        subagents: "list[Agent] | None" = None,
         skills: list[Path] | None = None,
         mcp_servers: list[Any] | None = None,
         capabilities: ModelCapabilities | None = None,
+        multimodal: bool = False,
         token_budget: int = 8192,
         checkpoint_interval: int = 5,
         session_id: str | None = None,
+        user_id: str | None = None,
         resume: bool = False,
         use_memory: bool = True,
         memory_window: int = 8,
@@ -1881,6 +2016,8 @@ class Agent:
         think_tool: bool = False,
         plan_tool: bool = False,
         memory_tool: bool = False,
+        # Multimodal feedback (Req 7.5):
+        feedback_media: bool = True,
         # Developer experience:
         debug: bool = False,
         # Lifecycle callbacks:
@@ -1901,14 +2038,24 @@ class Agent:
         self._model = model
         self._name = name
         self._description = description
+        self._role = role
+        self._goal = goal
         self._instructions = instructions
         self._tools = tools
+        self._subagents = subagents
         self._skills = skills
         self._mcp_servers = mcp_servers
         self._capabilities = capabilities
+        # multimodal=True is shorthand for image+text input capabilities
+        if multimodal and self._capabilities is None:
+            self._capabilities = ModelCapabilities(
+                input=frozenset({Modality.TEXT, Modality.IMAGE}),
+                output=frozenset({Modality.TEXT}),
+            )
         self._token_budget = token_budget
         self._checkpoint_interval = checkpoint_interval
         self._session_id = session_id
+        self._user_id = user_id
         self._resume = resume
         self._response_model = response_model
 
@@ -1951,6 +2098,7 @@ class Agent:
         self._think_tool = think_tool
         self._plan_tool = plan_tool
         self._memory_tool = memory_tool
+        self._feedback_media = feedback_media
 
         # Developer experience.
         self._debug = debug
@@ -2053,6 +2201,17 @@ class Agent:
             if self._tool_runtime is None:
                 tool_runtime = ToolRuntime(tool_registry)
 
+        # --- Subagent delegation tools (Proposal §2): register each subagent as
+        # a tool so the parent LLM can delegate tasks at runtime ---
+        if self._subagents:
+            from .delegation import make_delegation_tools
+
+            delegation_tools = make_delegation_tools(self._subagents)
+            for dt in delegation_tools:
+                tool_registry[dt.name] = dt
+            if self._tool_runtime is None:
+                tool_runtime = ToolRuntime(tool_registry)
+
         # --- Resolve session (create new, or resume from the session_store) ---
         # session_store is resolved above so _build_session can restore persisted
         # state from the same store instance used for save() after each run (Req 15).
@@ -2083,7 +2242,7 @@ class Agent:
             session=session,
             capabilities=capabilities,
             persist_session=self._session_id is not None,
-            instructions=self._instructions,
+            instructions=self._assemble_system_prompt(),
             harness=harness,
             planner=planner,
             session_store=session_store,
@@ -2111,6 +2270,7 @@ class Agent:
             verifier=self._verifier,
             retry_on_failure=self._retry_on_failure,
             max_verify_retries=self._max_verify_retries,
+            _feedback_media=self._feedback_media,
         )
 
         # --- Wire harness knobs from Agent constructor (avoids build() boilerplate) ---
@@ -2135,6 +2295,9 @@ class Agent:
         # --- Store metadata on the built agent ---
         built.name = self._name or None  # type: ignore[attr-defined]
         built.description = self._description or None  # type: ignore[attr-defined]
+        built.role = self._role or None  # type: ignore[attr-defined]
+        built.goal = self._goal or None  # type: ignore[attr-defined]
+        built.user_id = self._user_id or None  # type: ignore[attr-defined]
 
         # --- Plan tool (Req 9): must be registered post-build because it references
         # the BuiltAgent itself ---
@@ -2162,6 +2325,7 @@ class Agent:
         *,
         images: "list[str | Path | Any] | None" = None,
         videos: "list[str | Path | Any] | None" = None,
+        audio: "list[str | Path | Any] | None" = None,
         output_schema: type | None = None,
         context: dict[str, Any] | None = None,
     ) -> RunResult:
@@ -2175,6 +2339,8 @@ class Agent:
             Optional list of images (file paths or MediaPart instances).
         videos:
             Optional list of videos (file paths or MediaPart instances).
+        audio:
+            Optional list of audio files (file paths or MediaPart instances).
         output_schema:
             Optional per-call structured output schema (overrides response_model).
         context:
@@ -2183,7 +2349,7 @@ class Agent:
         built = self._get_built()
         # Use response_model as default output_schema when not overridden per-call
         schema = output_schema or self._response_model
-        result = await built.arun(input, images=images, videos=videos, output_schema=schema)
+        result = await built.arun(input, images=images, videos=videos, audio=audio, output_schema=schema)
         # Lifecycle callback: on_complete
         if self._on_complete is not None:
             self._on_complete(result)
@@ -2195,6 +2361,7 @@ class Agent:
         *,
         images: "list[str | Path | Any] | None" = None,
         videos: "list[str | Path | Any] | None" = None,
+        audio: "list[str | Path | Any] | None" = None,
         output_schema: type | None = None,
         context: dict[str, Any] | None = None,
     ) -> RunResult:
@@ -2203,7 +2370,7 @@ class Agent:
         Uses :func:`asyncio.run`, which requires that no event loop is already
         running on the calling thread. In an async context, call :meth:`arun`.
         """
-        return asyncio.run(self.arun(input, images=images, videos=videos, output_schema=output_schema, context=context))
+        return asyncio.run(self.arun(input, images=images, videos=videos, audio=audio, output_schema=output_schema, context=context))
 
     async def astream(
         self,
@@ -2215,6 +2382,34 @@ class Agent:
         built = self._get_built()
         async for chunk in built.astream(input, output_schema=output_schema):
             yield chunk
+
+    # ------------------------------------------------------------------
+    # System prompt assembly
+    # ------------------------------------------------------------------
+
+    def _assemble_system_prompt(self) -> str | None:
+        """Assemble role + goal + instructions into the system prompt.
+
+        Produces a prompt like:
+            You are a Senior Security Reviewer.
+            Your goal: Identify vulnerabilities and suggest fixes.
+
+            Focus on OWASP Top 10. Be specific about affected code.
+
+        Returns None when none of role/goal/instructions is set.
+        """
+        parts: list[str] = []
+        if self._role:
+            parts.append(f"You are a {self._role}.")
+        if self._goal:
+            parts.append(f"Your goal: {self._goal}")
+        if self._instructions:
+            if parts:
+                parts.append("")  # blank line separator
+            parts.append(self._instructions)
+        if not parts:
+            return None
+        return "\n".join(parts)
 
     # ------------------------------------------------------------------
     # Helpers
