@@ -1,79 +1,86 @@
 # Loomable Examples
 
-Organized by complexity — start with agents, graduate to workflows, then advanced patterns.
+## When to use what
 
-## Getting Started
+| I need...                              | Use...                               | Example                       |
+|----------------------------------------|--------------------------------------|-------------------------------|
+| One agent answering questions          | `Agent`                              | `agents/01_hello_world.py`    |
+| One agent with tools                   | `Agent + @tool`                      | `agents/02_with_tools.py`     |
+| Structured JSON output                 | `Agent + response_model`             | `agents/03_structured_io.py`  |
+| Multi-turn conversation memory         | `Agent + session_id`                 | `agents/04_with_memory.py`    |
+| Answers from your documents (RAG)      | `Agent + knowledge + embedder`       | `agents/05_with_knowledge.py` |
+| Production hardening                   | `Agent + resilience + hooks`         | `agents/06_production.py`     |
+| Multiple specialists on one task       | `Agent(subagents=[...])`             | `subagents/01_simple_delegation.py` |
+| Subagents sharing memory               | Shared `session_id`                  | `subagents/02_with_memory_sharing.py` |
+| Multi-level delegation                 | Nested `subagents`                   | `subagents/03_nested_delegation.py` |
+| Explicit orchestration mode            | `Team(mode="coordinate")`            | `subagents/04_team_modes.py`  |
+| Quality-checked output                 | `Agent + verifier`                   | `patterns/01_retry_loop.py`   |
+| Steps that feed into each other        | `sequential(a, b, c)`                | `patterns/02_pipeline.py`     |
+| Same task, multiple perspectives       | `parallel(a, b, c)`                  | `patterns/03_fan_out.py`      |
+| Route to different agents by intent    | `route(chooser, {...})`              | `patterns/04_router.py`       |
+| Dynamic task decomposition             | `plan_and_execute(...)`              | `patterns/05_plan_execute.py` |
+| Flows inside flows                     | Nested `sequential`/`parallel`       | `patterns/06_nested_composition.py` |
+| Memory across conversations            | `Agent + session_id + user_id`       | `memory/02_user_memory.py`    |
+| Shared state in a flow                 | `TieredMemoryStore`                  | `memory/03_flow_shared_memory.py` |
+| MCP server tools                       | `Agent + mcp_servers`                | `advanced/01_mcp_servers.py`  |
+| Custom graph with conditions           | `Flow + Node + Edge`                 | `advanced/02_custom_flow.py`  |
+| Durable state / pause-resume           | `CheckpointStore`                    | `advanced/03_checkpointing.py`|
+| Multimodal: image input, tool media, feedback | `Agent + multimodal=True + @tool → Image` | `advanced/04_multimodal.py`   |
 
-```bash
-# Set your Azure OpenAI credentials
-cp .env.example .env  # Edit with your keys
+## Structure
 
-# Run any example
-uv run python examples/01_agents/simple_agent.py
+```
+examples/
+├── agents/          # Single agent patterns (start here)
+├── subagents/       # Multi-agent delegation
+├── patterns/        # Flow composition patterns
+├── memory/          # Memory and persistence
+└── advanced/        # MCP, custom flows, multimodal
 ```
 
-All examples use `AzureOpenAIProvider` which reads credentials from `.env`.
+## Running
 
-## 01_agents/ — Single Agent Patterns
+All examples read credentials from a `.env` file in the project root:
 
-| File | What it shows |
-|------|---------------|
-| `simple_agent.py` | Minimal 3-line agent — string in, string out |
-| `think_and_plan.py` | Think scratchpad + plan tool for reasoning |
-| `function_tools.py` | @tool decorator, automatic tool-use loop |
-| `structured_io.py` | Pydantic input validation + structured output |
-| `subagent_delegation.py` | Plan tool decomposes tasks into parallel subtasks |
+```bash
+# .env
+AZURE_OPENAI_API_KEY=your-key
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_DEPLOYMENT=gpt-4o-mini
+AZURE_OPENAI_API_VERSION=2024-02-15-preview
+```
 
-## 02_workflows/ — Multi-Step Pipelines (Recommended)
+Run any example:
 
-The **recommended** way to build multi-agent systems. Declarative, composable, inspectable.
+```bash
+python examples/agents/01_hello_world.py
+```
 
-| File | What it shows |
-|------|---------------|
-| `sequential_pipeline.py` | Step + Workflow — named steps in a pipeline |
-| `parallel_execution.py` | Parallel_Group — concurrent steps with merged results |
-| `conditional_branching.py` | Condition — if/else branching based on state |
-| `loops_and_iteration.py` | Loop with steps, end_condition, and verifiers |
-| `nested_workflows.py` | Workflow inside Workflow — composing pipelines |
-| `flowclass_event_driven.py` | @start/@listen/@router — class-based event-driven flows |
+## Design principles
 
-## 03_advanced_flows/ — Low-Level Engine Helpers
+1. **One concept per file** — no loops over multiple queries
+2. **Run it, see one output** — no `for query in queries:` patterns
+3. **Self-explanatory** — docstring says WHEN to use this pattern
+4. **Progressive** — within each folder, 01 is simplest
 
-Direct access to the flow engine primitives. Use these when you need fine-grained control.
+## Display utilities
 
-| File | What it shows |
-|------|---------------|
-| `sequential_helper.py` | `sequential()` — raw pipeline helper |
-| `parallel_helper.py` | `parallel()` — concurrent execution helper |
-| `routing.py` | `route()` — dynamic branching by classifier function |
-| `coordinate.py` | `coordinate()` — workers + manager synthesis |
-| `plan_and_execute.py` | `plan_and_execute()` — dynamic decomposition |
-| `flow_with_loops.py` | Loop nodes inside a sequential flow |
-| `nested_flows.py` | Multi-level flow composition |
-| `custom_engine_hitl.py` | Tool approval hooks + safety blocking |
+Most examples use `loomable.display` for pretty output:
 
-## 04_memory/ — Persistence and Recall
+```python
+from loomable.display import pp, delegation_outputs, step_outputs, show_graph
 
-| File | What it shows |
-|------|---------------|
-| `agent_memory.py` | Conversational memory with compaction |
-| `flow_memory.py` | TieredMemoryStore shared across flow nodes |
-| `knowledge_rag.py` | Embeddings + knowledge docs for RAG recall |
+# Pretty-print any result (auto-detects agent/flow/loop/subagent)
+pp(result)
 
-## 05_integrations/ — External Systems
+# Access individual subagent outputs by name
+outputs = delegation_outputs(result)
+print(outputs["researcher"])
 
-| File | What it shows |
-|------|---------------|
-| `mcp_agent.py` | MCP server tools in an agent |
-| `mcp_in_flow.py` | MCP tools in a flow pipeline |
-| `skills_agent.py` | Loading skill directories |
-| `multimodal.py` | Text + image + document analysis |
-| `parallel_tool_calls.py` | Concurrent tool dispatch |
-| `toolkits.py` | Built-in FileTools, SQLTools, PythonTools |
+# Access individual flow step outputs by node name
+steps = step_outputs(result)
+print(steps["node_0"])
 
-## 06_production/ — Real-World Patterns
-
-| File | What it shows |
-|------|---------------|
-| `tiered_routing.py` | Multi-model tiers with automatic fallback |
-| `full_production_agent.py` | All features combined in one agent |
+# Visualize a flow graph (terminal: Mermaid, Jupyter: interactive SVG)
+show_graph(my_flow)
+```

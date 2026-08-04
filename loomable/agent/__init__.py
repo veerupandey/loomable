@@ -20,6 +20,7 @@ from .builder import (
 )
 from .channels import Channel, ChannelMessage, InMemoryChannel
 from .context import RunContext, StopReason
+from .delegation import make_delegation_tools
 from .errors import (
     AgentConfigError,
     HITLPause,
@@ -30,11 +31,13 @@ from .errors import (
 )
 from .events import AgentEvents, Event, JSONTracer, NoOpEvents
 from .media import image, video
+from loomable.media import Image as Image, Audio, Video, File
 from .notes import Note, NoteStore, make_memory_tool
 from .reasoning import make_plan_tool, make_think_tool
 from .routing import ComplexityRouter, RunStrategy
 from .run import RunChunk, RunResult
 from .summarize import LLMSummarizer
+from .team import Team
 from .tools import FunctionTool, MCPTool, tool
 
 __all__ = [
@@ -42,6 +45,7 @@ __all__ = [
     "BuiltAgent",
     "GatedDispatchResult",
     "ModelSpec",
+    "Team",
     "ToolHook",
     "PostToolHook",
     "AgentConfigError",
@@ -66,11 +70,16 @@ __all__ = [
     "NoteStore",
     "Note",
     "make_memory_tool",
+    "make_delegation_tools",
     "make_think_tool",
     "make_plan_tool",
     "LLMSummarizer",
     "image",
     "video",
+    "Image",
+    "Audio",
+    "Video",
+    "File",
     "tool",
     "FunctionTool",
     "MCPTool",
