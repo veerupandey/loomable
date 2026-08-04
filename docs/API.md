@@ -9,10 +9,12 @@ A lightweight, production-grade agent framework. Build agents in 3 lines, scale 
 - [Progressive Disclosure (Levels 0–7)](#progressive-disclosure-levels-07)
 - [Quick Start](#quick-start)
 - [Agent](#agent)
+- [Subagents & Teams](#subagents--teams)
 - [Tools](#tools)
 - [Model Providers](#model-providers)
 - [Memory](#memory)
 - [Structured Output](#structured-output)
+- [Multimodal I/O](#multimodal-io)
 - [Streaming](#streaming)
 - [Flow Engine](#flow-engine)
 - [Knowledge / RAG](#knowledge--rag)
@@ -20,6 +22,7 @@ A lightweight, production-grade agent framework. Build agents in 3 lines, scale 
 - [MCP Integration](#mcp-integration)
 - [Serving](#serving)
 - [Checkpointing](#checkpointing)
+- [Display & Visualization](#display--visualization)
 
 ---
 
@@ -262,13 +265,79 @@ from loomable.agent import Agent
 agent = Agent(
     model="openai:gpt-4o-mini",       # model string or ModelSpec or provider instance
     name="researcher",                  # optional name (used in tracing, orchestration)
-    description="Finds papers",         # optional description
-    instructions="Be concise.",         # system prompt
+    role="Senior Researcher",           # who the agent is (used in system prompt + delegation)
+    goal="Find accurate information",   # what it optimizes for
+    instructions="Be concise.",         # additional system prompt instructions
     tools=[...],                        # list of @tool-decorated functions
+    subagents=[...],                    # list of Agent instances for delegation
     session_id="conv-1",                # enables multi-turn memory
+    user_id="alice",                    # scopes long-term memory per user
     debug=True,                         # prints trace to stderr
 )
 ```
+
+### Persona: role + goal + instructions
+
+The `role`, `goal`, and `instructions` fields are assembled into a single system prompt:
+
+```python
+agent = Agent(
+    model="openai:gpt-4o-mini",
+    role="Senior Security Reviewer",
+    goal="Identify vulnerabilities and suggest fixes",
+    instructions="Focus on OWASP Top 10.",
+)
+# System prompt becomes:
+# "You are a Senior Security Reviewer.
+#  Your goal: Identify vulnerabilities and suggest fixes
+#
+#  Focus on OWASP Top 10."
+```
+
+The `role` is reused when agents collaborate — a manager synthesizing worker outputs sees "Security Reviewer said X" instead of "agent_0 said X".
+
+### Subagents: Dynamic Delegation
+
+Pass other Agent instances as `subagents` and the parent agent can delegate to them at runtime:
+
+```python
+researcher = Agent(model="openai:gpt-4o-mini", role="Researcher", goal="Find facts")
+writer = Agent(model="openai:gpt-4o-mini", role="Writer", goal="Write clearly")
+
+lead = Agent(
+    model="openai:gpt-4o-mini",
+    role="Tech Lead",
+    instructions="Delegate research, then writing. Synthesize the results.",
+    subagents=[researcher, writer],
+)
+result = await lead.arun("Write docs for our auth system")
+```
+
+Each subagent becomes a tool (`delegate_to_researcher`, `delegate_to_writer`) that the parent's LLM can call. The parent decides at runtime who to call, when, and in what order. Subagent failures are isolated — one failing doesn't crash the parent. Subagents can themselves have subagents (nested delegation).
+
+### Team: Explicit Orchestration Modes
+
+For users who want named orchestration patterns without writing custom instructions:
+
+```python
+from loomable.agent import Agent, Team
+
+team = Team(
+    members=[researcher, writer, critic],
+    model="openai:gpt-4o-mini",
+    mode="coordinate",  # coordinate | route | broadcast | sequential
+)
+result = await team.arun("Review our API design")
+```
+
+| Mode | Behavior |
+|------|----------|
+| `coordinate` | Delegate to ALL members, synthesize results |
+| `route` | Pick the single best member for the task |
+| `broadcast` | Send same input to all, merge labeled results |
+| `sequential` | Chain members in order, each builds on previous |
+
+Under the hood, `Team` creates a parent Agent with auto-generated instructions and `subagents=members`.
 
 ### Running
 
@@ -296,6 +365,67 @@ result.structured          # parsed output when response_model is set
 result.tool_activity       # tool outcomes from this run
 result.metadata            # {"stop_reason": "final", ...}
 result.trace               # list of Event objects (when debug=True)
+```
+
+---
+
+## Subagents & Teams
+
+Multi-agent collaboration where an agent delegates to specialist subagents at runtime.
+
+### When to use what
+
+| I need... | Use... |
+|-----------|--------|
+| One agent with full flexibility on who to delegate to | `Agent(subagents=[...])` |
+| Named orchestration mode without custom instructions | `Team(mode="coordinate")` |
+| Explicit step-by-step pipeline | `sequential(a, b, c)` |
+| Workers + manager synthesis | `coordinate(workers=[...], manager=mgr)` |
+
+### Subagents (recommended for most cases)
+
+```python
+from loomable.agent import Agent
+
+researcher = Agent(model="openai:gpt-4o-mini", role="Researcher", goal="Find facts")
+writer = Agent(model="openai:gpt-4o-mini", role="Writer", goal="Write clearly")
+critic = Agent(model="openai:gpt-4o-mini", role="Editor", goal="Improve quality")
+
+lead = Agent(
+    model="openai:gpt-4o-mini",
+    role="Tech Lead",
+    instructions="Delegate research, writing, then editing. Synthesize the final output.",
+    subagents=[researcher, writer, critic],
+)
+result = await lead.arun("Write docs for our auth system")
+```
+
+The parent's LLM sees each subagent as a callable tool (`delegate_to_researcher`, `delegate_to_writer`, `delegate_to_editor`) and decides dynamically who to call, when, and how many times.
+
+### Team (explicit modes)
+
+```python
+from loomable.agent import Agent, Team
+
+team = Team(
+    members=[researcher, writer, critic],
+    model="openai:gpt-4o-mini",
+    mode="coordinate",
+    instructions="Focus on security aspects.",  # optional extra instructions
+)
+result = await team.arun("Review our checkout system")
+```
+
+Modes: `coordinate` (all + synthesize), `route` (pick one), `broadcast` (all same input), `sequential` (chain in order).
+
+### Nested Delegation
+
+Subagents can themselves have subagents:
+
+```python
+junior = Agent(model="openai:gpt-4o-mini", role="Junior Dev")
+senior = Agent(model="openai:gpt-4o-mini", role="Senior Dev", subagents=[junior])
+lead = Agent(model="openai:gpt-4o-mini", role="Tech Lead", subagents=[senior])
 ```
 
 ---
@@ -446,6 +576,41 @@ agent = Agent(
 # The model can now write/read/recall durable notes across sessions
 ```
 
+### Cross-Session User Memory (user_id)
+
+Scope memory per user with `user_id` — facts persist across sessions for the same user:
+
+```python
+agent = Agent(
+    model="openai:gpt-4o-mini",
+    session_id="conv-123",
+    user_id="alice",         # memory scoped to this user across all sessions
+)
+```
+
+### PostgreSQL Backend (persistent memory)
+
+For production deployments where memory must survive restarts:
+
+```python
+from loomable.providers.backends.postgres import PostgresMemoryBackend, PgVectorBackend
+
+# Key-value memory (session state, user facts)
+memory_backend = PostgresMemoryBackend(
+    url="postgresql://user:pass@localhost/agentdb",
+    user_id="alice",
+)
+
+# Vector memory (embeddings, RAG, semantic search)
+vector_backend = PgVectorBackend(
+    url="postgresql://user:pass@localhost/agentdb",
+    dimensions=1536,
+    user_id="alice",
+)
+```
+
+Both backends support `user_id` scoping for multi-tenant isolation. Requires `asyncpg` (optional dependency — install with `pip install asyncpg`). Tables are created automatically on first use.
+
 ---
 
 ## Structured Output
@@ -468,6 +633,297 @@ result = await agent.arun("Info about Paris", output_schema=CityInfo)
 ```
 
 Supports Pydantic models, dataclasses, and any callable.
+
+---
+
+## Multimodal I/O
+
+Agents can process images, video, and audio as input, and return media as output (model-dependent). Tools can also return typed media objects that are surfaced on `RunResult` convenience properties.
+
+### Media Classes
+
+The `loomable.media` module provides high-level media classes that unify URL, file path, raw bytes, and base64 sources behind a single interface:
+
+```python
+from loomable.media import Image, Audio, Video, File
+```
+
+These classes are also re-exported from `loomable.agent` for convenience:
+
+```python
+from loomable.agent import Image, Audio, Video, File
+```
+
+#### Constructors
+
+Each class accepts exactly **one** source parameter (`url`, `filepath`, or `content`):
+
+```python
+# From a URL (no fetch until content is accessed)
+img = Image(url="https://example.com/photo.png")
+
+# From a file path (lazy — file is not read until needed)
+img = Image(filepath="./chart.png")
+
+# From raw bytes
+img = Image(content=raw_bytes)
+
+# From a base64-encoded string (auto-decoded to bytes)
+img = Image(content="iVBORw0KGgo...")
+
+# Audio and Video work the same way
+clip = Audio(url="https://example.com/speech.wav")
+vid = Video(filepath="./demo.mp4")
+doc = File(filepath="./report.pdf", filename="Q4 Report.pdf")
+```
+
+Providing zero or more than one source raises `ValueError`.
+
+**Optional parameters:**
+
+| Parameter | Classes | Description |
+|-----------|---------|-------------|
+| `format` | All | File format (e.g. `"png"`, `"wav"`). Auto-inferred from extension if omitted. |
+| `mime_type` | All | MIME type (e.g. `"image/png"`). Auto-inferred from format/extension if omitted. |
+| `detail` | `Image` only | Detail level for OpenAI models: `"high"`, `"low"`, or `"auto"`. |
+| `duration` | `Audio`, `Video` | Duration in seconds (informational). |
+| `filename` | `File` only | Original filename hint. |
+
+#### Convenience Methods
+
+Every media instance provides these methods:
+
+```python
+img = Image(filepath="./chart.png")
+
+# Save resolved content to disk (fetches URL or reads file if needed)
+img.save("./output/chart_copy.png")
+
+# Get base64-encoded string
+b64 = img.to_base64()
+
+# Get a complete data URI (e.g. "data:image/png;base64,...")
+uri = img.to_data_uri()
+
+# Convert to low-level MediaPart for kernel interop
+part = img.to_media_part()
+```
+
+If content cannot be resolved (file not found, URL unreachable), a `MediaResolveError` is raised:
+
+```python
+from loomable.media import MediaResolveError
+
+try:
+    img = Image(filepath="./missing.png")
+    img.save("./copy.png")  # raises MediaResolveError
+except MediaResolveError as e:
+    print(f"Cannot resolve media: {e}")
+```
+
+### Enabling multimodal
+
+```python
+agent = Agent(model="openai:gpt-4o-mini", multimodal=True)
+```
+
+That's it. `multimodal=True` is shorthand for declaring image + text input capabilities.
+
+### Input: passing images
+
+```python
+# File path (simplest)
+result = await agent.arun("Describe this chart", images=["./chart.png"])
+
+# URL (auto-detected from http/https prefix)
+result = await agent.arun("What's in this?", images=["https://example.com/photo.jpg"])
+
+# Multiple images
+result = await agent.arun("Compare these", images=["before.png", "after.png"])
+
+# Raw bytes
+with open("photo.jpg", "rb") as f:
+    result = await agent.arun("Analyze", images=[f.read()])
+
+# Media class instances
+from loomable.media import Image
+result = await agent.arun("Analyze", images=[
+    Image(filepath="./photo.jpg"),
+    Image(url="https://example.com/img.png"),
+    Image(content=raw_bytes),
+])
+
+# Explicit control via low-level helper (still works)
+from loomable.agent import image
+result = await agent.arun("Analyze", images=[
+    image(path="./photo.jpg"),
+    image(uri="https://example.com/img.png"),
+    image(data=raw_bytes, media_type="image/webp"),
+])
+```
+
+### Input: passing video
+
+```python
+result = await agent.arun("Summarize this clip", videos=["./demo.mp4"])
+
+# Or via helper
+from loomable.agent import video
+result = await agent.arun("Describe", videos=[video(path="./clip.mp4")])
+```
+
+### Input: passing audio
+
+For models that support audio input (e.g. Gemini, GPT-4o audio):
+
+```python
+# File path
+result = await agent.arun("Transcribe this", audio=["./recording.wav"])
+
+# URL
+result = await agent.arun("Summarize", audio=["https://example.com/podcast.mp3"])
+
+# Media class instance
+from loomable.media import Audio
+result = await agent.arun("Analyze tone", audio=[Audio(filepath="./call.wav")])
+
+# Raw bytes
+result = await agent.arun("Transcribe", audio=[audio_bytes])
+```
+
+The same auto-coercion rules apply: URL strings, file path strings, raw bytes, `MediaPart`, and `Audio` instances are all accepted. If the model does not support audio input, an `UnsupportedModalityError` is raised before the model call.
+
+### Output: RunResult convenience properties
+
+`RunResult` provides unified access to all media from a run — combining model-generated and tool-generated media:
+
+```python
+result = await agent.arun("Generate a chart and describe it")
+
+# Text output (equivalent to result.output.text())
+result.text
+
+# Images from model output + tool results (model-first ordering)
+result.images        # list[Image] — never None, empty list if none
+
+# Audio from model output + tool results
+result.audio         # list[Audio]
+
+# Video from model output + tool results
+result.videos        # list[Video]
+
+# Files from tool results only (models don't generate arbitrary files)
+result.files         # list[File]
+
+# Save the first generated image
+if result.images:
+    result.images[0].save("./output.png")
+    print(result.images[0].to_base64())
+```
+
+Ordering: model-generated media appears first, followed by tool-generated media in tool invocation order.
+
+### Output: low-level access (still works)
+
+```python
+# Image output (when model generates images)
+for img in result.output.images():
+    img.data          # raw bytes (PNG, JPEG, etc.)
+    img.uri           # or URL if returned as reference
+    img.media_type    # "image/png", "image/jpeg", etc.
+
+# Video output
+for vid in result.output.videos():
+    vid.data          # raw bytes
+    vid.media_type    # "video/mp4", etc.
+
+# All parts (mixed modalities)
+result.output.parts        # list[MediaPart]
+result.output.modalities() # set of Modality values present
+```
+
+### Tools returning media
+
+`@tool` functions can return `Image`, `Audio`, or `Video` instances directly. Detection is automatic — no extra decorator parameters needed:
+
+```python
+from loomable.agent import Agent, tool
+from loomable.media import Image
+
+@tool
+def generate_chart(data: str) -> Image:
+    """Generate a chart from the provided data."""
+    chart_bytes = my_chart_library.render(data)
+    return Image(content=chart_bytes, format="png")
+
+@tool
+def capture_screenshot(url: str) -> Image:
+    """Take a screenshot of a webpage."""
+    return Image(url=f"https://screenshot-api.example.com/{url}")
+
+agent = Agent(model="openai:gpt-4o-mini", tools=[generate_chart, capture_screenshot])
+result = await agent.arun("Create a bar chart of Q4 sales")
+
+# Tool-generated media is surfaced on RunResult properties
+result.images[0].save("./chart.png")
+print(result.text)  # model's text response referencing the chart
+```
+
+Tools can also return a list of media items:
+
+```python
+@tool
+def generate_slides(topic: str) -> list:
+    """Generate slide images for a presentation."""
+    return [Image(content=slide, format="png") for slide in render_slides(topic)]
+```
+
+When a tool returns media, the framework:
+1. Stores the media objects in `ToolResult.metadata["media"]`
+2. Produces a text summary for the tool result content (e.g. `"[Image: png, filepath=chart.png]"`)
+3. Surfaces media on `result.images` / `result.audio` / `result.videos`
+
+### Feedback injection (multi-step reasoning)
+
+By default, tool-generated media is fed back into the conversation so the model can "see" it in subsequent reasoning turns:
+
+```python
+agent = Agent(
+    model="openai:gpt-4o-mini",
+    tools=[generate_chart],
+    feedback_media=True,  # default — model sees tool-generated media
+)
+result = await agent.arun("Generate a chart, then describe what you see in it")
+# The model generates the chart via tool, sees the image, then describes it
+```
+
+To disable feedback injection (media still appears on `result.images` etc., but the model won't see it):
+
+```python
+agent = Agent(
+    model="openai:gpt-4o-mini",
+    tools=[generate_chart],
+    feedback_media=False,  # media on RunResult but not injected into conversation
+)
+```
+
+Feedback injection only occurs when the model's capabilities include the relevant modality as input. If a tool produces audio but the model doesn't support audio input, the media is captured on `result.audio` but not injected.
+
+### Full capabilities (advanced)
+
+For edge cases (video input, audio input, image output), use the full `ModelCapabilities`:
+
+```python
+from loomable.content import ModelCapabilities, Modality
+
+agent = Agent(
+    model="openai:gpt-4o-mini",
+    capabilities=ModelCapabilities(
+        input=frozenset({Modality.TEXT, Modality.IMAGE, Modality.VIDEO, Modality.AUDIO}),
+        output=frozenset({Modality.TEXT, Modality.IMAGE}),
+    ),
+)
+```
 
 ---
 
@@ -748,6 +1204,72 @@ from loomable.persist import PendingAction, Checkpoint
 # Process can die here safely
 # On restart: load checkpoint, see pending action, approve, resume
 ```
+
+---
+
+## Display & Visualization
+
+Pretty-print results and visualize flow graphs. Works in both terminal and Jupyter.
+
+### Pretty-print any result
+
+```python
+from loomable.display import pp
+
+result = await agent.arun("Hello")
+pp(result)
+# ═══ Agent Result ═══
+# Output:
+#   Hello! How can I help?
+# Tokens: 12 in / 8 out
+```
+
+`pp()` auto-detects the result type (agent, flow, loop, subagent) and formats accordingly. In Jupyter, it renders styled HTML.
+
+### Access individual outputs
+
+```python
+from loomable.display import delegation_outputs, step_outputs
+
+# Subagent delegation results by name:
+result = await lead.arun("...")
+outputs = delegation_outputs(result)
+print(outputs["researcher"])    # researcher's output text
+print(outputs["writer"])        # writer's output text
+
+# Flow step results by node name:
+result = await pipeline.arun("...")
+steps = step_outputs(result)
+print(steps["node_0"])          # first step output
+print(steps["node_1"])          # second step output
+```
+
+### Visualize flow graphs
+
+```python
+from loomable.display import show_graph, mermaid_graph
+
+# Terminal: prints Mermaid syntax (paste into mermaid.live)
+# Jupyter: renders interactive SVG via Mermaid.js CDN
+show_graph(my_flow, title="Research Pipeline")
+
+# Get the raw Mermaid definition:
+print(mermaid_graph(my_flow))
+# graph TD
+#   researcher[researcher<br/><small>Researcher</small>]
+#   writer[writer<br/><small>Writer</small>]
+#   researcher --> writer
+```
+
+### Output access patterns by primitive
+
+| Primitive | Final output | Individual steps |
+|-----------|-------------|-----------------|
+| Agent | `result.output.text()` | `result.tool_activity` (tools called) |
+| Agent + subagents | `result.output.text()` | `delegation_outputs(result)` → dict by name |
+| Flow (sequential/parallel) | `result.output.text()` | `result.sub_results` dict or `step_outputs(result)` |
+| Loop | `result.output.text()` | `result.metadata["loop_iterations"]`, `result.metadata["loop_verified"]` |
+| Team | `result.output.text()` | Same as subagents — `delegation_outputs(result)` |
 
 ---
 

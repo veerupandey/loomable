@@ -104,6 +104,24 @@ result = await agent.arun("What is 7 * 8?")
 
 The agent enters a tool-use loop automatically: call tools, feed results back, repeat until done.
 
+### Multimodal — images, audio, tool media
+
+```python
+from loomable.agent import Agent, tool, Image
+
+@tool
+def generate_chart(data: str) -> Image:
+    """Generate a chart from data."""
+    return Image(content=render_chart(data), format="png")
+
+agent = Agent(model=provider, tools=[generate_chart], multimodal=True)
+
+# Pass images as input, get tool-generated media on the result
+result = await agent.arun("Visualize Q4 sales", images=["data.png"])
+result.images[0].save("chart.png")  # save tool-generated image
+print(result.text)                  # model's text response
+```
+
 ### Add a loop
 
 ```python
@@ -162,6 +180,7 @@ result = await flow.arun("Build a feature spec")
 | **Think & Plan** | Built-in reasoning scratchpad and dynamic task decomposition |
 | **Memory** | Conversational history with automatic compaction |
 | **Knowledge (RAG)** | Embed docs at build time, recall into context at run time |
+| **Multimodal I/O** | Image/audio/video input, tool media output, feedback injection |
 | **Tiered routing** | Primary/fallback model tiers with automatic failover |
 | **Structured I/O** | Pydantic/dataclass input validation and output parsing |
 | **Verification** | Verifier protocol — same interface for Agent, Loop, and Flow |
@@ -175,66 +194,75 @@ result = await flow.arun("Build a feature spec")
 
 ## Examples
 
+```
+examples/
+├── agents/          # Single agent patterns (start here)
+├── subagents/       # Multi-agent delegation
+├── patterns/        # Flow composition patterns
+├── memory/          # Memory and persistence
+└── advanced/        # MCP, custom flows, multimodal
+```
+
 Run any example:
 
 ```bash
-python examples/01_simple_agent.py
+python examples/agents/01_hello_world.py
 ```
 
-### Agents
+### Agents (`examples/agents/`)
 
 | File | What it shows |
 |------|---------------|
-| `01_simple_agent.py` | Minimal agent — 3 lines |
-| `02_agent_think_plan.py` | Think scratchpad + plan escalation |
-| `03_agent_with_tools.py` | `@tool` decorator, automatic tool loop |
-| `04_agent_structured_io.py` | Input validation + structured output |
-| `05_agent_subagents.py` | Plan-based subagent delegation |
+| `01_hello_world.py` | Minimal agent — 3 lines |
+| `02_with_tools.py` | `@tool` decorator, automatic tool loop |
+| `03_structured_io.py` | Input validation + structured output |
+| `04_with_memory.py` | Multi-turn conversation memory |
+| `05_with_knowledge.py` | RAG — embed docs, recall at runtime |
+| `06_production.py` | Resilience, hooks, observability |
 
-### Loops
-
-| File | What it shows |
-|------|---------------|
-| `06_simple_loop.py` | Retry until verifier passes |
-| `07_loop_with_tools.py` | Tool-using agent inside a loop |
-| `08_loop_subagent_delegation.py` | Research + fact-check loop |
-
-### Flows
+### Sub-agents (`examples/subagents/`)
 
 | File | What it shows |
 |------|---------------|
-| `09_sequential_flow.py` | Research → Draft → Edit pipeline |
-| `10_parallel_flow.py` | Concurrent branches |
-| `11_route_flow.py` | Dynamic routing by intent |
-| `12_coordinate_flow.py` | Workers + manager synthesis |
-| `13_plan_and_execute_flow.py` | Plan → Map → Synthesize |
-| `14_complex_flow_with_loops.py` | Loop nodes inside a flow |
-| `15_nested_flow_subagents.py` | Multi-level flow composition |
+| `01_simple_delegation.py` | Basic sub-agent delegation |
+| `02_with_memory_sharing.py` | Shared session across agents |
+| `03_nested_delegation.py` | Multi-level delegation chains |
+| `04_team_modes.py` | Coordinate/parallel team modes |
 
-### Memory & Knowledge
+### Flow Patterns (`examples/patterns/`)
 
 | File | What it shows |
 |------|---------------|
-| `16_agent_memory.py` | Multi-turn memory + compaction |
-| `17_flow_memory.py` | TieredMemoryStore across nodes |
-| `18_knowledge_rag.py` | Embedder + document recall |
+| `01_retry_loop.py` | Retry until verifier passes |
+| `02_pipeline.py` | Sequential steps |
+| `03_fan_out.py` | Parallel branches |
+| `04_router.py` | Dynamic routing by intent |
+| `05_plan_execute.py` | Plan → Map → Synthesize |
+| `06_nested_composition.py` | Flows inside flows |
 
-### MCP, Skills & Advanced
+### Memory (`examples/memory/`)
 
 | File | What it shows |
 |------|---------------|
-| `19_mcp_agent.py` | MCP server tools on an agent |
-| `20_mcp_in_flow.py` | MCP tools inside a flow |
-| `21_skills_agent.py` | Skill directory loading |
-| `22_tiered_routing.py` | Model fallback tiers |
-| `23_hitl_approval.py` | Tool approval + safety hooks |
-| `24_full_production_agent.py` | All features combined |
+| `01_session_memory.py` | Session-scoped memory |
+| `02_user_memory.py` | Cross-conversation user memory |
+| `03_flow_shared_memory.py` | TieredMemoryStore across flow nodes |
+
+### Advanced (`examples/advanced/`)
+
+| File | What it shows |
+|------|---------------|
+| `01_mcp_servers.py` | MCP server tools |
+| `02_custom_flow.py` | Custom graph with conditions |
+| `03_checkpointing.py` | Durable state / pause-resume |
+| `04_multimodal.py` | Image input, tool media output, feedback injection |
 
 ## Architecture
 
 ```
 loomable/
 ├── agent/       # Tier 1: Agent builder, tools, memory, reasoning
+├── media/       # High-level media classes (Image, Audio, Video, File)
 ├── flow/        # Tier 2 & 3: Loop, Flow, engines, helpers
 ├── content/     # Input/output coercion and media types
 ├── kernel/      # Core primitives (never modified by extensions)

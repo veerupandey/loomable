@@ -225,3 +225,54 @@ def test_sync_run_wrapper() -> None:
 
     assert isinstance(result, RunResult)
     assert result.output.text() == "echo: sync call"
+
+
+async def test_audio_input_gating_raises_without_provider_call() -> None:
+    """Unsupported audio modality raises before the provider is invoked (Req 4.4)."""
+    provider = EchoProvider()
+    # Default capabilities are text-only, so audio input is unsupported.
+    agent = Agent(model=ModelSpec(provider="echo", provider_impl=provider))
+
+    with pytest.raises(UnsupportedModalityError) as exc_info:
+        await agent.arun("transcribe this", audio=["test.wav"])
+
+    assert exc_info.value.modality == "audio"
+    assert exc_info.value.model == "echo"
+    # Critical: the provider must NOT have been called (fail fast, no side effects).
+    assert provider.called is False
+
+
+async def test_audio_input_allowed_when_capability_declared() -> None:
+    """Audio input passes through when model declares audio capability (Req 4.1)."""
+    from loomable.content import MediaPart
+
+    provider = EchoProvider()
+    agent = Agent(
+        model=ModelSpec(
+            provider="echo",
+            provider_impl=provider,
+            capabilities=ModelCapabilities(
+                input=frozenset({Modality.TEXT, Modality.AUDIO}),
+                output=frozenset({Modality.TEXT}),
+            ),
+        )
+    )
+
+    # Use a MediaPart directly to avoid filesystem read.
+    audio_part = MediaPart(modality=Modality.AUDIO, media_type="audio/wav", data=b"RIFF-fake")
+    result = await agent.arun("transcribe this", audio=[audio_part])
+
+    assert provider.called is True
+    assert result.output.text() == "echo: transcribe this"
+
+
+async def test_audio_none_does_not_trigger_gating() -> None:
+    """When audio=None (default), no gating check fires even on text-only model."""
+    provider = EchoProvider()
+    agent = Agent(model=ModelSpec(provider="echo", provider_impl=provider))
+
+    # Should not raise; audio is None by default.
+    result = await agent.arun("hello")
+
+    assert provider.called is True
+    assert result.output.text() == "echo: hello"
