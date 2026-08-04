@@ -122,9 +122,9 @@ def test_malformed_part_yields_4xx() -> None:
     """A part with an unknown modality yields a 422 (Req 7.6)."""
     client = _build_client()
     payload = {
-        "messages": [{"role": "user", "parts": [{"modality": "audio", "text": "x"}]}]
+        "messages": [{"role": "user", "parts": [{"modality": "hologram", "text": "x"}]}]
     }
     response = client.post("/run", json=payload)
 
     assert response.status_code == 422
-    assert "audio" in response.json()["detail"].lower()
+    assert "hologram" in response.json()["detail"].lower()

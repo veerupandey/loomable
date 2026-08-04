@@ -101,7 +101,7 @@ async def test_transport_parity_equivalent_output() -> None:
     # 3) Over MCP: same BuiltAgent, wrapped by the MCP adapter.
     mcp_adapter = MCPServerAdapter(built)
     mcp_result = await mcp_adapter.run_tool({"text": _INPUT_TEXT})
-    assert mcp_result.isError is False
+    assert mcp_result.is_error is False
     mcp_text = _text_from_mcp_result(mcp_result)
 
     # Parity: the deterministic provider makes the expected output exact.

@@ -23,6 +23,7 @@ class Modality(Enum):
     TEXT = "text"
     IMAGE = "image"
     VIDEO = "video"
+    AUDIO = "audio"
 
 
 # Maps a modality to the required media_type prefix (e.g. "image/" for IMAGE).
@@ -30,6 +31,7 @@ _MODALITY_PREFIX: dict[Modality, str] = {
     Modality.TEXT: "text/",
     Modality.IMAGE: "image/",
     Modality.VIDEO: "video/",
+    Modality.AUDIO: "audio/",
 }
 
 
