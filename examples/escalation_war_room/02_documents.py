@@ -141,6 +141,7 @@ async def write_artifacts(work: Path, pack: EvidencePack) -> EscalationPacket:
         ),
         tools=[FileTools(base_dir=str(work), json_schema=EscalationPacket)],
         response_model=EscalationPacket,
+        require_tools=["write_file", "write_json"],
         max_tool_iterations=10,
     )
     result = await agent.arun(
@@ -150,32 +151,17 @@ async def write_artifacts(work: Path, pack: EvidencePack) -> EscalationPacket:
     print(
         f"[scribe tools={len(result.tool_activity or [])}] "
         f"text_chars={len(result.output.text() or '')} "
-        f"reprompted={bool((result.metadata or {}).get('final_text_reprompted'))}"
+        f"reprompted={bool((result.metadata or {}).get('final_text_reprompted'))} "
+        f"require_tools_nudged={bool((result.metadata or {}).get('require_tools_nudged'))}"
     )
     packet = result.structured
     assert isinstance(packet, EscalationPacket)
 
     brief = work / "output" / "war_room_brief.md"
-    if not brief.exists():
-        print("[issue] scribe skipped write_file; synthesizing brief")
-        brief.write_text(
-            "# War-room brief (synthesized)\n\n"
-            f"- Incident: {packet.incident_id}\n"
-            f"- Customer: {packet.customer}\n"
-            f"- Severity: {packet.severity}\n"
-            f"- SLA: {packet.sla_notes}\n\n"
-            "## Evidence\n"
-            + "\n".join(f"- {e}" for e in packet.evidence_from_docs)
-            + "\n\n## Next actions\n"
-            + "\n".join(f"- {a}" for a in packet.next_actions)
-            + "\n",
-            encoding="utf-8",
-        )
-
     packet_path = work / "output" / "escalation_packet.json"
-    if not packet_path.exists():
-        print("[issue] scribe skipped write_json; writing packet from structured output")
-        packet_path.write_text(packet.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    assert brief.exists(), "scribe must call write_file (require_tools)"
+    assert packet_path.exists(), "scribe must call write_json (require_tools)"
+    assert not (result.metadata or {}).get("required_tools_missing")
 
     OUTPUT.mkdir(parents=True, exist_ok=True)
     shutil.copy2(brief, OUTPUT / "war_room_brief.md")

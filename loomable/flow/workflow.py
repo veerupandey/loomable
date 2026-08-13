@@ -141,16 +141,33 @@ class Workflow:
         *,
         description: str = "",
         deps: Any = None,
+        require_confirmation: bool = False,
+        confirm: bool | None = None,
     ) -> "Workflow":
-        """Append a named step. ``.step("gather", agent)`` or ``.step(Step(...))``."""
+        """Append a named step. ``.step("gather", agent)`` or ``.step(Step(...))``.
+
+        Pass ``confirm=True`` (or ``require_confirmation=True``) to pause the
+        workflow before the step until ``approve(name)`` + ``arun(resume=True)``.
+        """
         from loomable.flow.step import Step
+
+        if confirm is not None:
+            require_confirmation = confirm
 
         if agent is None:
             element = _wrap_runnable(name)
+            if require_confirmation and isinstance(element, Step):
+                element.require_confirmation = True
         else:
             if not isinstance(name, str) or not name:
                 raise ValueError("step name must be a non-empty string")
-            element = Step(name, agent, description=description, deps=deps)
+            element = Step(
+                name,
+                agent,
+                description=description,
+                deps=deps,
+                require_confirmation=require_confirmation,
+            )
         self._steps.append(element)
         self._invalidate()
         return self

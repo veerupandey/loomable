@@ -106,7 +106,13 @@ class WorkflowCompiler:
         for i, element in enumerate(steps):
             if isinstance(element, Step):
                 node_id = element.name
-                nodes[node_id] = Node(node_id=node_id, runnable=element)
+                nodes[node_id] = Node(
+                    node_id=node_id,
+                    runnable=element,
+                    require_confirmation=bool(
+                        getattr(element, "require_confirmation", False)
+                    ),
+                )
                 element_endpoints.append((node_id, node_id))
 
             elif isinstance(element, Parallel_Group):

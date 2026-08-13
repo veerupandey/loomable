@@ -43,6 +43,16 @@ Found while stressing a real AcmePay SEV-1 war-room agent on Gemini
 
 ## Still open (to fix next)
 
+### ISSUE-WR-012 — Scribe skips write tools when `response_model` set (P0 — fixed)
+- **Symptom:** Model returns FinalPacket JSON and never calls `write_file`/`write_json`.
+- **Fix:** `Agent(require_tools=["write_file", "write_json"])` nudges once with tools
+  enabled; surfaces `require_tools_nudged` / `required_tools_missing` in metadata.
+- **Gates:** `08_stress_exam.py`, `09_challenge_hitl.py`, `02_documents.py`.
+
+### ISSUE-WR-013 — HITL only on low-level `Node` (P1 — fixed)
+- **Symptom:** Fluent Workflow could not pause for approval without building `Node`s.
+- **Fix:** `Step(..., confirm=True)` / `Workflow.step(..., confirm=True)` + `approve()`.
+
 ### ISSUE-WR-010 — Workflow/Flow/Graph API sprawl (P1 → largely fixed)
 - Fluent `Workflow.step/parallel/branch/loop/map` is the preferred process API
 - `checkpointer`/`session_id`/`resume=` wired; JSON checkpoints round-trip AgentOutput
@@ -66,12 +76,9 @@ Found while stressing a real AcmePay SEV-1 war-room agent on Gemini
 - **Wanted:** Examples/docs should default to a dedicated workspace dir;
   consider `allow_globs=` / deny lists.
 
-### ISSUE-WR-010 — Workflow/Flow/Graph API sprawl (P1, planned)
-- User goal: unify workflow API into one smart surface, then attach complex
-  workflows to Agent with step monitoring. Not started in Phase 1.
-
-### ISSUE-WR-011 — Memory L1/L2/L3 not exercised yet (planned)
-- Phase 2 of this exam: shift-handoff memory across war-room turns.
+### ISSUE-WR-014 — Soft Team coordinate flaky under stress (P2)
+- LLM may finish without calling `delegate_to_*`. Prefer hard broadcast/sequential
+  for production SEV paths; see `CHALLENGES.md`.
 
 ## Phase 1 results (Gemini)
 

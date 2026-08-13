@@ -25,6 +25,7 @@ from loomable.agent import (
 from loomable.flow import (
     Condition,
     Flow,
+    FlowPaused,
     Loop,
     Parallel_Group,
     Step,
@@ -56,6 +57,7 @@ __all__ = [
     "RunResult",
     "ContextPolicy",
     "spawn_specialist",
+    "FlowPaused",
     # Helpers (aliases that return Flow)
     "sequential",
     "parallel",

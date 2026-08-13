@@ -37,6 +37,9 @@ class Step:
     deps:
         Optional dependency object injected into :class:`RunContext` when
         this step executes, overriding any flow-level deps for this step only.
+    require_confirmation:
+        When True, the compiled Flow pauses before this step (HITL) until
+        ``Workflow.approve(name)`` is called and the run is resumed.
     """
 
     def __init__(
@@ -46,6 +49,8 @@ class Step:
         *,
         description: str = "",
         deps: Any = None,
+        require_confirmation: bool = False,
+        confirm: bool | None = None,
     ) -> None:
         if not name:
             raise ValueError("Step name is required")
@@ -53,6 +58,9 @@ class Step:
         self._name = name
         self._description = description
         self._deps = deps
+        if confirm is not None:
+            require_confirmation = confirm
+        self.require_confirmation = bool(require_confirmation)
 
         # Wrap plain callables in FunctionRunnable to satisfy the Runnable protocol.
         if isinstance(agent, Runnable):
