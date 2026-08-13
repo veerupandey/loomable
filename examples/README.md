@@ -26,16 +26,18 @@
 | Custom graph with conditions           | `Flow + Node + Edge`                 | `advanced/02_custom_flow.py`  |
 | Durable state / pause-resume           | `CheckpointStore`                    | `advanced/03_checkpointing.py`|
 | Multimodal: image input, tool media, feedback | `Agent + multimodal=True + @tool → Image` | `advanced/04_multimodal.py`   |
+| Simple real-world Q&A / docs / tools           | `Agent + WebSearch/File/PDF/PPT`         | `simple_use_cases/`           |
 
 ## Structure
 
 ```
 examples/
-├── agents/          # Single agent patterns (start here)
-├── subagents/       # Multi-agent delegation
-├── patterns/        # Flow composition patterns
-├── memory/          # Memory and persistence
-└── advanced/        # MCP, custom flows, multimodal
+├── agents/             # Single agent patterns (start here)
+├── simple_use_cases/   # News, research, structured I/O, docs, tools
+├── subagents/          # Multi-agent delegation
+├── patterns/           # Flow composition patterns
+├── memory/             # Memory and persistence
+└── advanced/           # MCP, custom flows, multimodal
 ```
 
 ## Running

@@ -22,18 +22,24 @@ from loomable.toolkits.web_search import WebSearchTools
 # Conditional imports for toolkits with optional dependencies
 try:
     from loomable.toolkits.pdf_tools import PDFTools
-except ImportError:
-    pass
+except ImportError:  # pragma: no cover
+    PDFTools = None  # type: ignore[misc, assignment]
+
+try:
+    from loomable.toolkits.ppt_tools import PPTTools
+except ImportError:  # pragma: no cover
+    PPTTools = None  # type: ignore[misc, assignment]
 
 try:
     from loomable.toolkits.url_tools import URLTools
-except ImportError:
-    pass
+except ImportError:  # pragma: no cover
+    URLTools = None  # type: ignore[misc, assignment]
 
 __all__ = [
     "Toolkit",
     "FileTools",
     "PDFTools",
+    "PPTTools",
     "PythonTools",
     "SQLTools",
     "URLTools",
