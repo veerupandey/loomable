@@ -24,6 +24,13 @@ Goal: enterprise spine that stays one-line-easy on the happy path.
    **Fix:** `Agent(require_tools=[...])` — one nudge with tools still enabled; metadata
    `require_tools_nudged` / `required_tools_missing`.
 
+1b. **Empty final after successful write_json (P0 — fixed)**  
+   After tools (especially under `require_tools` nudge), Gemini sometimes returns
+   empty content; schema validation then hard-fails even though `write_json` already
+   wrote a valid packet.  
+   **Fix:** Recover `structured` (and fill output text) from the last successful
+   `write_json` payload; metadata `structured_from_write_json=True`.
+
 2. **Soft Team flakiness (P1)**  
    `coordinate` / `route` depend on the LLM calling `delegate_to_*`. Sometimes zero
    tools. Prefer `hard=True` + `broadcast`/`sequential` for SEV war rooms; keep soft
