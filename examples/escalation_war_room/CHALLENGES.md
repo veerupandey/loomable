@@ -48,6 +48,12 @@ Goal: enterprise spine that stays one-line-easy on the happy path.
    **Fix:** `Step(..., confirm=True)` / `.step("scribe", agent, confirm=True)` +
    `wf.approve("scribe")` then `arun(resume=True)`.
 
+3b. **JsonFileCheckpointer dropped approve() (P0 — fixed)**  
+   `approve()` mutated an older checkpoint and re-`put` it with the same timestamp;
+   `get()` (latest-by-filename) often returned the pre-approve pending file → resume
+   re-paused.  
+   **Fix:** `JsonFileCheckpointer.put` always refreshes `timestamp` so approvals win.
+
 4. **Empty finals after tools (already fixed)**  
    `require_final_text` + schema re-prompt still essential on Gemini.
 
