@@ -1,5 +1,6 @@
 workspace/
 workspace_workflow/
 output/
+.checkpoints*/
 __pycache__/
 *.pyc
