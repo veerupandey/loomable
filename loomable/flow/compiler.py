@@ -49,6 +49,8 @@ class WorkflowCompiler:
         memory: "MemoryStore | None" = None,
         session_id: str | None = None,
         reducers: dict[str, Reducer] | None = None,
+        checkpointer: Any = None,
+        events: Any = None,
     ) -> Flow:
         """Walk the steps list and build a Flow graph.
 
@@ -258,6 +260,8 @@ class WorkflowCompiler:
             session_id=session_id,
             deps=deps,
             reducers=reducers,
+            checkpointer=checkpointer,
+            events=events,
         )
 
 

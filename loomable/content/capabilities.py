@@ -38,12 +38,92 @@ class ModelCapabilities:
     """The modalities a configured model supports for input and output.
 
     Input defaults to text + image + video. Output defaults to text-only.
-    Pass an explicit ``ModelCapabilities`` to lock an agent to text-only.
+    Prefer high-level helpers (:func:`capabilities_for`, ``modalities=`` on
+    :class:`~loomable.agent.Agent`) over constructing this with frozensets.
     Audio remains opt-in.
     """
 
     input: frozenset[Modality] = field(default_factory=_default_input_modalities)
     output: frozenset[Modality] = field(default_factory=lambda: frozenset({Modality.TEXT}))
+
+
+_MODALITY_ALIASES: dict[str, Modality] = {
+    "text": Modality.TEXT,
+    "txt": Modality.TEXT,
+    "image": Modality.IMAGE,
+    "images": Modality.IMAGE,
+    "img": Modality.IMAGE,
+    "video": Modality.VIDEO,
+    "videos": Modality.VIDEO,
+    "audio": Modality.AUDIO,
+    "sound": Modality.AUDIO,
+}
+
+
+def _parse_modality_token(token: str) -> Modality:
+    key = token.strip().lower()
+    if key not in _MODALITY_ALIASES:
+        raise ValueError(
+            f"Unknown modality {token!r}. "
+            "Use: text, image, video, audio (or combinations like 'text+image')."
+        )
+    return _MODALITY_ALIASES[key]
+
+
+def _parse_modality_set(spec: str | list[str] | set[str] | frozenset[str] | frozenset[Modality] | set[Modality]) -> frozenset[Modality]:
+    """Parse a user-friendly modality spec into a frozenset of Modality."""
+    if isinstance(spec, (set, frozenset)):
+        items = list(spec)
+        if items and all(isinstance(i, Modality) for i in items):
+            return frozenset(items)  # type: ignore[arg-type]
+        return frozenset(_parse_modality_token(str(i)) for i in items)
+    if isinstance(spec, list):
+        return frozenset(_parse_modality_token(str(i)) for i in spec)
+    if isinstance(spec, str):
+        raw = spec.strip().lower()
+        if raw in {"text", "text-only", "text_only"}:
+            return frozenset({Modality.TEXT})
+        if raw in {"default", "multimodal", "media", "all"}:
+            return _default_input_modalities()
+        if raw in {"full", "any"}:
+            return frozenset({Modality.TEXT, Modality.IMAGE, Modality.VIDEO, Modality.AUDIO})
+        parts = [p for p in raw.replace(",", "+").replace("|", "+").split("+") if p.strip()]
+        if not parts:
+            raise ValueError(f"Empty modalities spec: {spec!r}")
+        return frozenset(_parse_modality_token(p) for p in parts)
+    raise TypeError(f"Unsupported modalities spec type: {type(spec).__name__}")
+
+
+def capabilities_for(
+    modalities: str | list[str] | set[str] | ModelCapabilities | None = None,
+    *,
+    input: str | list[str] | set[str] | None = None,  # noqa: A002
+    output: str | list[str] | set[str] | None = None,
+) -> ModelCapabilities:
+    """Build :class:`ModelCapabilities` from plain strings — no frozensets required.
+
+    Examples::
+
+        capabilities_for("text")                  # text in/out
+        capabilities_for("text+image+video")      # default-like input, text out
+        capabilities_for(input="text+audio", output="text")
+        capabilities_for(["text", "image"])
+    """
+    if isinstance(modalities, ModelCapabilities):
+        return modalities
+    if modalities is not None and (input is not None or output is not None):
+        raise ValueError("Pass either modalities= or input=/output=, not both")
+
+    if input is not None or output is not None:
+        in_set = _parse_modality_set(input) if input is not None else _default_input_modalities()
+        out_set = _parse_modality_set(output) if output is not None else frozenset({Modality.TEXT})
+        return ModelCapabilities(input=in_set, output=out_set)
+
+    if modalities is None:
+        return ModelCapabilities()
+
+    in_set = _parse_modality_set(modalities)
+    return ModelCapabilities(input=in_set, output=frozenset({Modality.TEXT}))
 
 
 # ---------------------------------------------------------------------------

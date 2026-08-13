@@ -151,8 +151,13 @@ class ParallelEngine:
             output=last_result.output,
             session_id=last_result.session_id,
             usage=last_result.usage,
+            tool_activity=list(getattr(last_result, "tool_activity", None) or []),
+            structured=getattr(last_result, "structured", None),
             sub_results=sub_results,
-            metadata=last_result.metadata,
+            metadata=dict(getattr(last_result, "metadata", None) or {}),
+            thoughts=list(getattr(last_result, "thoughts", None) or []),
+            plan=getattr(last_result, "plan", None),
+            reasoning=list(getattr(last_result, "reasoning", None) or []),
         )
         return final
 

@@ -11,6 +11,7 @@ STEPS = [
     "01_tools_and_io.py",
     "02_documents.py",
     "03_multimodal.py",
+    "04_workflow.py",
 ]
 
 

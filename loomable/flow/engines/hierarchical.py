@@ -123,8 +123,13 @@ class HierarchicalEngine:
             output=manager_result.output,
             session_id=manager_result.session_id,
             usage=manager_result.usage,
+            tool_activity=list(getattr(manager_result, "tool_activity", None) or []),
+            structured=getattr(manager_result, "structured", None),
             sub_results=sub_results,
-            metadata=manager_result.metadata,
+            metadata=dict(getattr(manager_result, "metadata", None) or {}),
+            thoughts=list(getattr(manager_result, "thoughts", None) or []),
+            plan=getattr(manager_result, "plan", None),
+            reasoning=list(getattr(manager_result, "reasoning", None) or []),
         )
         return final
 
