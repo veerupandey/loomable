@@ -94,3 +94,64 @@ async def test_require_tools_empty_skips_nudge() -> None:
     assert result.metadata.get("require_tools_nudged") is not True
     assert not (result.tool_activity or [])
     assert provider.call_count == 1
+
+
+class _WriteJsonEmptyFinalProvider:
+    """Call write_json then finish with empty text (schema recovered from tool)."""
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        self.call_count += 1
+        if self.call_count == 1:
+            return ModelResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="j1",
+                        tool_name="write_json",
+                        args={
+                            "path": "out.json",
+                            "content": '{"incident_id":"INC-1","severity":"SEV-1"}',
+                        },
+                    )
+                ],
+                usage={"input_tokens": 5, "output_tokens": 2},
+            )
+        # Final (and empty-text nudge): stay empty so recovery uses write_json.
+        return ModelResponse(
+            content="",
+            usage={"input_tokens": 3, "output_tokens": 0},
+        )
+
+
+@tool
+def write_json(path: str, content: str) -> str:
+    """Write JSON artifact."""
+    return f"Successfully wrote validated JSON to {path}"
+
+
+@pytest.mark.asyncio
+async def test_structured_recovers_from_write_json_when_final_empty() -> None:
+    from pydantic import BaseModel
+
+    class Packet(BaseModel):
+        incident_id: str
+        severity: str
+
+    provider = _WriteJsonEmptyFinalProvider()
+    agent = Agent(
+        model=ModelSpec(provider="scripted", provider_impl=provider),
+        tools=[write_json],
+        response_model=Packet,
+        require_final_text=True,
+        max_tool_iterations=6,
+    )
+
+    result = await agent.arun("write the packet")
+
+    assert result.metadata.get("structured_from_write_json") is True
+    assert result.structured is not None
+    assert result.structured.incident_id == "INC-1"
+    assert result.structured.severity == "SEV-1"
