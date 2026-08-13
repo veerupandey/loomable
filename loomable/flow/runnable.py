@@ -74,6 +74,28 @@ class FunctionRunnable:
         if isinstance(raw, RunResult):
             return raw
 
+        # Dict returns are treated as SharedState updates (plan_steps, etc.)
+        # so plan→map→synthesize can pass lists without stringifying.
+        if isinstance(raw, dict):
+            import json
+
+            text = json.dumps(raw, ensure_ascii=False, default=str)
+            output = AgentOutput(
+                parts=[
+                    MediaPart(
+                        modality=Modality.TEXT,
+                        media_type="text/plain",
+                        data=text.encode("utf-8"),
+                    )
+                ]
+            )
+            return RunResult(
+                output=output,
+                session_id="",
+                structured=raw,
+                metadata={"state_updates": raw},
+            )
+
         # Wrap a plain return value into a RunResult with a text AgentOutput.
         text = str(raw) if raw is not None else ""
         output = AgentOutput(

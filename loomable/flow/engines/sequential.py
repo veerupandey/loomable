@@ -164,6 +164,16 @@ class SequentialEngine:
             # Write output to state[node_id] (Req 7.1)
             state.write(node_id, result.output)
 
+            # Merge planner / callable state updates (e.g. plan_steps) so
+            # MapNode and synthesizers can read them from SharedState.
+            updates = (result.metadata or {}).get("state_updates")
+            if isinstance(updates, dict):
+                for key, value in updates.items():
+                    state.write(key, value)
+            elif isinstance(getattr(result, "structured", None), dict):
+                for key, value in result.structured.items():
+                    state.write(key, value)
+
             # Store in sub_results
             sub_results[node_id] = result
             last_result = result

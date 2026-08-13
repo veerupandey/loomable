@@ -76,7 +76,7 @@ Goal: enterprise spine that stays one-line-easy on the happy path.
 ## Easy API contract (lock this)
 
 ```python
-from loomable import Agent, Team, Workflow, spawn_specialist, tool
+from loomable import Agent, Team, Workflow, ToughTask, spawn_specialist, tool
 
 agent = Agent(model=..., tools=[...], response_model=Packet, require_tools=["write_json"])
 team = Team(members=[...], mode="broadcast", hard=True)
@@ -87,6 +87,22 @@ wf = (
 )
 # crash-safe: await wf.arun(..., resume=True)
 # HITL: except FlowPaused → await wf.approve("scribe") → resume
+
+# Tough problems (plan → fan-out → verify):
+task = ToughTask(model=..., fan_out="spawn", verify=my_check, max_iterations=3)
+result = await task.arun("Handle INC-88421 end-to-end")
+# or: Agent(model=..., mode="tough", fan_out="map", verifier=my_check)
 ```
 
 No frozensets, modality enums, or engine types on the happy path.
+
+## Tough-task mode (added)
+
+| API | Role |
+|-----|------|
+| `ToughTask` | One object: plan → map/spawn → synthesize → verify loop |
+| `plan_act_verify(...)` | Same pipeline as a `Workflow` (nestable / HITL / checkpoints) |
+| `Agent(mode="tough")` | Atomic Agent entry that runs the tough pipeline |
+| `map_specialists(steps, model=...)` | Parallel ephemeral spawn over plan steps |
+
+SharedState glue fixed so `plan_and_execute` / `Workflow.map` actually receive `plan_steps`.

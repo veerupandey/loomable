@@ -2,10 +2,11 @@
 
 High-level imports (preferred)::
 
-    from loomable import Agent, Team, Workflow, Step, Loop, tool
+    from loomable import Agent, Team, Workflow, ToughTask, Step, Loop, tool
 
 Progressive disclosure:
   Agent → Team → Workflow (+ Step / Loop / branch / parallel)
+  ToughTask / plan_act_verify for plan → fan-out → verify
   Flow / engines / edges remain available for advanced graph control.
 """
 
@@ -29,6 +30,8 @@ from loomable.flow import (
     Loop,
     Parallel_Group,
     Step,
+    VerdictResult,
+    Verifier,
     Workflow,
     coordinate,
     parallel,
@@ -41,6 +44,7 @@ from loomable.persist import (
     JsonFileCheckpointer,
     SQLiteCheckpointer,
 )
+from loomable.tough import ToughTask, map_specialists, plan_act_verify
 
 __all__ = [
     "__version__",
@@ -58,6 +62,12 @@ __all__ = [
     "ContextPolicy",
     "spawn_specialist",
     "FlowPaused",
+    # Tough tasks (plan → fan-out → verify)
+    "ToughTask",
+    "plan_act_verify",
+    "map_specialists",
+    "Verifier",
+    "VerdictResult",
     # Helpers (aliases that return Flow)
     "sequential",
     "parallel",
