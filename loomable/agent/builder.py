@@ -73,7 +73,7 @@ from .errors import (
 )
 from .context import RunContext, StopReason, _signature as _ctx_signature
 from .events import AgentEvents, Event, NoOpEvents
-from .run import RunChunk, RunResult
+from .run import RunChunk, RunResult, extract_plan_steps, extract_thoughts
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import AsyncIterator
@@ -347,6 +347,27 @@ def _validate_structured(text: str, output_schema: type) -> object:
     return data
 
 
+def _finalize_run_result(
+    result: RunResult,
+    *,
+    provider_reasoning: list[str] | None = None,
+) -> RunResult:
+    """Attach thoughts / plan / reasoning derived from the run."""
+    thoughts = extract_thoughts(result.tool_activity)
+    plan = extract_plan_steps(result.tool_activity)
+    reasoning = list(provider_reasoning or [])
+    # Fall back to think-tool contents only when no native reasoning was exposed.
+    if not reasoning and thoughts:
+        reasoning = list(thoughts)
+        result.metadata.setdefault("reasoning_source", "think_tool")
+    elif reasoning:
+        result.metadata.setdefault("reasoning_source", "provider")
+    result.thoughts = thoughts
+    result.plan = plan
+    result.reasoning = reasoning
+    return result
+
+
 
 
 
@@ -362,7 +383,8 @@ class ModelSpec:
         The concrete :class:`ModelProvider` implementation. May be ``None`` when a
         provider is registered elsewhere; a runnable agent requires an impl.
     capabilities:
-        The declared input/output modalities. Defaults to text-only (Req 6.2).
+        The declared input/output modalities. Defaults to text+image+video input,
+        text output (multimodal-by-default).
     """
 
     provider: str
@@ -422,7 +444,10 @@ class BuiltAgent:
     approver: Approver = _deny_all_approver
 
     # Maximum iterations for the tool-use loop (Req 3.2).
-    max_tool_iterations: int = 6
+    max_tool_iterations: int = 12
+
+    # When True, re-prompt once if the final model text is empty after tools.
+    require_final_text: bool = True
 
     # Per-tool timeout and concurrency cap for gated dispatch (Req 2.1–2.4).
     # When set, each tool call in a batch is bounded by asyncio.wait_for and
@@ -1079,12 +1104,14 @@ class BuiltAgent:
         if output_schema is not None:
             structured = _validate_structured(output_text, output_schema)
 
-        return RunResult(
-            output=output,
-            session_id=self.session.session_id,
-            usage=flow_result.usage,
-            tool_activity=[],
-            structured=structured,
+        return _finalize_run_result(
+            RunResult(
+                output=output,
+                session_id=self.session.session_id,
+                usage=flow_result.usage,
+                tool_activity=[],
+                structured=structured,
+            )
         )
 
     async def _run_single(
@@ -1205,13 +1232,16 @@ class BuiltAgent:
         if tier_substitution is not None:
             metadata["tier_substitution"] = tier_substitution
 
-        return RunResult(
-            output=output,
-            session_id=self.session.session_id,
-            usage=response.usage,
-            tool_activity=[],
-            structured=structured,
-            metadata=metadata,
+        return _finalize_run_result(
+            RunResult(
+                output=output,
+                session_id=self.session.session_id,
+                usage=response.usage,
+                tool_activity=[],
+                structured=structured,
+                metadata=metadata,
+            ),
+            provider_reasoning=list(getattr(response, "reasoning", None) or []),
         )
 
     async def _run_tool_loop(
@@ -1598,27 +1628,37 @@ class BuiltAgent:
                 parts=[MediaPart(modality=Modality.TEXT, media_type="text/plain", data=b"")]
             )
 
-        # (5b) Structured-output recovery: some providers (notably Gemini after a
-        # tool-only turn) return empty final content even when tools succeeded.
-        # When an output schema is required, re-prompt once without tools.
-        if (
-            output_schema is not None
+        # (5b) Empty-final recovery: some providers return empty content after a
+        # tool-only turn. When require_final_text or an output schema is set,
+        # re-prompt once without tools — but only on a normal/max-iter finish,
+        # not after loop/budget/cancel stops.
+        final_text_reprompted = False
+        stop_kind = stop_reason.kind if stop_reason is not None else StopReason.FINAL
+        allow_empty_reprompt = stop_kind in (StopReason.FINAL, StopReason.MAX_ITERATIONS)
+        needs_text = (
+            allow_empty_reprompt
+            and (self.require_final_text or output_schema is not None)
             and response is not None
             and not (output.text() or "").strip()
             and not ctx.cancelled
-        ):
-            request.messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "Your previous reply had no text. "
-                        + _schema_instruction(output_schema)
-                    ),
-                }
-            )
+        )
+        if needs_text:
+            if output_schema is not None:
+                nudge = (
+                    "Your previous reply had no text. "
+                    + _schema_instruction(output_schema)
+                )
+            else:
+                nudge = (
+                    "Your previous reply had no text. "
+                    "Provide a brief final answer confirming what you did "
+                    "(or the answer to the user). Do not call tools."
+                )
+            request.messages.append({"role": "user", "content": nudge})
             request.tools = []
             response = await self.model_interface.invoke(request)
             output = from_model_response(response)
+            final_text_reprompted = True
 
         # (6) Output capability gating (Req 5.4).
         for modality in output.modalities():
@@ -1637,14 +1677,23 @@ class BuiltAgent:
             metadata["tier_substitution"] = tier_substitutions[-1]
             metadata["tier_substitutions"] = tier_substitutions
         metadata["stop_reason"] = stop_reason.kind
+        if final_text_reprompted:
+            metadata["final_text_reprompted"] = True
 
-        return RunResult(
-            output=output,
-            session_id=self.session.session_id,
-            usage=response.usage if response is not None else {},
-            tool_activity=tool_activity,
-            structured=structured,
-            metadata=metadata,
+        provider_reasoning: list[str] = []
+        if response is not None:
+            provider_reasoning = list(getattr(response, "reasoning", None) or [])
+
+        return _finalize_run_result(
+            RunResult(
+                output=output,
+                session_id=self.session.session_id,
+                usage=response.usage if response is not None else {},
+                tool_activity=tool_activity,
+                structured=structured,
+                metadata=metadata,
+            ),
+            provider_reasoning=provider_reasoning,
         )
 
     def _persist_session(self, input_text: str, output_text: str) -> None:
@@ -2069,6 +2118,7 @@ class Agent:
         tool_timeout: float | None = None,
         tool_concurrency: int | None = None,
         max_tool_iterations: int | None = None,
+        require_final_text: bool = True,
         # Tiered model routing:
         tiers: dict[str, Any] | None = None,
         tier_policy: dict[str, Any] | None = None,
@@ -2124,12 +2174,9 @@ class Agent:
         self._skills = skills
         self._mcp_servers = mcp_servers
         self._capabilities = capabilities
-        # multimodal=True is shorthand for image+text input capabilities
-        if multimodal and self._capabilities is None:
-            self._capabilities = ModelCapabilities(
-                input=frozenset({Modality.TEXT, Modality.IMAGE}),
-                output=frozenset({Modality.TEXT}),
-            )
+        # multimodal=True is a deprecated no-op alias: media is allowed by default.
+        # For text-only lock-down, pass capabilities=ModelCapabilities(input={TEXT}, ...).
+        _ = multimodal  # retained for back-compat; default capabilities already include media
         self._token_budget = token_budget
         self._checkpoint_interval = checkpoint_interval
         self._session_id = session_id
@@ -2150,6 +2197,7 @@ class Agent:
         self._tool_timeout = tool_timeout
         self._tool_concurrency = tool_concurrency
         self._max_tool_iterations = max_tool_iterations
+        self._require_final_text = require_final_text
 
         # Tiered model routing.
         self._tiers = tiers
@@ -2359,6 +2407,7 @@ class Agent:
             built.tool_concurrency = self._tool_concurrency
         if self._max_tool_iterations is not None:
             built.max_tool_iterations = self._max_tool_iterations
+        built.require_final_text = self._require_final_text
 
         # --- Wire debug mode: use a console-friendly tracer ---
         if self._debug and self._events is None:
@@ -2541,7 +2590,7 @@ class Agent:
     def _resolve_capabilities(
         self, spec_capabilities: ModelCapabilities | None
     ) -> ModelCapabilities:
-        """Resolve effective capabilities: explicit arg, else spec, else text-only."""
+        """Resolve effective capabilities: explicit arg, else spec, else multimodal default."""
         if self._capabilities is not None:
             return self._capabilities
         if spec_capabilities is not None:

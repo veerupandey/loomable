@@ -101,7 +101,6 @@ async def main() -> None:
             render_severity_badge,
             annotate_dashboard_finding,
         ],
-        multimodal=True,
         feedback_media=True,
         response_model=VisualTriage,
         max_tool_iterations=12,

@@ -723,11 +723,29 @@ except MediaResolveError as e:
 
 ### Enabling multimodal
 
+Agents accept image and video input by default. Pass media on `arun` — no flag needed:
+
 ```python
-agent = Agent(model="openai:gpt-4o-mini", multimodal=True)
+agent = Agent(model="openai:gpt-4o-mini")
+result = await agent.arun("Describe this chart", images=["./chart.png"])
 ```
 
-That's it. `multimodal=True` is shorthand for declaring image + text input capabilities.
+`multimodal=True` is a deprecated no-op kept for back-compat. To lock an agent to
+text-only, pass explicit capabilities:
+
+```python
+from loomable.content import ModelCapabilities, Modality
+
+agent = Agent(
+    model="openai:gpt-4o-mini",
+    capabilities=ModelCapabilities(
+        input=frozenset({Modality.TEXT}),
+        output=frozenset({Modality.TEXT}),
+    ),
+)
+```
+
+Audio remains opt-in via `capabilities=` (see Full capabilities below).
 
 ### Input: passing images
 
@@ -911,7 +929,8 @@ Feedback injection only occurs when the model's capabilities include the relevan
 
 ### Full capabilities (advanced)
 
-For edge cases (video input, audio input, image output), use the full `ModelCapabilities`:
+Defaults already include text + image + video input and text output. Use
+`ModelCapabilities` for audio input or image output, or to lock down modalities:
 
 ```python
 from loomable.content import ModelCapabilities, Modality

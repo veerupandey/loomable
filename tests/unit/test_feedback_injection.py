@@ -96,24 +96,34 @@ class TestFeedbackInjection:
         return built, provider
 
     def test_media_injected_when_capable_and_enabled(self):
-        """Media is injected into tool result message when modality is supported and feedback enabled."""
+        """Media is injected as a follow-up user message when modality is supported."""
         built, provider = self._build_agent(feedback_media=True, include_image_input=True)
         result = asyncio.run(built.arun("Generate an image"))
 
-        # Check the second request (after tool call) contains an image in the tool message
+        # Check the second request (after tool call) contains an image feedback msg
         assert len(provider._requests) == 2
         second_request = provider._requests[1]
 
-        # Find the tool result message
+        # Tool result stays text-only (Gemini-safe).
         tool_msgs = [m for m in second_request.messages if m.get("role") == "tool"]
         assert len(tool_msgs) == 1
+        assert tool_msgs[0]["tool_call_id"] == "call_1"
+        assert len(tool_msgs[0]["content"]) == 1
+        assert tool_msgs[0]["content"][0]["type"] == "text"
 
-        tool_msg = tool_msgs[0]
-        # Should have text content + injected image_url content
-        assert tool_msg["tool_call_id"] == "call_1"
-        assert len(tool_msg["content"]) == 2  # text + image
-        assert tool_msg["content"][0]["type"] == "text"
-        assert tool_msg["content"][1]["type"] == "image_url"
+        # Media is appended as a follow-up user message.
+        user_msgs = [m for m in second_request.messages if m.get("role") == "user"]
+        feedback = [
+            m for m in user_msgs
+            if any(
+                isinstance(p, dict) and p.get("type") == "image_url"
+                for p in (m.get("content") or [])
+            )
+        ]
+        assert len(feedback) == 1
+        types = [p["type"] for p in feedback[0]["content"]]
+        assert "text" in types
+        assert "image_url" in types
 
     def test_media_not_injected_when_feedback_disabled(self):
         """Media is NOT injected when feedback_media=False."""

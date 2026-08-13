@@ -27,23 +27,21 @@ Found while stressing a real AcmePay SEV-1 war-room agent on Gemini
 ### ISSUE-WR-007 — Gemini tool-loop thought signatures (P0, earlier)
 - Already fixed: preserve `extra_content` / `thought_signature` across turns.
 
-## Still open (to fix next)
-
 ### ISSUE-WR-001 — Empty final assistant text after tool writes (P1)
-- Even with recovery for structured mode, unstructured runs often end with
-  `""` after `write_file` / badge tools.
-- **Wanted:** Always request a short confirmation text when the last action
-  was a side-effecting tool (or expose `require_final_text=True`).
+- **Symptom:** Unstructured runs often ended with `""` after side-effect tools.
+- **Fix:** `require_final_text=True` (default) re-prompts once without tools
+  for a short confirmation; sets `metadata["final_text_reprompted"]=True`.
 
-### ISSUE-WR-002 — Default `max_tool_iterations=6` is too low for real jobs (P1)
-- Reading md+pdf+pptx + 2 lookups + 2 writes needs ~8–10 steps.
-- **Wanted:** Raise default (e.g. 12–16) or auto-bump when many tools/docs
-  are attached; document the knob prominently.
+### ISSUE-WR-002 — Default `max_tool_iterations=6` too low (P1)
+- **Fix:** Default raised to **12**. Override still via
+  `Agent(max_tool_iterations=...)`.
 
-### ISSUE-WR-003 — `write_file` JSON is not validated by `response_model` (P1)
-- Agent freely invents JSON shapes on disk (`P1` vs `SEV-1`, nested objects).
-- **Wanted:** Optional `typed_write` / schema-checked file tool, or a
-  post-write validator hook tied to `response_model`.
+### ISSUE-WR-003 — `write_file` JSON not schema-checked (P1)
+- **Fix:** `FileTools.write_json` with optional `json_schema=` (Pydantic).
+  Validation errors return as tool result strings (no crash). War-room scribe
+  uses `FileTools(..., json_schema=EscalationPacket)`.
+
+## Still open (to fix next)
 
 ### ISSUE-WR-008 — No first-class PPT/PDF **write** toolkit (P2)
 - Can read pptx/pdf; writing requires custom `@tool` + `python-pptx` / PDF
@@ -67,7 +65,7 @@ Found while stressing a real AcmePay SEV-1 war-room agent on Gemini
 | Step | Status | Notes |
 |------|--------|-------|
 | 1a tools + unstructured/structured I/O | PASS | 5 tools each; solid SEV packet |
-| 1b md/pdf/pptx in + md/json out | PASS | Needed `max_tool_iterations=20` + sandbox |
+| 1b md/pdf/pptx in + md/json out | PASS | Needed `max_tool_iterations` bump + sandbox |
 | 1c image in + tool image out + structured | PASS | After feedback-media + empty-text fixes |
 
 ## Next toughness increments

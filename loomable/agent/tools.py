@@ -170,6 +170,9 @@ class FunctionTool(Tool):
         except Exception as exc:  # noqa: BLE001 - isolate tool failures
             return ToolResult(error=f"Tool '{self.name}' failed: {exc}")
 
+        if isinstance(result, ToolResult):
+            return result
+
         # Media detection
         media_items = _extract_media(result)
         if media_items is not None:

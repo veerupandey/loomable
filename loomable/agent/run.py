@@ -14,6 +14,7 @@ Depends only on the standard library and ``loomable.content``.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -25,6 +26,56 @@ from loomable.media.types import _MediaBase
 
 if TYPE_CHECKING:
     from loomable.flow.loop import VerdictResult
+
+
+def _tool_name(outcome: Any) -> str:
+    if getattr(outcome, "result", None) is not None:
+        return str((outcome.result.metadata or {}).get("tool_name", ""))
+    if getattr(outcome, "error", None) is not None:
+        details = getattr(outcome.error, "details", None) or {}
+        return str(details.get("tool_name", ""))
+    return ""
+
+
+def _tool_content(outcome: Any) -> str:
+    if getattr(outcome, "result", None) is not None:
+        content = outcome.result.content
+        return "" if content is None else str(content)
+    return ""
+
+
+def extract_thoughts(tool_activity: list[Any] | None) -> list[str]:
+    """Return text contents from ``think`` tool calls."""
+    thoughts: list[str] = []
+    for outcome in tool_activity or []:
+        if _tool_name(outcome) == "think":
+            text = _tool_content(outcome).strip()
+            if text:
+                thoughts.append(text)
+    return thoughts
+
+
+def extract_plan_steps(tool_activity: list[Any] | None) -> list[str] | None:
+    """Best-effort plan steps from ``plan`` tool metadata or JSON content."""
+    for outcome in tool_activity or []:
+        if _tool_name(outcome) != "plan":
+            continue
+        if getattr(outcome, "result", None) is None:
+            continue
+        meta = outcome.result.metadata or {}
+        steps = meta.get("plan_steps")
+        if isinstance(steps, list) and steps:
+            return [str(s) for s in steps]
+        content = _tool_content(outcome).strip()
+        if content.startswith("{"):
+            try:
+                data = json.loads(content)
+                raw = data.get("plan_steps") or data.get("steps")
+                if isinstance(raw, list) and raw:
+                    return [str(s) for s in raw]
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return None
 
 
 @dataclass
@@ -50,6 +101,13 @@ class RunResult:
         Optional run metadata dict. When tiered routing is active and a fallback
         is used, contains a ``"tier_substitution"`` key with the
         :class:`~loomable.kernel.model_router.TierSubstitution` record (Req 7.1–7.3).
+    thoughts:
+        Contents of ``think`` tool calls made during the run.
+    plan:
+        Plan steps from a ``plan`` tool call when available.
+    reasoning:
+        Native provider reasoning segments when exposed; otherwise empty unless
+        populated from think-tool fallback by the run path.
     """
 
     output: AgentOutput
@@ -61,6 +119,9 @@ class RunResult:
     metadata: dict[str, Any] = field(default_factory=dict)
     trace: list[Event] = field(default_factory=list)
     verification: "VerdictResult | None" = None
+    thoughts: list[str] = field(default_factory=list)
+    plan: list[str] | None = None
+    reasoning: list[str] = field(default_factory=list)
 
     # --- Convenience properties for multimodal output access (Req 6) ---
 

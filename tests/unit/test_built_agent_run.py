@@ -141,8 +141,14 @@ async def test_instructions_prepended_as_system_message() -> None:
 async def test_input_modality_gating_raises_without_provider_call() -> None:
     """Unsupported input modality raises before the provider is invoked (Req 4.4/6.3)."""
     provider = EchoProvider()
-    # Default capabilities are text-only, so an image input is unsupported.
-    agent = Agent(model=ModelSpec(provider="echo", provider_impl=provider))
+    # Explicit text-only lock-down so an image input is unsupported.
+    agent = Agent(
+        model=ModelSpec(provider="echo", provider_impl=provider),
+        capabilities=ModelCapabilities(
+            input=frozenset({Modality.TEXT}),
+            output=frozenset({Modality.TEXT}),
+        ),
+    )
     image_input = AgentInput(
         messages=[Message(role="user", parts=[Image(data=b"\x89PNG")])]
     )
@@ -154,6 +160,20 @@ async def test_input_modality_gating_raises_without_provider_call() -> None:
     assert exc_info.value.model == "echo"
     # Critical: the provider must NOT have been called (fail fast, no side effects).
     assert provider.called is False
+
+
+async def test_default_agent_accepts_image_input_at_gate() -> None:
+    """Default capabilities include IMAGE; gating does not raise for images=."""
+    provider = EchoProvider()
+    agent = Agent(model=ModelSpec(provider="echo", provider_impl=provider))
+    image_input = AgentInput(
+        messages=[Message(role="user", parts=[Image(data=b"\x89PNG")])]
+    )
+
+    result = await agent.arun(image_input)
+
+    assert provider.called is True
+    assert isinstance(result, RunResult)
 
 
 async def test_output_modality_gating_raises() -> None:
@@ -230,7 +250,7 @@ def test_sync_run_wrapper() -> None:
 async def test_audio_input_gating_raises_without_provider_call() -> None:
     """Unsupported audio modality raises before the provider is invoked (Req 4.4)."""
     provider = EchoProvider()
-    # Default capabilities are text-only, so audio input is unsupported.
+    # Audio stays opt-in; default multimodal caps exclude AUDIO.
     agent = Agent(model=ModelSpec(provider="echo", provider_impl=provider))
 
     with pytest.raises(UnsupportedModalityError) as exc_info:

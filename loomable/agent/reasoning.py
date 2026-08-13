@@ -52,17 +52,19 @@ def make_plan_tool(agent: "BuiltAgent") -> FunctionTool:
     without requiring a separate graph engine.
     """
 
-    async def plan(task: str, max_steps: int = 5) -> str:
+    async def plan(task: str, max_steps: int = 5) -> Any:
         """Decompose a complex task into parallel steps, execute them, and synthesize the results."""
         import json as _json
 
         from loomable.content import AgentInput
         from loomable.flow.helpers import plan_and_execute
+        from loomable.kernel.models import ToolResult
 
-        from .builder import _input_text
+        plan_steps: list[str] = []
 
         async def _planner(input: Any, **kwargs: Any) -> dict:
             """Ask the model for a concise plan."""
+            nonlocal plan_steps
             plan_prompt = (
                 f"You are a planner. Break the user's task into at most {max_steps} "
                 "concrete, independent, actionable steps. Return ONLY a JSON array of "
@@ -92,7 +94,8 @@ def make_plan_tool(agent: "BuiltAgent") -> FunctionTool:
                     for line in text.splitlines()
                     if line.strip() and not line.strip().startswith("#")
                 ]
-            return {"plan_steps": steps[:max_steps]}
+            plan_steps = [str(s) for s in steps[:max_steps]]
+            return {"plan_steps": plan_steps}
 
         async def _worker(input: Any, **kwargs: Any) -> str:
             """Run a single plan step."""
@@ -128,6 +131,9 @@ def make_plan_tool(agent: "BuiltAgent") -> FunctionTool:
             session_id=agent.session.session_id,
         )
         flow_result = await flow.arun(AgentInput.from_text(task))
-        return flow_result.output.text()
+        return ToolResult(
+            content=flow_result.output.text(),
+            metadata={"plan_steps": plan_steps},
+        )
 
     return FunctionTool(plan, name="plan", description="Decompose a complex task into parallel steps, execute them, and synthesize the results.", idempotent=True)

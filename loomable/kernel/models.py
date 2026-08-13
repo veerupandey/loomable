@@ -281,6 +281,8 @@ class ModelResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
     usage: dict[str, int] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Best-effort native reasoning / thinking segments from the provider.
+    reasoning: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,8 @@
 This module holds:
 
 - ``ModelCapabilities``: the declared set of input/output :class:`Modality` values a
-  configured model supports. Both default to text-only (Req 6.1/6.2).
+  configured model supports. Input defaults to text+image+video; output defaults to
+  text (Req 6.1/6.2 updated for multimodal-by-default).
 - ``to_model_request``: map an :class:`AgentInput` of multimodal parts to the
   provider-agnostic ``ModelRequest`` whose ``messages`` carry an OpenAI-style,
   ordered content array (Req 4.3, 4.5).
@@ -28,15 +29,20 @@ from .message import AgentInput, AgentOutput
 from .parts import Image, MediaPart, Modality, Text, Video
 
 
+def _default_input_modalities() -> frozenset[Modality]:
+    return frozenset({Modality.TEXT, Modality.IMAGE, Modality.VIDEO})
+
+
 @dataclass(frozen=True)
 class ModelCapabilities:
     """The modalities a configured model supports for input and output.
 
-    Both ``input`` and ``output`` default to text-only, so a model configured
-    without explicit capabilities is treated as text-in / text-out (Req 6.1/6.2).
+    Input defaults to text + image + video. Output defaults to text-only.
+    Pass an explicit ``ModelCapabilities`` to lock an agent to text-only.
+    Audio remains opt-in.
     """
 
-    input: frozenset[Modality] = field(default_factory=lambda: frozenset({Modality.TEXT}))
+    input: frozenset[Modality] = field(default_factory=_default_input_modalities)
     output: frozenset[Modality] = field(default_factory=lambda: frozenset({Modality.TEXT}))
 
 

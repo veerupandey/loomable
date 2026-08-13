@@ -34,7 +34,6 @@ agent = Agent(
     role="Visual Analyst",
     goal="Analyze images and describe their contents",
     instructions="Describe what you see in detail. Be specific about visual elements.",
-    multimodal=True,  # enables image + text input
 )
 
 # --- Image from file path (simplest) ---
@@ -123,7 +122,6 @@ chart_agent = Agent(
     goal="Create charts and explain data patterns",
     instructions="When asked to visualize data, use the generate_chart tool.",
     tools=[generate_chart, fetch_diagram],
-    multimodal=True,
 )
 
 result = asyncio.run(chart_agent.arun("Create a bar chart showing Q1 sales"))
@@ -158,7 +156,6 @@ feedback_agent = Agent(
         "refinement, generate again with adjustments."
     ),
     tools=[generate_chart],
-    multimodal=True,
     feedback_media=True,  # model sees tool-generated images (default behavior)
 )
 
