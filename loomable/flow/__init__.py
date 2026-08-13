@@ -1,29 +1,24 @@
 """loomable.flow - Unified composition model for loomable.
 
-This package provides the three-tier execution model:
+Public high-level API (prefer these)::
 
-- **Tier 1 — Agent** (unchanged): the 3-line entry point.
-- **Tier 2 — Loop**: repeat a Runnable until a Verifier passes or a cap is hit.
-- **Tier 3 — Flow**: a directed graph of Runnables with shared state, pluggable
-  engines, optional optimization, memory, observability, and HITL.
+    from loomable import Agent, Team, Workflow, Step, Loop
 
-Everything executable satisfies the :class:`Runnable` protocol so agents,
-functions, loops, and flows compose interchangeably as graph nodes.
+    wf = (
+        Workflow("job", session_id="t1", checkpointer=cp)
+        .step("research", researcher)
+        .parallel(analyst=analyst, writer=writer)
+        .branch(when=needs_review, then=reviewer, else_=publisher)
+        .step("publish", publisher)
+    )
 
-Progressive-disclosure exports (from simplest to most advanced):
+Three primitives:
+  - **Agent** — one model + tools + session
+  - **Team** — multi-agent LLM-driven coordination
+  - **Workflow** — deterministic process (seq / parallel / branch / loop / map)
 
-- Core: ``Runnable``, ``FunctionRunnable``
-- Tier 2: ``Loop``, ``Verifier``, ``VerdictResult``, ``AlwaysOkVerifier``, ``CallableVerifier``
-- Tier 3: ``Flow``, ``FlowPlan``, ``Node``, ``Edge``, ``Map`` (MapNode), ``Router`` (RouterNode)
-- State: ``SharedState``, ``Reducer``, ``overwrite``, ``append``, ``merge``
-- Engines: ``SequentialEngine``, ``ParallelEngine``, ``HierarchicalEngine``, ``ExecutionEngine``
-- Optimizer: ``Optimizer``, ``OptimizationRule``
-- Memory: ``MemoryStore``, ``Tier``, ``TieredMemoryStore``
-- HITL: ``FlowPaused``
-- Observability: ``ContextSnapshotConfig``, ``MessageDisposition``, ``MessageSnapshot``
-- Helpers: ``sequential``, ``parallel``, ``route``, ``coordinate``, ``plan_and_execute``
-- Workflow Ergonomics: ``Step``, ``Workflow``, ``Condition``, ``ComposableElement``,
-  ``Parallel_Group``, ``FlowClass``, ``start``, ``listen``, ``router``
+``Flow``, engines, and ``Edge`` remain available as an advanced escape hatch.
+Helpers (``sequential``, ``parallel``, …) are thin aliases that return ``Flow``.
 """
 
 from .engines import (
@@ -62,7 +57,7 @@ Map = MapNode
 Router = RouterNode
 
 __all__ = [
-    # Core (Tier 1 primitives)
+    # Core
     "Runnable",
     "FunctionRunnable",
     # Tier 2: Loop + Verifier
@@ -71,7 +66,7 @@ __all__ = [
     "AlwaysOkVerifier",
     "CallableVerifier",
     "Loop",
-    # Tier 3: Flow graph
+    # Tier 3: Flow graph (advanced)
     "Flow",
     "FlowPlan",
     "FlowPaused",
@@ -107,13 +102,13 @@ __all__ = [
     "emit_context_snapshot",
     "emit_node_end",
     "emit_node_start",
-    # Helpers (convenience constructors)
+    # Helpers (→ Flow)
     "sequential",
     "parallel",
     "route",
     "coordinate",
     "plan_and_execute",
-    # Workflow ergonomics (high-level composable classes)
+    # High-level Workflow API (preferred)
     "Step",
     "Workflow",
     "Condition",

@@ -12,7 +12,12 @@ It depends only on the standard library and ``loomable.kernel`` models. It must
 not depend on ``loomable.agent`` or ``loomable.serve``.
 """
 
-from .capabilities import ModelCapabilities, from_model_response, to_model_request
+from .capabilities import (
+    ModelCapabilities,
+    capabilities_for,
+    from_model_response,
+    to_model_request,
+)
 from .errors import MediaPartError
 from .message import AgentInput, AgentOutput, Message, to_agent_input
 from .parts import Image, MediaPart, Modality, Text, Video
@@ -29,6 +34,7 @@ __all__ = [
     "AgentOutput",
     "to_agent_input",
     "ModelCapabilities",
+    "capabilities_for",
     "to_model_request",
     "from_model_response",
 ]

@@ -45,27 +45,17 @@ def sequential(
     session_id: str | None = None,
     deps: Any = None,
     memory: Any = None,
+    checkpointer: Any = None,
+    events: Any = None,
 ) -> Flow:
     """Create a Flow that runs steps sequentially (replaces Pipeline).
 
+    Prefer :class:`~loomable.flow.workflow.Workflow` for new code::
+
+        Workflow("pipe").step("a", a).step("b", b)
+
     Each step's output becomes the next step's input through SharedState.
     Nodes are auto-chained in order using the SequentialEngine.
-
-    Parameters
-    ----------
-    *steps:
-        Runnables (or plain callables) to execute in order.
-    session_id:
-        Optional session identifier for memory/checkpoint scoping.
-    deps:
-        Typed dependency injection object shared across all steps.
-    memory:
-        A shared MemoryStore instance available to all steps.
-
-    Returns
-    -------
-    Flow
-        A Flow configured with engine="sequential".
     """
     return Flow(
         list(steps),
@@ -73,6 +63,8 @@ def sequential(
         session_id=session_id,
         deps=deps,
         memory=memory,
+        checkpointer=checkpointer,
+        events=events,
     )
 
 
@@ -81,27 +73,12 @@ def parallel(
     session_id: str | None = None,
     deps: Any = None,
     memory: Any = None,
+    checkpointer: Any = None,
+    events: Any = None,
 ) -> Flow:
-    """Create a Flow that runs runnables concurrently (replaces Orchestrator PARALLEL).
+    """Create a Flow that runs runnables concurrently.
 
-    All runnables execute in the same superstep via the ParallelEngine.
-    Since they have no edges between them, they form independent branches.
-
-    Parameters
-    ----------
-    *runnables:
-        Runnables (or plain callables) to execute concurrently.
-    session_id:
-        Optional session identifier for memory/checkpoint scoping.
-    deps:
-        Typed dependency injection object shared across all runnables.
-    memory:
-        A shared MemoryStore instance available to all runnables.
-
-    Returns
-    -------
-    Flow
-        A Flow configured with engine="parallel" and no inter-node edges.
+    Prefer ``Workflow(...).parallel(...)`` for new code.
     """
     # Build a dict of node_id → runnable with no edges (fully independent)
     nodes: dict[str, Any] = {}
@@ -121,6 +98,8 @@ def parallel(
         session_id=session_id,
         deps=deps,
         memory=memory,
+        checkpointer=checkpointer,
+        events=events,
     )
 
 
@@ -132,33 +111,12 @@ def route(
     session_id: str | None = None,
     deps: Any = None,
     memory: Any = None,
+    checkpointer: Any = None,
+    events: Any = None,
 ) -> Flow:
-    """Create a Flow that routes to one branch (replaces Orchestrator ROUTE).
+    """Create a Flow that routes to one branch.
 
-    A RouterNode evaluates the chooser to select which downstream node to
-    run. Only the selected branch executes; others are skipped.
-
-    Parameters
-    ----------
-    chooser:
-        A Runnable or Callable that returns the selected node_id (a key
-        from the choices dict).
-    choices:
-        A dict mapping node_id → Runnable (or callable) for each possible
-        route target.
-    handoff:
-        When True, the selected node owns the final output.
-    session_id:
-        Optional session identifier for memory/checkpoint scoping.
-    deps:
-        Typed dependency injection object shared across all nodes.
-    memory:
-        A shared MemoryStore instance available to all nodes.
-
-    Returns
-    -------
-    Flow
-        A Flow with a RouterNode connected to the choice branches.
+    Prefer ``Workflow(...).branch(when=..., then=..., else_=...)`` for new code.
     """
     choice_ids = list(choices.keys())
 
@@ -188,6 +146,8 @@ def route(
         session_id=session_id,
         deps=deps,
         memory=memory,
+        checkpointer=checkpointer,
+        events=events,
     )
 
 
@@ -210,29 +170,13 @@ def coordinate(
     session_id: str | None = None,
     deps: Any = None,
     memory: Any = None,
+    checkpointer: Any = None,
+    events: Any = None,
 ) -> Flow:
-    """Create a Flow that delegates to workers then synthesizes (replaces Orchestrator COORDINATE).
+    """Create a Flow that delegates to workers then synthesizes.
 
-    Workers run concurrently, and the manager node synthesizes their results.
-    Uses the HierarchicalEngine with the manager flagged as ``manager=True``.
-
-    Parameters
-    ----------
-    workers:
-        List of Runnables (or callables) to run as workers.
-    manager:
-        The Runnable (or callable) that synthesizes worker results.
-    session_id:
-        Optional session identifier for memory/checkpoint scoping.
-    deps:
-        Typed dependency injection object shared across all nodes.
-    memory:
-        A shared MemoryStore instance available to all nodes.
-
-    Returns
-    -------
-    Flow
-        A Flow configured with engine="hierarchical" and a manager node.
+    Prefer :class:`~loomable.agent.team.Team` for LLM-driven coordination,
+    or ``Workflow(...).parallel(...).step("manager", manager)`` for fixed topology.
     """
     graph_nodes: dict[str, Any] = {}
 
@@ -257,6 +201,8 @@ def coordinate(
         session_id=session_id,
         deps=deps,
         memory=memory,
+        checkpointer=checkpointer,
+        events=events,
     )
 
 
@@ -269,38 +215,10 @@ def plan_and_execute(
     session_id: str | None = None,
     deps: Any = None,
     memory: Any = None,
+    checkpointer: Any = None,
+    events: Any = None,
 ) -> Flow:
-    """Create a plan→map→synthesize Flow (replaces AutoPlan).
-
-    The planner node produces a list of steps (written to SharedState under
-    the ``over`` key). The MapNode fans out the workers runnable over those
-    steps concurrently. The synthesizer node combines the map results into
-    a final answer.
-
-    Parameters
-    ----------
-    planner:
-        A Runnable (or callable) that produces a plan. Its output is expected
-        to be stored in SharedState under the ``over`` key as a list.
-    workers:
-        A Runnable (or callable) that processes each planned step.
-    synthesizer:
-        A Runnable (or callable) that combines the map results.
-    over:
-        The SharedState key where the planner writes the list of steps.
-        Defaults to "plan_steps".
-    session_id:
-        Optional session identifier for memory/checkpoint scoping.
-    deps:
-        Typed dependency injection object shared across all nodes.
-    memory:
-        A shared MemoryStore instance available to all nodes.
-
-    Returns
-    -------
-    Flow
-        A Flow that executes plan → map → synthesize.
-    """
+    """Create a plan→map→synthesize Flow. Prefer ``Workflow(...).map(worker)``."""
     workers_runnable = _ensure_runnable(workers)
     map_node = MapNode(body=workers_runnable, over=over)
 
@@ -322,4 +240,6 @@ def plan_and_execute(
         session_id=session_id,
         deps=deps,
         memory=memory,
+        checkpointer=checkpointer,
+        events=events,
     )

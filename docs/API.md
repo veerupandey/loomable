@@ -105,7 +105,45 @@ result = await loop.arun("Write an excellent summary of AI trends")
 
 The Loop is itself a Runnable — usable standalone or as a node in a Flow.
 
-### Level 4: Flow with sequential list shorthand
+### Level 4: Workflow (preferred high-level process API)
+
+Build multi-step processes without Edges, frozensets, or engine enums:
+
+```python
+from loomable import Agent, Workflow, Step, JsonFileCheckpointer
+
+researcher = Agent(model="openai:gpt-4o-mini", instructions="Research the topic.")
+writer = Agent(model="openai:gpt-4o-mini", instructions="Write a short brief.")
+editor = Agent(model="openai:gpt-4o-mini", instructions="Polish the brief.")
+
+wf = (
+    Workflow("article", session_id="job-1", checkpointer=JsonFileCheckpointer("./ckpts"))
+    .step("research", researcher)
+    .step("draft", writer)
+    .step("edit", editor)
+)
+result = await wf.arun("AI agents in 2025")
+print(wf.explain())  # inspect graph before/after run
+```
+
+Fluent builders for complex cases:
+
+```python
+wf = (
+    Workflow("sev1", session_id="inc-1", memory=True)
+    .step("gather", gatherer)
+    .parallel(analyst=analyst, visual=visual)          # concurrent
+    .branch(when=needs_human, then=approver, else_=auto)  # conditional
+    .loop(polisher, until=quality_ok, max_iterations=3)   # verify/retry
+    .step("publish", publisher)
+)
+```
+
+Declarative style still works: `Workflow("pipe", steps=[Step("a", a), Step("b", b)])`.
+
+Low-level `Flow` / `sequential()` / `Edge` remain available as an advanced escape hatch.
+
+### Level 4b: Flow list shorthand (advanced alias)
 
 Compose multiple agents/functions into a sequential workflow. The simplest Flow — just a list.
 
@@ -726,26 +764,24 @@ except MediaResolveError as e:
 Agents accept image and video input by default. Pass media on `arun` — no flag needed:
 
 ```python
+from loomable import Agent
+
 agent = Agent(model="openai:gpt-4o-mini")
 result = await agent.arun("Describe this chart", images=["./chart.png"])
 ```
 
-`multimodal=True` is a deprecated no-op kept for back-compat. To lock an agent to
-text-only, pass explicit capabilities:
+Lock to text-only (no frozensets required):
 
 ```python
-from loomable.content import ModelCapabilities, Modality
-
-agent = Agent(
-    model="openai:gpt-4o-mini",
-    capabilities=ModelCapabilities(
-        input=frozenset({Modality.TEXT}),
-        output=frozenset({Modality.TEXT}),
-    ),
-)
+agent = Agent(model="openai:gpt-4o-mini", modalities="text")
+# or
+agent = Agent(model="openai:gpt-4o-mini", text_only=True)
 ```
 
-Audio remains opt-in via `capabilities=` (see Full capabilities below).
+Other examples: `modalities="text+image"`, `modalities=["text", "audio"]`,
+`capabilities="text+audio"`. Audio remains opt-in.
+
+`multimodal=True` is a deprecated no-op kept for back-compat.
 
 ### Input: passing images
 

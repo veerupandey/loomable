@@ -139,6 +139,13 @@ class TestCapabilities:
         assert built_on.capabilities.input == built_off.capabilities.input
         assert Modality.IMAGE in built_off.capabilities.input
 
+    def test_text_only_and_modalities_strings(self):
+        text = Agent(model=_FakeProvider(), text_only=True).build()
+        assert text.capabilities.input == frozenset({Modality.TEXT})
+        mixed = Agent(model=_FakeProvider(), modalities="text+image").build()
+        assert Modality.IMAGE in mixed.capabilities.input
+        assert Modality.VIDEO not in mixed.capabilities.input
+
     def test_explicit_capabilities_arg_wins(self):
         caps = ModelCapabilities(
             input=frozenset({Modality.TEXT, Modality.IMAGE}),

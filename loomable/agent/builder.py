@@ -2094,7 +2094,9 @@ class Agent:
         subagents: "list[Agent] | None" = None,
         skills: list[Path] | None = None,
         mcp_servers: list[Any] | None = None,
-        capabilities: ModelCapabilities | None = None,
+        capabilities: ModelCapabilities | str | list[str] | None = None,
+        modalities: str | list[str] | None = None,
+        text_only: bool = False,
         multimodal: bool = False,
         token_budget: int = 8192,
         checkpoint_interval: int = 5,
@@ -2173,9 +2175,25 @@ class Agent:
         self._subagents = subagents
         self._skills = skills
         self._mcp_servers = mcp_servers
-        self._capabilities = capabilities
+        # High-level modality DX: modalities="text" / text_only=True preferred over
+        # constructing ModelCapabilities with frozensets.
+        from loomable.content.capabilities import capabilities_for
+
+        if text_only and (modalities is not None or capabilities is not None):
+            raise AgentConfigError("text_only")
+        if modalities is not None and capabilities is not None:
+            raise AgentConfigError("modalities")
+        if text_only:
+            self._capabilities = capabilities_for("text")
+        elif modalities is not None:
+            self._capabilities = capabilities_for(modalities)
+        elif isinstance(capabilities, ModelCapabilities):
+            self._capabilities = capabilities
+        elif capabilities is not None:
+            self._capabilities = capabilities_for(capabilities)
+        else:
+            self._capabilities = None
         # multimodal=True is a deprecated no-op alias: media is allowed by default.
-        # For text-only lock-down, pass capabilities=ModelCapabilities(input={TEXT}, ...).
         _ = multimodal  # retained for back-compat; default capabilities already include media
         self._token_budget = token_budget
         self._checkpoint_interval = checkpoint_interval
