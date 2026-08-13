@@ -158,3 +158,52 @@ async def test_workflow_wires_checkpointer() -> None:
     assert flow._session_id == "thread-1"
     result = await wf.arun("ok")
     assert result.output.text() == "ok"
+
+
+@pytest.mark.asyncio
+async def test_workflow_step_confirm_pauses_and_approves() -> None:
+    from loomable.flow.hitl import FlowPaused
+
+    cp = InMemoryCheckpointer()
+    calls = {"scribe": 0}
+
+    async def draft(inp, *, context=None):
+        from loomable.agent.run import RunResult
+
+        return RunResult(output=AgentOutput(parts=[Text("DRAFT")]), session_id="s")
+
+    async def scribe(inp, *, context=None):
+        from loomable.agent.run import RunResult
+
+        calls["scribe"] += 1
+        return RunResult(output=AgentOutput(parts=[Text("DONE")]), session_id="s")
+
+    wf = (
+        Workflow("hitl", session_id="t-hitl", checkpointer=cp)
+        .step("draft", draft)
+        .step("scribe", scribe, confirm=True)
+    )
+
+    with pytest.raises(FlowPaused) as exc:
+        await wf.arun("go")
+    assert exc.value.pending.tool_name == "scribe"
+    assert calls["scribe"] == 0
+
+    await wf.approve("scribe")
+    result = await wf.arun("go", resume=True)
+    assert calls["scribe"] == 1
+    assert result.output.text() == "DONE"
+    assert result.metadata.get("resumed") is True
+    assert "draft" in (result.metadata.get("skipped_nodes") or [])
+
+
+def test_step_confirm_alias() -> None:
+    async def noop(inp, *, context=None):
+        from loomable.agent.run import RunResult
+
+        return RunResult(output=AgentOutput(parts=[Text("x")]), session_id="s")
+
+    s = Step("gate", noop, confirm=True)
+    assert s.require_confirmation is True
+    node = Workflow("w").step("gate", noop, confirm=True).flow._nodes["gate"]
+    assert node.require_confirmation is True

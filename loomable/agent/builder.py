@@ -449,6 +449,10 @@ class BuiltAgent:
     # When True, re-prompt once if the final model text is empty after tools.
     require_final_text: bool = True
 
+    # Tool names that MUST be called at least once before the run finishes.
+    # Missing tools trigger one re-prompt with tools still enabled.
+    require_tools: list[str] = field(default_factory=list)
+
     # Per-tool timeout and concurrency cap for gated dispatch (Req 2.1–2.4).
     # When set, each tool call in a batch is bounded by asyncio.wait_for and
     # parallelism is limited by an asyncio.Semaphore.
@@ -1334,10 +1338,12 @@ class BuiltAgent:
 
         # (4) Tool-use loop: invoke, dispatch, feed back, repeat.
         tool_activity: list[ToolOutcome] = []
+        called_tool_names: set[str] = set()
         tier_substitutions: list[TierSubstitution] = []
         iterations = 0
         stop_reason: StopReason | None = None
         response = None  # May remain None if we break before the first model call.
+        require_tools_nudged = False
 
         while True:
             # --- Check cooperative cancellation at each loop boundary (Req 4.1) ---
@@ -1406,8 +1412,49 @@ class BuiltAgent:
 
             iterations += 1
 
-            # No tool calls: this is the final answer.
+            # No tool calls: candidate final answer — but required tools may still
+            # be missing (e.g. scribe returns JSON without write_file/write_json).
             if not response.tool_calls:
+                missing_required = [
+                    name for name in self.require_tools if name not in called_tool_names
+                ]
+                if (
+                    missing_required
+                    and not require_tools_nudged
+                    and not ctx.cancelled
+                    and iterations < self.max_tool_iterations
+                ):
+                    require_tools_nudged = True
+                    prior_text = ""
+                    if getattr(response, "content", None):
+                        prior_text = str(response.content)
+                    assistant_text = prior_text.strip() or "(attempted to finish)"
+                    request.messages.append(
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": assistant_text}],
+                        }
+                    )
+                    request.messages.append(
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": (
+                                        "You finished without calling required tools: "
+                                        + ", ".join(missing_required)
+                                        + ". Call each of those tools now "
+                                        "(with the correct arguments), then give "
+                                        "your final answer."
+                                    ),
+                                }
+                            ],
+                        }
+                    )
+                    # Keep tools enabled so the model can satisfy the contract.
+                    continue
+
                 stop_reason = StopReason(kind=StopReason.FINAL)
                 break
 
@@ -1498,6 +1545,8 @@ class BuiltAgent:
                     outcome.result.metadata["tool_name"] = call_name_map.get(outcome.call_id, "")
 
             tool_activity.extend(gated_result.outcomes)
+            for tc in calls_to_dispatch:
+                called_tool_names.add(tc.tool_name)
 
             # Emit tool_call event (Req 11.3).
             tool_names = [tc.tool_name for tc in calls_to_dispatch]
@@ -1692,6 +1741,13 @@ class BuiltAgent:
         metadata["stop_reason"] = stop_reason.kind
         if final_text_reprompted:
             metadata["final_text_reprompted"] = True
+        if require_tools_nudged:
+            metadata["require_tools_nudged"] = True
+        still_missing = [
+            name for name in self.require_tools if name not in called_tool_names
+        ]
+        if still_missing:
+            metadata["required_tools_missing"] = still_missing
 
         provider_reasoning: list[str] = []
         if response is not None:
@@ -2129,6 +2185,7 @@ class Agent:
         tool_concurrency: int | None = None,
         max_tool_iterations: int | None = None,
         require_final_text: bool = True,
+        require_tools: list[str] | None = None,
         # Tiered model routing:
         tiers: dict[str, Any] | None = None,
         tier_policy: dict[str, Any] | None = None,
@@ -2224,6 +2281,7 @@ class Agent:
         self._tool_concurrency = tool_concurrency
         self._max_tool_iterations = max_tool_iterations
         self._require_final_text = require_final_text
+        self._require_tools = list(require_tools) if require_tools else []
 
         # Tiered model routing.
         self._tiers = tiers
@@ -2443,6 +2501,7 @@ class Agent:
         if self._max_tool_iterations is not None:
             built.max_tool_iterations = self._max_tool_iterations
         built.require_final_text = self._require_final_text
+        built.require_tools = list(self._require_tools)
 
         # --- Wire debug mode: use a console-friendly tracer ---
         if self._debug and self._events is None:
