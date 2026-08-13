@@ -159,14 +159,21 @@ def to_openai_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     openai_calls.append(tc)
                 else:
                     # Internal format: {id, tool_name, args} -> OpenAI format.
-                    openai_calls.append({
+                    call: dict[str, Any] = {
                         "id": tc.get("id", ""),
                         "type": "function",
                         "function": {
                             "name": tc.get("tool_name", ""),
                             "arguments": json.dumps(tc.get("args", {})),
                         },
-                    })
+                    }
+                    # Preserve Gemini thought signatures / extra_content.
+                    extra = tc.get("extra_content")
+                    if extra is None:
+                        extra = (tc.get("metadata") or {}).get("extra_content")
+                    if extra is not None:
+                        call["extra_content"] = extra
+                    openai_calls.append(call)
             translated["tool_calls"] = openai_calls
 
         # Preserve tool_call_id on tool-role messages (required for the tool-use loop).
@@ -190,8 +197,18 @@ def parse_openai_response(data: dict[str, Any]) -> ModelResponse:
             args = json.loads(args_raw) if isinstance(args_raw, str) else dict(args_raw)
         except (json.JSONDecodeError, TypeError):
             args = {"_raw": args_raw}
+        meta: dict[str, Any] = {}
+        if "extra_content" in raw:
+            # Gemini OpenAI-compatible API requires thought signatures on
+            # subsequent turns when tools are used.
+            meta["extra_content"] = raw["extra_content"]
         tool_calls.append(
-            ToolCall(id=raw.get("id", ""), tool_name=fn.get("name", ""), args=args)
+            ToolCall(
+                id=raw.get("id", ""),
+                tool_name=fn.get("name", ""),
+                args=args,
+                metadata=meta,
+            )
         )
 
     usage = data.get("usage", {}) or {}

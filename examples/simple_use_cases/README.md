@@ -14,7 +14,11 @@ Minimal Loomable agents for everyday questions.
 ## Setup
 
 ```bash
-# Provider (Z.AI example)
+# Gemini (recommended for these demos)
+export GEMINI_API_KEY="..."
+export GEMINI_MODEL="gemini-flash-latest"   # optional
+
+# Or Z.AI / OpenAI-compatible
 export ZAI_API_KEY="..."
 export ZAI_BASE_URL="https://api.z.ai/api/coding/paas/v4"
 export ZAI_MODEL="glm-5.2"
