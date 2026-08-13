@@ -18,6 +18,7 @@
 | Goal + WorkItems board | `Case` | `escalation_war_room/10_case.py` |
 | AG-UI SSE (Agent) | `mount_agent` / `astream_events` | `escalation_war_room/12_agent_agui_sse.py` |
 | AG-UI SSE (Case) | `mount_case` | `escalation_war_room/11_case_sse.py` |
+| Postgres memory / checkpoints | `PostgresCheckpointer` + backends | `memory/02_user_memory.py` |
 | Full SEV war room | tools → workflow → Case → SSE | `escalation_war_room/` |
 | Simple real-world Q&A | toolkits | `simple_use_cases/` |
 
