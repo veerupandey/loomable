@@ -1,19 +1,17 @@
-"""loomable.serve - Edge transport adapters for a built agent.
+"""loomable.serve - Edge transport adapters for agents and cases.
 
-This package holds thin request/response translators that expose a
-``BuiltAgent`` over a transport without embedding agent logic:
+Thin request/response translators:
 
-- ``FastAPIAdapter`` (HTTP / REST)
+- ``FastAPIAdapter`` / ``mount_agent`` / ``mount_case`` (HTTP + AG-UI SSE)
 - ``MCPServerAdapter`` (Model Context Protocol / agent-as-tool)
-
-It depends on ``loomable.agent`` and ``loomable.content``, plus the FastAPI and
-MCP libraries.
 """
 
-from .fastapi_adapter import FastAPIAdapter
+from .fastapi_adapter import FastAPIAdapter, mount_agent, mount_case
 from .mcp_adapter import MCPServerAdapter
 
 __all__ = [
     "FastAPIAdapter",
     "MCPServerAdapter",
+    "mount_agent",
+    "mount_case",
 ]

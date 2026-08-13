@@ -8,8 +8,10 @@ from __future__ import annotations
 
 __all__ = ["Flow", "FlowPlan"]
 
+import asyncio
+import uuid
 from dataclasses import dataclass, field
-from typing import Any, TYPE_CHECKING
+from typing import Any, AsyncIterator, TYPE_CHECKING
 
 from loomable.flow.nodes import Edge, FlowConfigError, Node
 from loomable.flow.runnable import FunctionRunnable, Runnable
@@ -334,6 +336,12 @@ class Flow:
         # Attach memory store if configured (Req 12.2)
         if self._memory is not None and ctx.memory is None:
             ctx.memory = self._memory
+        # Attach flow-level events when context still has the default NoOp emitter
+        if self._events is not None:
+            from loomable.agent.events import NoOpEvents
+
+            if context is None or isinstance(ctx.events, NoOpEvents):
+                ctx.events = self._events
 
         # 3. Checkpoint restore: if checkpointer configured and a checkpoint
         #    exists for this session, restore SharedState and completed_node_ids (Req 13.2)
@@ -434,6 +442,58 @@ class Flow:
             result.metadata["skipped_nodes"] = sorted(completed_node_ids)
 
         return result
+
+    async def astream_events(
+        self,
+        input: Any = None,  # noqa: A002
+        *,
+        session_id: str | None = None,
+        run_id: str | None = None,
+        context: "RunContext | None" = None,
+        resume: bool | None = None,
+    ) -> AsyncIterator[Any]:
+        """Yield AG-UI events for this flow (NODE_* + RUN_* lifecycle)."""
+        from loomable.agent.context import RunContext
+        from loomable.stream import (
+            RUN_ERROR,
+            RUN_FINISHED,
+            RUN_STARTED,
+            AsyncStreamBus,
+            StreamBridge,
+            StreamEvent,
+        )
+
+        rid = run_id or uuid.uuid4().hex
+        sid = session_id or self._session_id or ""
+        bus = AsyncStreamBus(run_id=rid, session_id=sid)
+        bridge = StreamBridge(bus, run_id=rid, session_id=sid, inner=self._events)
+        ctx = context or RunContext()
+        ctx.events = bridge
+
+        async def _runner() -> None:
+            try:
+                bridge.publish(RUN_STARTED, {"input": str(input)[:500] if input is not None else ""})
+                result = await self.arun(input, context=ctx, resume=resume)
+                text = ""
+                if result.output is not None and hasattr(result.output, "text"):
+                    text = result.output.text() or ""
+                bridge.publish(RUN_FINISHED, {"text": text[:2000]})
+            except Exception as exc:  # noqa: BLE001
+                bridge.publish(RUN_ERROR, {"message": str(exc), "error_type": type(exc).__name__})
+            finally:
+                await bus.close()
+
+        task = asyncio.create_task(_runner())
+        try:
+            async for event in bus:
+                yield event
+        finally:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
     def _resolve_engine(self) -> Any:
         """Resolve which engine to use for this flow run.

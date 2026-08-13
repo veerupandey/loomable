@@ -2019,6 +2019,128 @@ class BuiltAgent:
             for index, part in enumerate(parts):
                 yield RunChunk(delta=part, done=index == last_index)
 
+    async def astream_events(
+        self,
+        input: AgentInput | str,  # noqa: A002
+        *,
+        images: "list[str | Path | MediaPart] | None" = None,
+        videos: "list[str | Path | MediaPart] | None" = None,
+        audio: "list[str | Path | MediaPart] | None" = None,
+        output_schema: type | None = None,
+        context: "RunContext | None" = None,
+    ) -> "AsyncIterator[Any]":
+        """Yield AG-UI-compatible :class:`~loomable.stream.StreamEvent` frames.
+
+        Covers the full tool-loop ``arun`` path (lifecycle + tools + final text).
+        When the provider supports token streaming and the run is single-shot
+        (no tools), text deltas are streamed as ``TEXT_MESSAGE_CONTENT``.
+        """
+        import uuid
+        from loomable.stream import (
+            RUN_ERROR,
+            RUN_FINISHED,
+            TEXT_MESSAGE_CONTENT,
+            TEXT_MESSAGE_END,
+            TEXT_MESSAGE_START,
+            AsyncStreamBus,
+            StreamBridge,
+            StreamEvent,
+        )
+
+        run_id = uuid.uuid4().hex
+        session_id = getattr(self.session, "session_id", "") or ""
+        bus = AsyncStreamBus()
+        bridge = StreamBridge(
+            bus,
+            run_id=run_id,
+            session_id=session_id,
+            inner=self.events,
+        )
+        original_events = self.events
+        self.events = bridge  # type: ignore[assignment]
+
+        async def _runner() -> None:
+            try:
+                # Prefer token streaming for tool-less single-shot when possible.
+                has_tools = bool(getattr(self.tool_runtime, "_tools", None))
+                provider = self.model_interface._providers.get(
+                    self.model_interface.default_provider
+                )
+                if (
+                    not has_tools
+                    and provider is not None
+                    and hasattr(provider, "stream")
+                    and images is None
+                    and videos is None
+                    and audio is None
+                ):
+                    from loomable.agent.events import Event
+                    import time as _time
+
+                    bridge.emit(
+                        Event(
+                            kind="run_start",
+                            t=_time.monotonic(),
+                            attributes={"gen_ai.operation.name": "chat"},
+                        )
+                    )
+                    accumulated = ""
+                    bridge.publish(TEXT_MESSAGE_START, {"role": "assistant"})
+                    async for chunk in self.astream(input, output_schema=output_schema):
+                        if chunk.delta is not None:
+                            try:
+                                delta_text = (
+                                    chunk.delta.data.decode("utf-8")
+                                    if chunk.delta.data
+                                    else ""
+                                )
+                            except Exception:  # noqa: BLE001
+                                delta_text = ""
+                            if delta_text:
+                                accumulated += delta_text
+                                bridge.publish(
+                                    TEXT_MESSAGE_CONTENT, {"delta": delta_text}
+                                )
+                        if chunk.done:
+                            break
+                    bridge.publish(TEXT_MESSAGE_END, {"text": accumulated})
+                    bridge.publish(RUN_FINISHED, {"text": accumulated})
+                else:
+                    result = await self.arun(
+                        input,
+                        images=images,
+                        videos=videos,
+                        audio=audio,
+                        output_schema=output_schema,
+                        context=context,
+                    )
+                    text = (result.output.text() or "") if result.output else ""
+                    if text:
+                        bridge.publish(TEXT_MESSAGE_START, {"role": "assistant"})
+                        bridge.publish(TEXT_MESSAGE_CONTENT, {"delta": text})
+                        bridge.publish(TEXT_MESSAGE_END, {"text": text})
+                    bridge.publish(RUN_FINISHED, {"text": text})
+            except Exception as exc:  # noqa: BLE001
+                bridge.publish(
+                    RUN_ERROR,
+                    {"message": str(exc), "error_type": type(exc).__name__},
+                )
+            finally:
+                self.events = original_events
+                await bus.close()
+
+        task = asyncio.create_task(_runner())
+        try:
+            async for event in bus.events():
+                yield event
+        finally:
+            if not task.done():
+                await task
+            else:
+                exc = task.exception()
+                if exc is not None:
+                    raise exc
+
     async def dispatch_tools(self, calls: list[ToolCall]) -> list[ToolOutcome]:
         """Dispatch multiple tool calls concurrently (Req 12.1–12.4).
 
@@ -2330,9 +2452,13 @@ class Agent:
         think_tool: bool = False,
         plan_tool: bool = False,
         memory_tool: bool = False,
-        # Tough-task mode (plan → fan-out → synthesize → verify):
+        # Case / tough mode (plan → dispatch → synthesize → accept):
         mode: str | None = None,
         fan_out: str = "map",
+        dispatch: str | None = None,
+        accept: Any = None,
+        board: bool = True,
+        max_rounds: int | None = None,
         max_plan_steps: int = 5,
         # Multimodal feedback (Req 7.5):
         feedback_media: bool = True,
@@ -2438,8 +2564,15 @@ class Agent:
         self._memory_tool = memory_tool
         self._mode = (mode or "").strip().lower() or None
         self._fan_out = fan_out
+        self._dispatch = dispatch
+        self._accept = accept
+        self._board = board
+        self._max_rounds = max_rounds
         self._max_plan_steps = max_plan_steps
         self._feedback_media = feedback_media
+        # Prefer accept= over verifier= for case mode when both set
+        if accept is not None and self._verifier is None:
+            self._verifier = accept
 
         # Developer experience.
         self._debug = debug
@@ -2700,22 +2833,26 @@ class Agent:
         context:
             Optional runtime context dict accessible during the run.
         """
-        # Tough mode: plan → fan-out → synthesize → verify via ToughTask.
-        if self._mode in ("tough", "plan_act_verify", "plan"):
-            from loomable.tough import ToughTask
+        # Case / tough mode: plan → dispatch → synthesize → accept.
+        if self._mode in ("tough", "plan_act_verify", "plan", "case"):
+            try:
+                from loomable.case import Case
 
-            max_iters = max(1, int(self._max_verify_retries) + 1)
-            tough = ToughTask(
-                model=self._model,
-                verifier=self._verifier,
-                max_iterations=max_iters,
-                max_steps=self._max_plan_steps,
-                fan_out=self._fan_out if self._fan_out in ("map", "spawn") else "map",
-                session_id=self._session_id,
-                tools=list(self._tools) if self._tools else None,
-                modalities=self._modalities_raw,
-            )
-            result = await tough.arun(input)
+                result = await Case.from_agent(self).arun(input)
+            except ImportError:
+                from loomable.tough import ToughTask
+
+                max_iters = max(1, int(self._max_verify_retries) + 1)
+                result = await ToughTask(
+                    model=self._model,
+                    verifier=self._verifier,
+                    max_iterations=max_iters,
+                    max_steps=self._max_plan_steps,
+                    fan_out=self._fan_out if self._fan_out in ("map", "spawn") else "map",
+                    session_id=self._session_id,
+                    tools=list(self._tools) if self._tools else None,
+                    modalities=self._modalities_raw,
+                ).arun(input)
             if self._on_complete is not None:
                 self._on_complete(result)
             return result
@@ -2756,6 +2893,39 @@ class Agent:
         built = self._get_built()
         async for chunk in built.astream(input, output_schema=output_schema):
             yield chunk
+
+    async def astream_events(
+        self,
+        input: AgentInput | str,  # noqa: A002
+        *,
+        images: "list[str | Path | Any] | None" = None,
+        videos: "list[str | Path | Any] | None" = None,
+        audio: "list[str | Path | Any] | None" = None,
+        output_schema: type | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> "AsyncIterator[Any]":
+        """Yield AG-UI-compatible stream events (lifecycle, tools, text).
+
+        When ``mode`` is ``case`` / ``tough``, streams Case pipeline events.
+        """
+        if self._mode in ("tough", "plan_act_verify", "plan", "case"):
+            from loomable.case import Case
+
+            case = Case.from_agent(self)
+            async for event in case.astream_events(input):
+                yield event
+            return
+
+        built = self._get_built()
+        schema = output_schema or self._response_model
+        async for event in built.astream_events(
+            input,
+            images=images,
+            videos=videos,
+            audio=audio,
+            output_schema=schema,
+        ):
+            yield event
 
     # ------------------------------------------------------------------
     # System prompt assembly

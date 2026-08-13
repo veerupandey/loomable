@@ -2,11 +2,11 @@
 
 High-level imports (preferred)::
 
-    from loomable import Agent, Team, Workflow, ToughTask, Step, Loop, tool
+    from loomable import Agent, Team, Workflow, Case, Step, Loop, tool
 
 Progressive disclosure:
   Agent → Team → Workflow (+ Step / Loop / branch / parallel)
-  ToughTask / plan_act_verify for plan → fan-out → verify
+  Case / plan_act_verify for goal + WorkItems + dispatch + accept
   Flow / engines / edges remain available for advanced graph control.
 """
 
@@ -22,6 +22,15 @@ from loomable.agent import (
     Team,
     spawn_specialist,
     tool,
+)
+from loomable.case import (
+    Board,
+    Case,
+    ToughTask,
+    WorkItem,
+    WorkItems,
+    map_specialists,
+    plan_act_verify,
 )
 from loomable.flow import (
     Condition,
@@ -44,7 +53,6 @@ from loomable.persist import (
     JsonFileCheckpointer,
     SQLiteCheckpointer,
 )
-from loomable.tough import ToughTask, map_specialists, plan_act_verify
 
 __all__ = [
     "__version__",
@@ -53,6 +61,10 @@ __all__ = [
     "BuiltAgent",
     "Team",
     "Workflow",
+    "Case",
+    "Board",
+    "WorkItem",
+    "WorkItems",
     "Step",
     "Loop",
     "Condition",
@@ -62,7 +74,7 @@ __all__ = [
     "ContextPolicy",
     "spawn_specialist",
     "FlowPaused",
-    # Tough tasks (plan → fan-out → verify)
+    # Case (plan → dispatch → accept); ToughTask alias one release
     "ToughTask",
     "plan_act_verify",
     "map_specialists",

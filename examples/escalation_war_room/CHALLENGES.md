@@ -76,7 +76,8 @@ Goal: enterprise spine that stays one-line-easy on the happy path.
 ## Easy API contract (lock this)
 
 ```python
-from loomable import Agent, Team, Workflow, ToughTask, spawn_specialist, tool
+from loomable import Agent, Team, Workflow, Case, spawn_specialist, tool
+from loomable.serve import mount_agent, mount_case
 
 agent = Agent(model=..., tools=[...], response_model=Packet, require_tools=["write_json"])
 team = Team(members=[...], mode="broadcast", hard=True)
@@ -88,21 +89,49 @@ wf = (
 # crash-safe: await wf.arun(..., resume=True)
 # HITL: except FlowPaused → await wf.approve("scribe") → resume
 
-# Tough problems (plan → fan-out → verify):
-task = ToughTask(model=..., fan_out="spawn", verify=my_check, max_iterations=3)
-result = await task.arun("Handle INC-88421 end-to-end")
-# or: Agent(model=..., mode="tough", fan_out="map", verifier=my_check)
+# Case (goal + WorkItems board + dispatch + accept) — was ToughTask:
+case = Case(
+    model=...,
+    goal="Close INC-88421 with SEV packet",
+    board=True,
+    dispatch="spawn",          # or "reuse"
+    accept=my_check,           # was verify=
+    max_rounds=3,              # was max_iterations=
+)
+result = await case.arun("Handle INC-88421 end-to-end")
+# or: Agent(model=..., mode="case", dispatch="reuse", accept=my_check)
+
+# Agent / Case AG-UI SSE (CopilotKit-compatible event types, no hard dep):
+app = FastAPI()
+mount_agent(app, agent, prefix="/agent")   # POST /agent/run/events
+mount_case(app, case, prefix="/cases")     # POST /cases/run/events
+async for ev in agent.astream_events(email):  # RUN_* / TEXT_* / TOOL_*
+    ...
 ```
 
 No frozensets, modality enums, or engine types on the happy path.
 
-## Tough-task mode (added)
+## Case + WorkItems + AG-UI SSE (added)
 
 | API | Role |
 |-----|------|
-| `ToughTask` | One object: plan → map/spawn → synthesize → verify loop |
+| `Case` | Goal + optional WorkItems board + plan → dispatch → accept |
+| `Board` / `WorkItems` | Kanban: open → in_progress → blocked → done |
+| `work_list` / `work_add` / `work_update` / `work_complete` | Board tools |
+| `Agent(mode="case")` | Atomic Agent entry for the Case pipeline |
+| `Agent.astream_events` / `Case.astream_events` / `Workflow.astream_events` | AG-UI events in-process |
+| `mount_agent` / `mount_case` | FastAPI `text/event-stream` (`/run/events`) |
+| `ToughTask` / `mode="tough"` / `fan_out` / `verify` | Aliases kept one release |
+
+Live gates: `11_agent_agui_sse.py`, `11_case_sse.py`.
+
+## Tough-task mode (legacy name)
+
+| API | Role |
+|-----|------|
+| `ToughTask` (= `Case`) | One object: plan → map/spawn → synthesize → verify loop |
 | `plan_act_verify(...)` | Same pipeline as a `Workflow` (nestable / HITL / checkpoints) |
-| `Agent(mode="tough")` | Atomic Agent entry that runs the tough pipeline |
+| `Agent(mode="tough")` | Alias of `mode="case"` |
 | `map_specialists(steps, model=...)` | Parallel ephemeral spawn over plan steps |
 
 SharedState glue fixed so `plan_and_execute` / `Workflow.map` actually receive `plan_steps`.
