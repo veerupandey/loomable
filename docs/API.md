@@ -657,39 +657,33 @@ agent = Agent(
 )
 ```
 
-### PostgreSQL Backend (persistent memory + checkpoints)
+### PostgreSQL (durable memory + checkpoints)
 
-For production deployments where memory and workflow resume must survive restarts:
+```bash
+pip install 'loomable[postgres]'
+docker compose up -d   # POSTGRES_URL=postgresql://loomable:loomable@127.0.0.1:5432/loomable
+```
 
 ```python
-# pip install 'loomable[postgres]'
-from loomable import Case, PostgresCheckpointer, Workflow
+from loomable import Case, PostgresCheckpointer
 from loomable.kernel.long_term import LongTermStore
 from loomable.kernel.stores import ShortTermStore
 from loomable.providers.backends.postgres import PostgresMemoryBackend, PgVectorBackend
 
-DSN = "postgresql://user:pass@localhost/agentdb"
+DSN = "postgresql://loomable:loomable@127.0.0.1:5432/loomable"
 
-# Workflow / Case durable resume
-checkpointer = PostgresCheckpointer(DSN)
+case = Case(model="openai:gpt-4o-mini", board=True, session_id="inc-1",
+            checkpointer=PostgresCheckpointer(DSN))
 
-case = Case(
-    model="openai:gpt-4o-mini",
-    board=True,
-    session_id="inc-88421",
-    checkpointer=checkpointer,
-)
-
-# Key-value memory (session state, user facts) — scoped by user_id
-kv = PostgresMemoryBackend(url=DSN, user_id="alice")
+kv = PostgresMemoryBackend(DSN, user_id="alice")
 short_term = ShortTermStore(backend=kv)
-
-# Vector memory (embeddings / RAG) — scoped by user_id
-vectors = PgVectorBackend(url=DSN, dimensions=1536, user_id="alice")
-long_term = LongTermStore(backend=vectors, backend_name="postgres")
+long_term = LongTermStore(
+    backend=PgVectorBackend(DSN, dimensions=1536, user_id="alice"),
+    backend_name="postgres",
+)
 ```
 
-Requires `asyncpg` (optional — `pip install 'loomable[postgres]'`). Tables are created automatically on first use. `PostgresCheckpointer` implements the same `Checkpointer` protocol as `JsonFileCheckpointer` / `SQLiteCheckpointer`.
+Tables auto-create. `user_id` scopes KV/vector rows.
 
 ---
 
@@ -1334,6 +1328,15 @@ checkpointer = JsonFileCheckpointer(
 from loomable.persist import SQLiteCheckpointer
 
 checkpointer = SQLiteCheckpointer("agent.db", max_checkpoints=100)
+```
+
+### PostgreSQL (production)
+
+```python
+# pip install 'loomable[postgres]'
+from loomable import PostgresCheckpointer
+
+checkpointer = PostgresCheckpointer("postgresql://loomable:loomable@127.0.0.1:5432/loomable")
 ```
 
 ### Event-Driven Triggers

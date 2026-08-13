@@ -100,15 +100,9 @@ result = await agent.arun("What is 7 * 8?")
 ### Workflow (+ SharedState)
 
 ```python
-from loomable import Workflow, JsonFileCheckpointer, PostgresCheckpointer
+from loomable import Workflow, JsonFileCheckpointer
 
-# Local / simple
-wf = Workflow("job", session_id="job-1", checkpointer=JsonFileCheckpointer("./ckpts"))
-
-# Production
-# pip install 'loomable[postgres]'
-# wf = Workflow("job", session_id="job-1", checkpointer=PostgresCheckpointer(os.environ["POSTGRES_URL"]))
-
+cp = JsonFileCheckpointer("./ckpts")  # or PostgresCheckpointer(POSTGRES_URL)
 wf = (
     Workflow("sev", session_id="inc-1", checkpointer=cp)
     .step("gather", gatherer)
@@ -116,7 +110,6 @@ wf = (
     .step("scribe", scribe, confirm=True)  # HITL
 )
 result = await wf.arun(email)
-# SharedState holds per-node outputs + plan_steps / board keys
 print(wf.state.get("gather"))
 ```
 
@@ -215,12 +208,11 @@ loomable/
 ├── stream/      # AG-UI StreamEvent + AsyncStreamBus
 ├── flow/        # Workflow, Flow, Loop, engines, SharedState
 ├── content/     # Media parts & coercion
-├── kernel/      # Core primitives (import-independent)
-├── providers/   # OpenAI, Azure, Anthropic, Gemini, Groq, Ollama
-├── persist/     # Checkpointers (JsonFile, SQLite, Postgres)
-├── providers/   # Model providers + backends (Postgres KV/vector)
+├── kernel/      # Core primitives
+├── providers/   # Models + backends (Postgres KV/vector)
+├── persist/     # JsonFile / SQLite / Postgres checkpointers
 ├── serve/       # FastAPI + MCP adapters
-└── media/       # High-level Image / Audio / Video helpers
+└── media/       # Image / Audio / Video helpers
 ```
 
 ## Providers
@@ -239,6 +231,12 @@ loomable/
 ```bash
 pip install -e ".[dev]"
 python -m pytest tests/unit -q
+
+# Postgres live E2E
+pip install -e ".[postgres]"
+docker compose up -d
+POSTGRES_URL=postgresql://loomable:loomable@127.0.0.1:5432/loomable \
+  python -m pytest tests/integration/test_postgres_live.py -q
 ```
 
 ## License
