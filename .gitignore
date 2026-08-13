@@ -5,32 +5,47 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+*.egg
 
 # Virtual environments
 .venv/
 venv/
+env/
 
-# Environment variables (secrets)
+# Environment / secrets — never commit
 .env
 .env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets.json
+.secrets/
 
-# Kiro
+# Local tooling / IDE
 .kiro/
-
-# IDE
 .idea/
 .vscode/
 *.swp
+*.swo
+.cursor/
 
-# pytest
+# Test / coverage caches
 .pytest_cache/
-
-# Hypothesis
 .hypothesis/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.cache/
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Checkpoints
+# Local run artifacts / checkpoints
 .checkpoints/
+.checkpoints*/
+**/workspace*/
+examples/**/output/
