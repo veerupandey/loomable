@@ -207,3 +207,42 @@ def test_step_confirm_alias() -> None:
     assert s.require_confirmation is True
     node = Workflow("w").step("gate", noop, confirm=True).flow._nodes["gate"]
     assert node.require_confirmation is True
+
+
+@pytest.mark.asyncio
+async def test_workflow_confirm_approve_json_file_checkpointer(tmp_path) -> None:
+    """JsonFileCheckpointer must persist approve() as the latest checkpoint."""
+    from loomable.flow.hitl import FlowPaused
+    from loomable.persist import JsonFileCheckpointer
+
+    cp = JsonFileCheckpointer(str(tmp_path / "ckpts"))
+    calls = {"scribe": 0}
+
+    async def draft(inp, *, context=None):
+        from loomable.agent.run import RunResult
+
+        return RunResult(output=AgentOutput(parts=[Text("DRAFT")]), session_id="s")
+
+    async def scribe(inp, *, context=None):
+        from loomable.agent.run import RunResult
+
+        calls["scribe"] += 1
+        return RunResult(output=AgentOutput(parts=[Text("DONE")]), session_id="s")
+
+    wf = (
+        Workflow("hitl-json", session_id="t-json", checkpointer=cp)
+        .step("draft", draft)
+        .step("scribe", scribe, confirm=True)
+    )
+
+    with pytest.raises(FlowPaused):
+        await wf.arun("go")
+
+    await wf.approve("scribe")
+    latest = await cp.get("t-json")
+    assert latest is not None
+    assert latest.pending[0].status == "approved"
+
+    result = await wf.arun("go", resume=True)
+    assert calls["scribe"] == 1
+    assert result.output.text() == "DONE"

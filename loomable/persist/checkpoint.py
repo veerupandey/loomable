@@ -199,7 +199,13 @@ class JsonFileCheckpointer:
         return f"{ts}_{uid}.json"
 
     async def put(self, cp: Checkpoint) -> None:
-        """Write a checkpoint as a JSON file."""
+        """Write a checkpoint as a JSON file.
+
+        Always refreshes ``cp.timestamp`` so ``get()`` (latest-by-filename)
+        returns this write even when the caller mutated an older checkpoint
+        in place (e.g. Workflow.approve).
+        """
+        cp.timestamp = time.time()
         thread_dir = self._thread_dir(cp.thread_id)
         filename = self._checkpoint_filename(cp)
         filepath = os.path.join(thread_dir, filename)
