@@ -202,10 +202,17 @@ def _register_agent_routes(app: FastAPI, agent: Any, *, prefix: str = "") -> Non
                 agent._session_id = sid  # type: ignore[attr-defined]
             except Exception:  # noqa: BLE001
                 pass
-        # Cached Case should pick up session for streaming labels
-        case = getattr(agent, "_case", None)
-        if case is not None and hasattr(case, "session_id"):
+        # Case (direct or cached under Agent mode=case) must bind checkpoint thread.
+        case = agent if type(agent).__name__ == "Case" else getattr(agent, "_case", None)
+        if case is not None and hasattr(case, "bind_session"):
+            case.bind_session(sid)
+        elif case is not None and hasattr(case, "session_id"):
             case.session_id = sid
+            if hasattr(case, "_kwargs") and isinstance(case._kwargs, dict):
+                case._kwargs["session_id"] = sid
+                wf = getattr(case, "_workflow", None)
+                if wf is not None:
+                    wf._session_id = sid
 
     async def _invoke_arun(agent_input: AgentInput, body: RunRequestModel) -> RunResult:
         _apply_session(body)

@@ -2540,6 +2540,7 @@ class Agent:
         board: bool = True,
         max_rounds: int | None = None,
         max_plan_steps: int = 5,
+        checkpointer: Any = None,
         # Multimodal feedback (Req 7.5):
         feedback_media: bool = True,
         # Developer experience:
@@ -2648,6 +2649,7 @@ class Agent:
         self._board = board
         self._max_rounds = max_rounds
         self._max_plan_steps = max_plan_steps
+        self._checkpointer = checkpointer
         self._feedback_media = feedback_media
         if accept is not None and self._verifier is None:
             self._verifier = accept

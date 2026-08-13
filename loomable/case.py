@@ -369,6 +369,17 @@ def build_case_workflow(
     gate = _as_accept(accept)
     mode = _normalize_dispatch(dispatch)
 
+    # WorkItems tools so planners/workers can mutate the live board (not just glue).
+    tools_list = list(tools or [])
+    if board is not None:
+        existing_names = {
+            getattr(t, "name", None) or getattr(t, "__name__", None) for t in tools_list
+        }
+        for t in board_tools(board):
+            tname = getattr(t, "name", None) or getattr(t, "__name__", None)
+            if tname not in existing_names:
+                tools_list.append(t)
+
     if planner is None:
         planner = _default_agent(
             model,
@@ -387,7 +398,7 @@ def build_case_workflow(
             role="Worker",
             goal="Execute one plan step thoroughly",
             instructions="Complete ONLY the assigned step. Be concrete and concise.",
-            tools=tools,
+            tools=tools_list,
             modalities=modalities,
         )
     if synthesizer is None:
@@ -455,7 +466,7 @@ def build_case_workflow(
             texts = await map_specialists(
                 steps,
                 model=model,
-                tools=tools,
+                tools=tools_list,
                 modalities=modalities,
                 concurrency=concurrency,
             )
@@ -484,9 +495,17 @@ def build_case_workflow(
                 texts = list(await asyncio.gather(*[_work(s) for s in steps]))
 
         if board is not None:
-            for it in board.list():
-                if it.title in steps and it.status == "in_progress":
-                    board.update(it.id, status="done")
+            by_title = {it.title: it for it in board.list()}
+            for step, text in zip(steps, texts):
+                it = by_title.get(step)
+                if it is None or it.status != "in_progress":
+                    continue
+                failed = str(text).lstrip().upper().startswith("ERROR")
+                board.update(
+                    it.id,
+                    status="blocked" if failed else "done",
+                    note=(str(text)[:240] if failed else None),
+                )
 
         state_updates: dict[str, Any] = {"map": texts, "plan_steps": steps}
         if board is not None:
@@ -665,6 +684,26 @@ class Case:
         self._workflow: Workflow | None = None
         self.session_id = session_id or ""
 
+    def bind_session(self, session_id: str | None) -> None:
+        """Bind HTTP/stream session id into Case + compiled Workflow checkpoints.
+
+        FastAPI and ``astream_events(session_id=...)`` must call this so
+        checkpointer thread ids match the client session (not a frozen
+        constructor default / ``\"default\"``).
+        """
+        if not session_id:
+            return
+        self.session_id = session_id
+        self._kwargs["session_id"] = session_id
+        if self._workflow is not None:
+            self._workflow._session_id = session_id
+
+    def bind_checkpointer(self, checkpointer: Any) -> None:
+        """Attach or replace the Case checkpointer (invalidates cached Workflow)."""
+        self._kwargs["checkpointer"] = checkpointer
+        if self._workflow is not None:
+            self._workflow._checkpointer = checkpointer
+
     @classmethod
     def from_agent(cls, agent: Any) -> Case:
         """Build a Case from ``Agent(mode='case', ...)`` attributes."""
@@ -683,13 +722,19 @@ class Case:
             tools=list(getattr(agent, "_tools", None) or []),
             modalities=getattr(agent, "_modalities_raw", None),
             session_id=getattr(agent, "_session_id", None),
+            checkpointer=getattr(agent, "_checkpointer", None),
             name=str(getattr(agent, "_name", None) or "case"),
         )
 
     def as_workflow(self) -> Workflow:
         """Compile to a Workflow (nesting, HITL, checkpoints)."""
         if self._workflow is None:
+            # Keep kwargs session in sync with live Case.session_id
+            if self.session_id and not self._kwargs.get("session_id"):
+                self._kwargs["session_id"] = self.session_id
             self._workflow = build_case_workflow(model=self._model, **self._kwargs)
+        elif self.session_id:
+            self._workflow._session_id = self.session_id
         return self._workflow
 
     async def arun(self, task: Any, **kwargs: Any) -> RunResult:
@@ -698,6 +743,9 @@ class Case:
         prompt = text
         if self.goal:
             prompt = f"Goal: {self.goal}\n\nTask: {text}"
+        sid = kwargs.pop("session_id", None)
+        if isinstance(sid, str) and sid:
+            self.bind_session(sid)
         await self._hydrate_board_from_checkpoint(resume=kwargs.get("resume"))
         wf = self.as_workflow()
         result = await wf.arun(prompt, **kwargs)
@@ -788,7 +836,11 @@ class Case:
     ) -> AsyncIterator[StreamEvent]:
         """AG-UI events: lifecycle + board STATE_* + nested workflow NODE_*."""
         rid = run_id or uuid.uuid4().hex
+        if session_id:
+            self.bind_session(session_id)
         sid = session_id or self.session_id or ""
+        # Hydrate BEFORE first STATE_SNAPSHOT so resume streams don't wipe board.
+        await self._hydrate_board_from_checkpoint(resume=kwargs.get("resume"))
         bus = AsyncStreamBus(run_id=rid, session_id=sid)
         await bus.emit(
             StreamEvent(
@@ -817,11 +869,12 @@ class Case:
                 prompt = f"Goal: {self.goal}\n\nTask: {text}" if self.goal else text
                 wf = self.as_workflow()
                 async for ev in wf.astream_events(
-                    prompt, session_id=sid, run_id=rid, **kwargs
+                    prompt, session_id=sid or None, run_id=rid, **kwargs
                 ):
                     if ev.type in (RUN_STARTED, RUN_FINISHED, RUN_ERROR):
                         continue
                     await bus.emit(ev)
+                self._hydrate_board_from_state(getattr(wf, "state", None))
                 if self.board is not None:
                     await bus.emit(self.board.snapshot_event(run_id=rid, session_id=sid))
                 await bus.emit(

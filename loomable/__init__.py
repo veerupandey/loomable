@@ -49,6 +49,7 @@ from loomable.flow import (
 from loomable.persist import (
     InMemoryCheckpointer,
     JsonFileCheckpointer,
+    PostgresCheckpointer,
     SQLiteCheckpointer,
 )
 
@@ -82,5 +83,6 @@ __all__ = [
     "JsonFileCheckpointer",
     "SQLiteCheckpointer",
     "InMemoryCheckpointer",
+    "PostgresCheckpointer",
     "Flow",
 ]
