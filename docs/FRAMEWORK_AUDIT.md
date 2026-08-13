@@ -6,10 +6,10 @@ Date: 2026-08-13. Rigorous review after merging Case/SSE onto `main`.
 
 | Suite | Result |
 |-------|--------|
-| Core (Case/stream/SSE/enterprise/require_tools/workflow) | **82 passed** |
-| Full `tests/unit` after deps + MCP fix | see CI / local re-run |
-| Live Gemini Agent SSE (`12_agent_agui_sse.py`) | run in this pass |
-| Live Gemini Case SSE (`11_case_sse.py`) | run in this pass |
+| Case / stream / FastAPI SSE / MCP adapter | **26 passed** |
+| Core enterprise + require_tools (earlier) | **82 passed** |
+| Live Gemini Agent SSE (`12_agent_agui_sse.py`) | **passed** |
+| Live Gemini Case SSE (`11_case_sse.py`) | **passed** (board STATE_DELTA + coerced text input) |
 
 ## Bugs found & fixed (this branch)
 
@@ -20,7 +20,7 @@ Date: 2026-08-13. Rigorous review after merging Case/SSE onto `main`.
 | P1 | `session_id` accepted but unused in FastAPI | Apply session to agent/case; pass into `astream_events` |
 | P1 | `Workflow.state` empty unless caller passed `RunContext` | Always create/capture context SharedState |
 | P1 | `BuiltAgent.astream_events` did not cancel on consumer break | Cancel runner task like Case/Flow |
-| P1 | MCP `CallToolResult.isError` vs SDK `is_error` | Use `is_error` |
+| P1 | MCP SDK drift: `isError`/`mimeType`/`Server.list_tools` | `is_error` / `mime_type` / `MCPServer.add_tool` |
 
 ## Still open (improvement backlog)
 
