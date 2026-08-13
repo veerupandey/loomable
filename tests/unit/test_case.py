@@ -313,7 +313,38 @@ async def test_case_astream_events_hydrates_board_before_snapshot() -> None:
 
 
 @pytest.mark.asyncio
-async def test_case_bind_session_updates_workflow_checkpoint_thread() -> None:
+async def test_case_board_rehydrates_from_complete_checkpoint() -> None:
+    """Board should restore even when the latest checkpoint is complete=True."""
+    from loomable.persist.checkpoint import Checkpoint, InMemoryCheckpointer
+
+    board = Board()
+    item = board.add("Closed card")
+    board.update(item.id, status="done")
+    cp = InMemoryCheckpointer()
+    await cp.put(
+        Checkpoint(
+            thread_id="done-sess",
+            step=9,
+            session_state={"shared_state": {"board": board.to_dict()}},
+            complete=True,
+        )
+    )
+    case = Case(
+        model=_model(),
+        board=True,
+        checkpointer=cp,
+        session_id="done-sess",
+        dispatch="reuse",
+        accept=_sev_accept,
+        max_rounds=2,
+        max_steps=2,
+        modalities="text",
+    )
+    await case._hydrate_board_from_checkpoint(resume=True)
+    assert case.board is not None
+    assert len(case.board.list()) == 1
+    assert case.board.list()[0].status == "done"
+
     from loomable.persist.checkpoint import InMemoryCheckpointer
 
     cp = InMemoryCheckpointer()

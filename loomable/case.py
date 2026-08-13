@@ -790,8 +790,11 @@ class Case:
             cp = await checkpointer.get(session_id)
         except Exception:  # noqa: BLE001
             return
-        if cp is None or getattr(cp, "complete", False):
+        if cp is None:
             return
+        # Restore board from latest checkpoint even when complete=True so a new
+        # Case process can continue / display WorkItems after a finished run.
+        # Workflow resume semantics (skip completed nodes) remain separate.
         ss = getattr(cp, "session_state", None) or {}
         shared = ss.get("shared_state") if isinstance(ss, dict) else None
         board_data = None
