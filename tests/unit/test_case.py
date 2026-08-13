@@ -230,3 +230,39 @@ async def test_workflow_state_without_caller_context() -> None:
     wf = Workflow("s").step("a", step_a)
     await wf.arun("x")
     assert wf.state.get("a") is not None
+
+
+@pytest.mark.asyncio
+async def test_case_board_rehydrates_from_checkpoint() -> None:
+    from loomable.persist.checkpoint import Checkpoint, InMemoryCheckpointer
+
+    board = Board()
+    item = board.add("Resume triage INC-1")
+    board.update(item.id, status="in_progress")
+    cp = InMemoryCheckpointer()
+    await cp.put(
+        Checkpoint(
+            thread_id="case-sess-1",
+            step=1,
+            session_state={"shared_state": {"board": board.to_dict()}},
+            complete=False,
+        )
+    )
+    case = Case(
+        model=_model(),
+        board=True,
+        checkpointer=cp,
+        session_id="case-sess-1",
+        dispatch="reuse",
+        accept=_sev_accept,
+        max_rounds=2,
+        max_steps=2,
+        modalities="text",
+    )
+    assert case.board is not None
+    assert case.board.list() == []
+    await case._hydrate_board_from_checkpoint(resume=True)
+    items = case.board.list()
+    assert len(items) == 1
+    assert items[0].title == "Resume triage INC-1"
+    assert items[0].status == "in_progress"

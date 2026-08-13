@@ -79,28 +79,19 @@ class HierarchicalEngine:
         }
 
         if pending_workers:
-            from loomable.flow.observability import emit_node_start, emit_node_end
-
             manager = SubagentManager()
-            start_times = {
-                nid: emit_node_start(context.events, nid) for nid in pending_workers
-            }
             tasks = [
                 DelegatedTask(
                     task_id=nid,
                     task=f"Execute worker node {nid}",
                     context={},
                     agent_factory=self._make_worker_factory(
-                        pending_workers[nid], input, context
+                        pending_workers[nid], nid, input, context
                     ),
                 )
                 for nid in sorted(pending_workers.keys())
             ]
             outcomes: list[SubagentOutcome] = await manager.run_all(tasks)
-            for outcome in outcomes:
-                st = start_times.get(outcome.task_id)
-                if st is not None:
-                    emit_node_end(context.events, outcome.task_id, st)
             self._commit_worker_results(outcomes, state, sub_results)
             for nid in pending_workers:
                 completed.add(nid)
@@ -116,14 +107,19 @@ class HierarchicalEngine:
                 manager_result = RunResult(output=out, session_id=session_id or "")
             else:
                 start_t = emit_node_start(context.events, manager_id)
-                manager_result = await manager_node.runnable.arun(input, context=context)
-                emit_node_end(context.events, manager_id, start_t)
+                try:
+                    manager_result = await manager_node.runnable.arun(input, context=context)
+                finally:
+                    emit_node_end(context.events, manager_id, start_t)
         else:
             start_t = emit_node_start(context.events, manager_id)
-            manager_result = await manager_node.runnable.arun(input, context=context)
-            emit_node_end(context.events, manager_id, start_t)
+            try:
+                manager_result = await manager_node.runnable.arun(input, context=context)
+            finally:
+                emit_node_end(context.events, manager_id, start_t)
             sub_results[manager_id] = manager_result
             state.write(manager_id, manager_result.output)
+            self._apply_state_updates(manager_result, state)
             completed.add(manager_id)
             if checkpointer is not None:
                 await self._write_checkpoint(checkpointer, state, completed, session_id)
@@ -164,13 +160,30 @@ class HierarchicalEngine:
     @staticmethod
     def _make_worker_factory(
         node: Node,
+        node_id: str,
         initial_input: Any,
         context: RunContext,
     ) -> Any:
         async def _run() -> RunResult:
-            return await node.runnable.arun(initial_input, context=context)
+            from loomable.flow.observability import emit_node_end, emit_node_start
+
+            start_t = emit_node_start(context.events, node_id)
+            try:
+                return await node.runnable.arun(initial_input, context=context)
+            finally:
+                emit_node_end(context.events, node_id, start_t)
 
         return _run
+
+    @staticmethod
+    def _apply_state_updates(result: RunResult, state: SharedState) -> None:
+        updates = (result.metadata or {}).get("state_updates")
+        if isinstance(updates, dict):
+            for key, value in updates.items():
+                state.write(key, value)
+        elif isinstance(getattr(result, "structured", None), dict):
+            for key, value in result.structured.items():
+                state.write(key, value)
 
     @staticmethod
     def _commit_worker_results(
@@ -201,6 +214,7 @@ class HierarchicalEngine:
             result = outcome.result
             if isinstance(result, RunResult):
                 state.write(nid, result.output)
+                HierarchicalEngine._apply_state_updates(result, state)
                 sub_results[nid] = result
             else:
                 output = AgentOutput(

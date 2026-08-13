@@ -698,8 +698,11 @@ class Case:
         prompt = text
         if self.goal:
             prompt = f"Goal: {self.goal}\n\nTask: {text}"
+        await self._hydrate_board_from_checkpoint(resume=kwargs.get("resume"))
         wf = self.as_workflow()
         result = await wf.arun(prompt, **kwargs)
+        # Prefer live SharedState board after the run (covers resume + plan writes)
+        self._hydrate_board_from_state(getattr(wf, "state", None))
         meta = dict(result.metadata or {})
         meta.setdefault("case", True)
         meta.setdefault("dispatch", self._kwargs.get("dispatch") or "reuse")
@@ -710,6 +713,47 @@ class Case:
                 ss["board"] = self.board.to_dict()
         result.metadata = meta
         return result
+
+    def _hydrate_board_from_state(self, shared: Any) -> None:
+        if self.board is None or shared is None:
+            return
+        raw = None
+        if hasattr(shared, "get"):
+            raw = shared.get("board")
+        elif isinstance(shared, dict):
+            raw = shared.get("board")
+        if isinstance(raw, dict) and raw.get("items") is not None:
+            restored = Board.from_dict(raw)
+            # Preserve on_change callback on the live board object
+            on_change = getattr(self.board, "_on_change", None)
+            self.board._items = restored._items
+            self.board.set_on_change(on_change)
+
+    async def _hydrate_board_from_checkpoint(self, *, resume: bool | None = None) -> None:
+        if self.board is None:
+            return
+        checkpointer = self._kwargs.get("checkpointer")
+        session_id = self._kwargs.get("session_id") or self.session_id
+        if checkpointer is None or not session_id:
+            return
+        if resume is False:
+            return
+        try:
+            cp = await checkpointer.get(session_id)
+        except Exception:  # noqa: BLE001
+            return
+        if cp is None or getattr(cp, "complete", False):
+            return
+        ss = getattr(cp, "session_state", None) or {}
+        shared = ss.get("shared_state") if isinstance(ss, dict) else None
+        board_data = None
+        if isinstance(shared, dict):
+            # snapshot may nest values under keys directly
+            board_data = shared.get("board")
+            if board_data is None and "values" in shared and isinstance(shared["values"], dict):
+                board_data = shared["values"].get("board")
+        if isinstance(board_data, dict):
+            self._hydrate_board_from_state({"board": board_data})
 
     @staticmethod
     def _coerce_task_text(task: Any) -> str:
