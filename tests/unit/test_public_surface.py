@@ -114,6 +114,14 @@ class TestPublicSurface:
 
         assert FlowPaused is not None
 
+    def test_top_level_enterprise_exports(self):
+        """Agent / Team / Workflow / Case are importable from loomable."""
+        from loomable import Agent, Board, Case, Team, Workflow
+        from loomable.serve import mount_agent, mount_case
+
+        assert all(x is not None for x in (Agent, Team, Workflow, Case, Board))
+        assert callable(mount_agent) and callable(mount_case)
+
     def test_observability_exports(self):
         """Observability exports are importable."""
         from loomable.flow import (
@@ -287,6 +295,7 @@ class TestLeanAudit:
         "fastapi",
         "httpx",
         "mcp",
+        "pydantic",
         "python-dotenv",
         "uvicorn",
     }

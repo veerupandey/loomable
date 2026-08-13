@@ -1,11 +1,4 @@
-"""Case — long-running goal work with WorkItems board + AG-UI streaming.
-
-Industry naming (aliases kept one release)::
-
-    Case  (was ToughTask)
-    mode="case"  (was "tough")
-    dispatch="spawn"|"reuse"  (was fan_out spawn|map)
-    accept=...  (was verify / until)
+"""Case — long-running goal work with a WorkItems board + AG-UI streaming.
 
 Happy path::
 
@@ -16,10 +9,11 @@ Happy path::
         model=provider,
         goal="Close INC-88421 with SEV packet",
         board=True,
-        dispatch="spawn",
+        dispatch="spawn",       # or "reuse"
         accept=lambda out, ctx: "SEV-" in out.text(),
         max_rounds=5,
     )
+    result = await case.arun(email)
     async for ev in case.astream_events(email):
         ...
 """
@@ -30,9 +24,7 @@ __all__ = [
     "Case",
     "WorkItem",
     "Board",
-    "WorkItems",
-    "ToughTask",
-    "plan_act_verify",
+    "build_case_workflow",
     "map_specialists",
     "parse_plan_steps",
     "board_tools",
@@ -48,7 +40,7 @@ from typing import Any, AsyncIterator, Callable, Literal, Sequence
 from loomable.agent.context import RunContext
 from loomable.agent.run import RunResult
 from loomable.content import AgentOutput, Text
-from loomable.flow.loop import CallableVerifier, Loop, VerdictResult, Verifier
+from loomable.flow.loop import CallableVerifier, Loop, Verifier
 from loomable.flow.workflow import Workflow
 from loomable.stream import (
     RUN_ERROR,
@@ -60,8 +52,7 @@ from loomable.stream import (
     StreamEvent,
 )
 
-Dispatch = Literal["reuse", "spawn", "map"]  # map kept as alias of reuse
-FanOut = Literal["map", "spawn"]  # legacy
+Dispatch = Literal["reuse", "spawn"]
 
 
 @dataclass
@@ -188,10 +179,13 @@ class Board:
         )
 
 
-WorkItems = Board  # alias
-
-
-def board_tools(board: Board, *, bus: AsyncStreamBus | None = None, run_id: str = "", session_id: str = "") -> list[Any]:
+def board_tools(
+    board: Board,
+    *,
+    bus: AsyncStreamBus | None = None,
+    run_id: str = "",
+    session_id: str = "",
+) -> list[Any]:
     """Return Agent tools that mutate ``board`` and optionally emit STATE_DELTA."""
     from loomable.agent import tool
 
@@ -213,7 +207,7 @@ def board_tools(board: Board, *, bus: AsyncStreamBus | None = None, run_id: str 
 
     @tool
     def work_update(item_id: str, status: str = "", note: str = "", owner: str = "") -> str:
-        """Update a work item status/note/owner. status: open|in_progress|blocked|done."""
+        """Update a work item. status: open|in_progress|blocked|done."""
         kwargs: dict[str, Any] = {}
         if status:
             kwargs["status"] = status
@@ -310,23 +304,23 @@ async def map_specialists(
     return list(await asyncio.gather(*[_one(i, s) for i, s in enumerate(steps)]))
 
 
-def _as_verifier(value: Any) -> Verifier | None:
+def _as_accept(value: Any) -> Verifier | None:
     if value is None:
         return None
     if isinstance(value, Verifier):
         return value
     if callable(value):
         return CallableVerifier(value)
-    raise TypeError(f"accept/verifier must be Verifier or callable, got {type(value)!r}")
+    raise TypeError(f"accept must be Verifier or callable, got {type(value)!r}")
 
 
-def _normalize_dispatch(dispatch: str | None, fan_out: str | None) -> FanOut:
-    raw = dispatch or fan_out or "reuse"
-    if raw in ("reuse", "map"):
-        return "map"
+def _normalize_dispatch(dispatch: str | None) -> Dispatch:
+    raw = dispatch or "reuse"
+    if raw == "reuse":
+        return "reuse"
     if raw == "spawn":
         return "spawn"
-    raise ValueError(f"dispatch must be 'reuse'|'spawn' (or legacy fan_out map|spawn), got {raw!r}")
+    raise ValueError(f"dispatch must be 'reuse' or 'spawn', got {raw!r}")
 
 
 def _default_agent(
@@ -350,20 +344,16 @@ def _default_agent(
     )
 
 
-def plan_act_verify(
+def build_case_workflow(
     planner: Any | None = None,
     worker: Any | None = None,
     synthesizer: Any | None = None,
     *,
     model: Any | None = None,
-    verifier: Any | None = None,
-    until: Any | None = None,
     accept: Any | None = None,
-    max_iterations: int | None = None,
-    max_rounds: int | None = None,
+    max_rounds: int = 3,
     max_steps: int = 5,
-    fan_out: FanOut | None = None,
-    dispatch: str | None = None,
+    dispatch: Dispatch = "reuse",
     name: str = "case",
     session_id: str | None = None,
     checkpointer: Any = None,
@@ -372,19 +362,12 @@ def plan_act_verify(
     concurrency: int | None = None,
     board: Board | None = None,
 ) -> Workflow:
-    """Build a Workflow: plan → dispatch act → synthesize → optional accept loop.
-
-    Prefer ``dispatch`` / ``accept`` / ``max_rounds``. Legacy ``fan_out`` /
-    ``verify`` / ``until`` / ``max_iterations`` still work.
-    """
+    """Build a Workflow: plan → dispatch → synthesize → optional accept loop."""
     if model is None and (planner is None or worker is None):
-        raise ValueError("plan_act_verify requires model= or explicit planner/worker")
+        raise ValueError("build_case_workflow requires model= or explicit planner/worker")
 
-    verify = _as_verifier(
-        accept if accept is not None else (until if until is not None else verifier)
-    )
-    mode = _normalize_dispatch(dispatch, fan_out)
-    rounds = max_rounds if max_rounds is not None else (max_iterations if max_iterations is not None else 3)
+    gate = _as_accept(accept)
+    mode = _normalize_dispatch(dispatch)
 
     if planner is None:
         planner = _default_agent(
@@ -398,7 +381,7 @@ def plan_act_verify(
             ),
             modalities=modalities,
         )
-    if worker is None and mode == "map":
+    if worker is None and mode == "reuse":
         worker = _default_agent(
             model,
             role="Worker",
@@ -436,7 +419,6 @@ def plan_act_verify(
             else:
                 steps = parse_plan_steps(str(raw), max_steps=max_steps)
                 meta = {}
-        # Seed board from plan when enabled
         state_updates: dict[str, Any] = {"plan_steps": steps}
         if board is not None:
             for step in steps:
@@ -523,8 +505,7 @@ def plan_act_verify(
             structured={"plan_steps": steps, "map": texts},
             metadata={
                 "state_updates": state_updates,
-                "fan_out": mode,
-                "dispatch": "spawn" if mode == "spawn" else "reuse",
+                "dispatch": mode,
                 "step_count": len(steps),
             },
         )
@@ -578,7 +559,7 @@ def plan_act_verify(
         .step("act", act_step)
     )
 
-    if verify is not None:
+    if gate is not None:
         async def synth_body(inp: Any, *, context: RunContext | None = None) -> RunResult:
             feedback = ""
             if isinstance(inp, dict) and "feedback" in inp:
@@ -606,7 +587,7 @@ def plan_act_verify(
             )
             if feedback:
                 prompt = (
-                    "Previous attempt failed verification.\n"
+                    "Previous attempt failed acceptance.\n"
                     f"Feedback: {feedback}\n\n"
                     "Produce a corrected final answer.\n\n"
                     + combined
@@ -625,8 +606,8 @@ def plan_act_verify(
                 session_id=session_id or "",
             )
 
-        loop = Loop(body=synth_body, verifier=verify, max_iterations=rounds)
-        wf = wf.step("verify_loop", loop)
+        loop = Loop(body=synth_body, verifier=gate, max_iterations=max_rounds)
+        wf = wf.step("accept_loop", loop)
     else:
         wf = wf.step("synthesize", synth_step)
 
@@ -634,11 +615,7 @@ def plan_act_verify(
 
 
 class Case:
-    """Long-running case: goal + WorkItems board + dispatch + accept gate.
-
-    Prefer this over raw Workflow when you want plan → specialists → quality
-    gate with an optional kanban board streamed as STATE_DELTA.
-    """
+    """Long-running case: goal + WorkItems board + dispatch + accept gate."""
 
     def __init__(
         self,
@@ -650,14 +627,9 @@ class Case:
         worker: Any | None = None,
         synthesizer: Any | None = None,
         accept: Any | None = None,
-        verifier: Any | None = None,
-        verify: Any | None = None,
-        until: Any | None = None,
-        max_rounds: int | None = None,
-        max_iterations: int | None = None,
+        max_rounds: int = 3,
         max_steps: int = 5,
-        dispatch: str | None = None,
-        fan_out: FanOut | None = None,
+        dispatch: Dispatch = "reuse",
         name: str = "case",
         session_id: str | None = None,
         checkpointer: Any = None,
@@ -674,18 +646,14 @@ class Case:
         else:
             self.board = board
 
-        accept_fn = accept if accept is not None else (
-            verifier if verifier is not None else (verify if verify is not None else until)
-        )
         self._kwargs = dict(
             planner=planner,
             worker=worker,
             synthesizer=synthesizer,
-            accept=accept_fn,
-            max_rounds=max_rounds if max_rounds is not None else max_iterations,
+            accept=accept,
+            max_rounds=max_rounds,
             max_steps=max_steps,
             dispatch=dispatch,
-            fan_out=fan_out,
             name=name,
             session_id=session_id,
             checkpointer=checkpointer,
@@ -699,39 +667,29 @@ class Case:
 
     @classmethod
     def from_agent(cls, agent: Any) -> Case:
-        """Build a Case from Agent(mode='case'|'tough', ...) attributes."""
-        fan_out = getattr(agent, "_fan_out", None) or "map"
-        dispatch = getattr(agent, "_dispatch", None)
-        if dispatch is None:
-            dispatch = "spawn" if fan_out == "spawn" else "reuse"
-        max_retries = int(getattr(agent, "_max_verify_retries", 1) or 1)
+        """Build a Case from ``Agent(mode='case', ...)`` attributes."""
+        dispatch = getattr(agent, "_dispatch", None) or "reuse"
         max_rounds = getattr(agent, "_max_rounds", None)
         if max_rounds is None:
-            max_rounds = max(1, max_retries + 1)
-        board = getattr(agent, "_board", True)
+            max_rounds = max(1, int(getattr(agent, "_max_verify_retries", 1) or 1) + 1)
         return cls(
             model=getattr(agent, "_model", None),
             goal=str(getattr(agent, "_goal", "") or ""),
-            board=board if board is not None else True,
-            accept=(
-                getattr(agent, "_accept", None)
-                or getattr(agent, "_verifier", None)
-            ),
+            board=bool(getattr(agent, "_board", True)),
+            accept=getattr(agent, "_accept", None) or getattr(agent, "_verifier", None),
             max_rounds=int(max_rounds),
             max_steps=int(getattr(agent, "_max_plan_steps", 5) or 5),
-            dispatch=dispatch,
-            fan_out=fan_out if fan_out in ("map", "spawn") else "map",
+            dispatch=dispatch if dispatch in ("reuse", "spawn") else "reuse",
             tools=list(getattr(agent, "_tools", None) or []),
             modalities=getattr(agent, "_modalities_raw", None),
             session_id=getattr(agent, "_session_id", None),
-            checkpointer=getattr(agent, "_checkpointer", None),
             name=str(getattr(agent, "_name", None) or "case"),
         )
 
     def as_workflow(self) -> Workflow:
-        """Compile to a Workflow (for nesting, HITL, checkpoints)."""
+        """Compile to a Workflow (nesting, HITL, checkpoints)."""
         if self._workflow is None:
-            self._workflow = plan_act_verify(model=self._model, **self._kwargs)
+            self._workflow = build_case_workflow(model=self._model, **self._kwargs)
         return self._workflow
 
     async def arun(self, task: Any, **kwargs: Any) -> RunResult:
@@ -743,17 +701,9 @@ class Case:
         result = await wf.arun(prompt, **kwargs)
         meta = dict(result.metadata or {})
         meta.setdefault("case", True)
-        meta.setdefault("tough", True)  # alias for one release
-        meta.setdefault(
-            "dispatch",
-            "spawn" if (self._kwargs.get("dispatch") or self._kwargs.get("fan_out")) == "spawn" else "reuse",
-        )
-        meta.setdefault("fan_out", self._kwargs.get("fan_out") or (
-            "spawn" if self._kwargs.get("dispatch") == "spawn" else "map"
-        ))
+        meta.setdefault("dispatch", self._kwargs.get("dispatch") or "reuse")
         if self.board is not None:
             meta["board"] = self.board.to_dict()
-            # Persist into session_state when available
             ss = kwargs.get("session_state")
             if isinstance(ss, dict):
                 ss["board"] = self.board.to_dict()
@@ -771,11 +721,18 @@ class Case:
         run_id: str | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamEvent]:
-        """AG-UI events for the case: lifecycle + board STATE_* + nested workflow."""
+        """AG-UI events: lifecycle + board STATE_* + nested workflow NODE_*."""
         rid = run_id or uuid.uuid4().hex
         sid = session_id or self.session_id or ""
         bus = AsyncStreamBus(run_id=rid, session_id=sid)
-        await bus.emit(StreamEvent(type=RUN_STARTED, run_id=rid, session_id=sid, data={"input": str(task)[:500]}))
+        await bus.emit(
+            StreamEvent(
+                type=RUN_STARTED,
+                run_id=rid,
+                session_id=sid,
+                data={"input": str(task)[:500]},
+            )
+        )
         if self.board is not None:
             await bus.emit(self.board.snapshot_event(run_id=rid, session_id=sid))
 
@@ -790,54 +747,41 @@ class Case:
 
         async def _runner() -> None:
             try:
+                prompt = (
+                    f"Goal: {self.goal}\n\nTask: {task}"
+                    if self.goal and isinstance(task, str)
+                    else task
+                )
                 wf = self.as_workflow()
-                if hasattr(wf, "astream_events"):
-                    async for ev in wf.astream_events(
-                        f"Goal: {self.goal}\n\nTask: {task}" if self.goal and isinstance(task, str) else task,
-                        session_id=sid,
-                        run_id=rid,
-                        **kwargs,
-                    ):
-                        # Skip nested RUN_* — Case owns lifecycle
-                        if ev.type in (RUN_STARTED, RUN_FINISHED, RUN_ERROR):
-                            continue
-                        await bus.emit(ev)
-                        if self.board is not None and ev.type == STATE_DELTA:
-                            pass
-                    # After workflow, emit final board snapshot
-                    if self.board is not None:
-                        await bus.emit(self.board.snapshot_event(run_id=rid, session_id=sid))
-                    await bus.emit(
-                        StreamEvent(
-                            type=RUN_FINISHED,
-                            run_id=rid,
-                            session_id=sid,
-                            data={"board": self.board.to_dict() if self.board else None},
-                        )
-                    )
-                else:
-                    result = await self.arun(task, session_id=sid, **kwargs)
-                    if self.board is not None:
-                        await bus.emit(self.board.snapshot_event(run_id=rid, session_id=sid))
-                    await bus.emit(
-                        StreamEvent(
-                            type=RUN_FINISHED,
-                            run_id=rid,
-                            session_id=sid,
-                            data={"output": result.output.text()[:2000], "board": meta_board(result)},
-                        )
-                    )
-            except Exception as exc:
+                async for ev in wf.astream_events(
+                    prompt, session_id=sid, run_id=rid, **kwargs
+                ):
+                    if ev.type in (RUN_STARTED, RUN_FINISHED, RUN_ERROR):
+                        continue
+                    await bus.emit(ev)
+                if self.board is not None:
+                    await bus.emit(self.board.snapshot_event(run_id=rid, session_id=sid))
                 await bus.emit(
-                    StreamEvent(type=RUN_ERROR, run_id=rid, session_id=sid, data={"message": str(exc)})
+                    StreamEvent(
+                        type=RUN_FINISHED,
+                        run_id=rid,
+                        session_id=sid,
+                        data={"board": self.board.to_dict() if self.board else None},
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                await bus.emit(
+                    StreamEvent(
+                        type=RUN_ERROR,
+                        run_id=rid,
+                        session_id=sid,
+                        data={"message": str(exc)},
+                    )
                 )
             finally:
                 if self.board is not None:
                     self.board.set_on_change(None)
                 await bus.close()
-
-        def meta_board(result: RunResult) -> Any:
-            return (result.metadata or {}).get("board")
 
         task_h = asyncio.create_task(_runner())
         try:
@@ -852,9 +796,8 @@ class Case:
                     pass
 
     def __repr__(self) -> str:
-        d = self._kwargs.get("dispatch") or self._kwargs.get("fan_out") or "reuse"
-        return f"Case(dispatch={d!r}, board={self.board is not None}, max_rounds={self._kwargs.get('max_rounds')})"
-
-
-# --- Legacy aliases (one release) ---
-ToughTask = Case
+        return (
+            f"Case(dispatch={self._kwargs.get('dispatch')!r}, "
+            f"board={self.board is not None}, "
+            f"max_rounds={self._kwargs.get('max_rounds')})"
+        )
