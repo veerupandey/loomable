@@ -65,6 +65,26 @@ def pp(result: Any) -> None:
         if tool_activity:
             print(f"Tools called: {len(tool_activity)}")
 
+        thoughts = getattr(result, "thoughts", None) or []
+        if thoughts:
+            print("Thoughts:")
+            for thought in thoughts:
+                for line in str(thought).splitlines() or [""]:
+                    print(f"  {line}")
+
+        plan = getattr(result, "plan", None)
+        if plan:
+            print("Plan:")
+            for i, step in enumerate(plan, 1):
+                print(f"  {i}. {step}")
+
+        reasoning = getattr(result, "reasoning", None) or []
+        if reasoning:
+            print("Reasoning:")
+            for segment in reasoning:
+                for line in str(segment).splitlines() or [""]:
+                    print(f"  {line}")
+
         sub_results = getattr(result, "sub_results", None)
         if sub_results:
             print(f"Steps: {len(sub_results)}")

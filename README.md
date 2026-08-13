@@ -114,7 +114,7 @@ def generate_chart(data: str) -> Image:
     """Generate a chart from data."""
     return Image(content=render_chart(data), format="png")
 
-agent = Agent(model=provider, tools=[generate_chart], multimodal=True)
+agent = Agent(model=provider, tools=[generate_chart])
 
 # Pass images as input, get tool-generated media on the result
 result = await agent.arun("Visualize Q4 sales", images=["data.png"])

@@ -29,10 +29,11 @@ from loomable.kernel.models import ModelRequest, ModelResponse
 # ---------------------------------------------------------------------------
 
 
-def test_model_capabilities_default_text_only() -> None:
+def test_model_capabilities_default_multimodal() -> None:
     caps = ModelCapabilities()
-    assert caps.input == frozenset({Modality.TEXT})
+    assert caps.input == frozenset({Modality.TEXT, Modality.IMAGE, Modality.VIDEO})
     assert caps.output == frozenset({Modality.TEXT})
+    assert Modality.AUDIO not in caps.input
 
 
 def test_model_capabilities_is_frozen() -> None:

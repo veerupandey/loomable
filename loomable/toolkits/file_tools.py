@@ -1,8 +1,8 @@
 """loomable.toolkits.file_tools - File I/O toolkit with optional sandboxing.
 
-Provides read_file, write_file, and list_directory tools that resolve paths
-relative to a configurable base directory and reject path traversal escapes.
-Uses only the Python standard library.
+Provides read_file, write_file, write_json, and list_directory tools that resolve
+paths relative to a configurable base directory and reject path traversal escapes.
+Uses only the Python standard library (plus optional Pydantic for schema checks).
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import io
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 from loomable.agent.tools import FunctionTool
 from loomable.toolkits._base import Toolkit
@@ -24,6 +25,9 @@ class FileTools(Toolkit):
     All paths are resolved relative to ``base_dir``. Any path that escapes the
     base directory via traversal (e.g. ``../../etc/passwd``) is rejected with a
     descriptive error string.
+
+    Pass ``json_schema`` (a Pydantic model type) to validate objects written via
+    :meth:`write_json` before they hit disk.
 
     Usage::
 
@@ -38,16 +42,19 @@ class FileTools(Toolkit):
         self,
         *,
         base_dir: str | None = None,
+        json_schema: type | None = None,
         include_tools: list[str] | None = None,
         exclude_tools: list[str] | None = None,
     ) -> None:
         super().__init__(include_tools=include_tools, exclude_tools=exclude_tools)
         self._base_dir = Path(base_dir).resolve() if base_dir else Path.cwd().resolve()
+        self._json_schema = json_schema
 
     def _register_tools(self) -> list[FunctionTool]:
         return [
             FunctionTool(self._read_file, name="read_file"),
             FunctionTool(self._write_file, name="write_file", idempotent=False),
+            FunctionTool(self._write_json, name="write_json", idempotent=False),
             FunctionTool(self._list_directory, name="list_directory"),
         ]
 
@@ -89,6 +96,51 @@ class FileTools(Toolkit):
             return f"Error: Permission denied: {path}"
 
         return f"Successfully wrote {len(content.encode('utf-8'))} bytes to {path}"
+
+    async def _write_json(self, path: str, content: str) -> str:
+        """Parse JSON, optionally validate against json_schema, and write pretty JSON."""
+        safe = self._resolve_safe_path(path)
+        if isinstance(safe, str):
+            return safe
+
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError as exc:
+            return f"Error: Invalid JSON: {exc}"
+
+        if self._json_schema is not None:
+            validated = self._validate_json_schema(data)
+            if isinstance(validated, str):
+                return validated
+            data = validated
+
+        pretty = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+        try:
+            await asyncio.to_thread(self._do_write, safe, pretty)
+        except PermissionError:
+            return f"Error: Permission denied: {path}"
+
+        return f"Successfully wrote validated JSON ({len(pretty.encode('utf-8'))} bytes) to {path}"
+
+    def _validate_json_schema(self, data: Any) -> Any | str:
+        """Validate ``data`` with the configured Pydantic model; return data or error."""
+        schema = self._json_schema
+        assert schema is not None
+        try:
+            if hasattr(schema, "model_validate"):
+                model = schema.model_validate(data)
+                return model.model_dump(mode="json")
+            if hasattr(schema, "parse_obj"):
+                model = schema.parse_obj(data)
+                if hasattr(model, "dict"):
+                    return model.dict()
+                return data
+            # Callable constructor fallback (e.g. dataclass / TypedDict-like).
+            schema(data)  # type: ignore[misc]
+            return data
+        except Exception as exc:  # noqa: BLE001 - surface as tool result string
+            name = getattr(schema, "__name__", "schema")
+            return f"Error: JSON failed {name} validation: {exc}"
 
     async def _list_directory(self, path: str = ".") -> str:
         """List files and directories at the given path."""

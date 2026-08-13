@@ -25,7 +25,7 @@
 | MCP server tools                       | `Agent + mcp_servers`                | `advanced/01_mcp_servers.py`  |
 | Custom graph with conditions           | `Flow + Node + Edge`                 | `advanced/02_custom_flow.py`  |
 | Durable state / pause-resume           | `CheckpointStore`                    | `advanced/03_checkpointing.py`|
-| Multimodal: image input, tool media, feedback | `Agent + multimodal=True + @tool → Image` | `advanced/04_multimodal.py`   |
+| Multimodal: image input, tool media, feedback | `Agent + images= + @tool → Image` | `advanced/04_multimodal.py`   |
 | Simple real-world Q&A / docs / tools           | `Agent + WebSearch/File/PDF/PPT`         | `simple_use_cases/`           |
 | Tough SEV war-room exam (tools→docs→images)    | `Agent + tools + File/PDF/PPT + multimodal` | `escalation_war_room/`     |
 

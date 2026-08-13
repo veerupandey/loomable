@@ -254,7 +254,11 @@ class TestSelfPlanUsesFlow:
             result = asyncio.run(plan_tool._func("Do something complex"))
 
             mock_pae.assert_called_once()
-            assert result == "Plan tool flow result"
+            from loomable.kernel.models import ToolResult
+
+            assert isinstance(result, ToolResult)
+            assert result.content == "Plan tool flow result"
+            assert result.metadata.get("plan_steps") == []
 
     def test_default_routing_without_complexity_router(self):
         """Without a complexity router, agent uses tool-loop or single-shot (no PLAN)."""

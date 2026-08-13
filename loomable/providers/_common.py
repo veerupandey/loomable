@@ -212,6 +212,7 @@ def parse_openai_response(data: dict[str, Any]) -> ModelResponse:
         )
 
     usage = data.get("usage", {}) or {}
+    reasoning = _extract_reasoning_segments(message, data)
     return ModelResponse(
         content=message.get("content") or "",
         tool_calls=tool_calls,
@@ -220,7 +221,38 @@ def parse_openai_response(data: dict[str, Any]) -> ModelResponse:
             "output_tokens": usage.get("completion_tokens", 0),
         },
         metadata={"model": data.get("model", "")},
+        reasoning=reasoning,
     )
+
+
+def _extract_reasoning_segments(
+    message: dict[str, Any], data: dict[str, Any]
+) -> list[str]:
+    """Best-effort extraction of native reasoning / thinking text."""
+    segments: list[str] = []
+
+    def _add(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str) and value.strip():
+            segments.append(value.strip())
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, str) and item.strip():
+                    segments.append(item.strip())
+                elif isinstance(item, dict):
+                    text = item.get("text") or item.get("content") or item.get("thinking")
+                    if isinstance(text, str) and text.strip():
+                        segments.append(text.strip())
+
+    _add(message.get("reasoning_content"))
+    _add(message.get("reasoning"))
+    _add(message.get("thinking"))
+    _add(data.get("reasoning"))
+    # Some OpenAI-compat servers nest reasoning under message.reasoning_details
+    _add(message.get("reasoning_details"))
+    return segments
+
 
 
 # ---------------------------------------------------------------------------

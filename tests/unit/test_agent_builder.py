@@ -4,7 +4,7 @@ Verify that:
 - A minimal config (model only) builds a runnable BuiltAgent with non-null subsystems.
 - Supplied low-level overrides are used verbatim instead of constructed defaults.
 - A missing/invalid model raises AgentConfigError naming the field.
-- Effective capabilities resolve from arg > ModelSpec > text-only default.
+- Effective capabilities resolve from arg > ModelSpec > multimodal default.
 """
 
 from __future__ import annotations
@@ -124,10 +124,20 @@ class TestBuilderOverrides:
 
 
 class TestCapabilities:
-    def test_default_capabilities_are_text_only(self):
+    def test_default_capabilities_are_multimodal(self):
         built = Agent(model=_FakeProvider()).build()
-        assert built.capabilities.input == frozenset({Modality.TEXT})
+        assert built.capabilities.input == frozenset(
+            {Modality.TEXT, Modality.IMAGE, Modality.VIDEO}
+        )
         assert built.capabilities.output == frozenset({Modality.TEXT})
+        assert built.max_tool_iterations == 12
+        assert built.require_final_text is True
+
+    def test_multimodal_flag_is_noop(self):
+        built_on = Agent(model=_FakeProvider(), multimodal=True).build()
+        built_off = Agent(model=_FakeProvider(), multimodal=False).build()
+        assert built_on.capabilities.input == built_off.capabilities.input
+        assert Modality.IMAGE in built_off.capabilities.input
 
     def test_explicit_capabilities_arg_wins(self):
         caps = ModelCapabilities(

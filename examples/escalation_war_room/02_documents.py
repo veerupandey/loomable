@@ -125,26 +125,23 @@ async def gather_evidence(work: Path) -> EvidencePack:
 
 
 async def write_artifacts(work: Path, pack: EvidencePack) -> EscalationPacket:
-    """Scribe writes the human brief via tool; packet comes from response_model.
-
-    Splitting channels avoids ISSUE-WR-003 (unchecked JSON on disk) and makes the
-    machine packet reliable under Gemini tool-only empty finals.
-    """
+    """Scribe writes brief + schema-checked packet JSON via tools."""
 
     agent = Agent(
         model=make_provider(),
         role="War-room Scribe",
-        goal="Write customer-safe brief file and return EscalationPacket JSON",
+        goal="Write customer-safe brief and schema-checked escalation packet",
         instructions=(
             "1) write_file output/war_room_brief.md using the evidence "
             "(impact, hypothesis, SLA, next actions, draft update).\n"
-            "2) Final answer MUST be EscalationPacket JSON only with keys "
-            "incident_id, customer, severity (SEV-*), sla_notes, "
-            "evidence_from_docs, next_actions, confidence."
+            "2) write_json output/escalation_packet.json with EscalationPacket "
+            "fields: incident_id, customer, severity (SEV-*), sla_notes, "
+            "evidence_from_docs, next_actions, confidence.\n"
+            "3) Final answer MUST also be EscalationPacket JSON only."
         ),
-        tools=[FileTools(base_dir=str(work))],
+        tools=[FileTools(base_dir=str(work), json_schema=EscalationPacket)],
         response_model=EscalationPacket,
-        max_tool_iterations=8,
+        max_tool_iterations=10,
     )
     result = await agent.arun(
         "Create war-room outputs from this EvidencePack JSON:\n"
@@ -152,15 +149,15 @@ async def write_artifacts(work: Path, pack: EvidencePack) -> EscalationPacket:
     )
     print(
         f"[scribe tools={len(result.tool_activity or [])}] "
-        f"text_chars={len(result.output.text() or '')}"
+        f"text_chars={len(result.output.text() or '')} "
+        f"reprompted={bool((result.metadata or {}).get('final_text_reprompted'))}"
     )
     packet = result.structured
     assert isinstance(packet, EscalationPacket)
 
     brief = work / "output" / "war_room_brief.md"
     if not brief.exists():
-        # Fallback: synthesize a brief from the packet if the model skipped write_file
-        print("[issue] ISSUE-WR-001/003 scribe skipped write_file; synthesizing brief")
+        print("[issue] scribe skipped write_file; synthesizing brief")
         brief.write_text(
             "# War-room brief (synthesized)\n\n"
             f"- Incident: {packet.incident_id}\n"
@@ -176,7 +173,9 @@ async def write_artifacts(work: Path, pack: EvidencePack) -> EscalationPacket:
         )
 
     packet_path = work / "output" / "escalation_packet.json"
-    packet_path.write_text(packet.model_dump_json(indent=2), encoding="utf-8")
+    if not packet_path.exists():
+        print("[issue] scribe skipped write_json; writing packet from structured output")
+        packet_path.write_text(packet.model_dump_json(indent=2) + "\n", encoding="utf-8")
 
     OUTPUT.mkdir(parents=True, exist_ok=True)
     shutil.copy2(brief, OUTPUT / "war_room_brief.md")
@@ -184,7 +183,7 @@ async def write_artifacts(work: Path, pack: EvidencePack) -> EscalationPacket:
     print("\n======== war_room_brief.md (head) ========\n")
     print(brief.read_text(encoding="utf-8")[:1600])
     print("\n======== escalation_packet.json ========\n")
-    print(packet.model_dump_json(indent=2))
+    print(packet_path.read_text(encoding="utf-8"))
     return packet
 
 
