@@ -3,6 +3,7 @@ workspace_workflow/
 workspace_stress/
 workspace_stress_debug*/
 workspace_challenge/
+workspace_case/
 workspace_tough/
 output/
 .checkpoints*/

@@ -2452,10 +2452,9 @@ class Agent:
         think_tool: bool = False,
         plan_tool: bool = False,
         memory_tool: bool = False,
-        # Case / tough mode (plan → dispatch → synthesize → accept):
+        # Case mode (plan → dispatch → synthesize → accept):
         mode: str | None = None,
-        fan_out: str = "map",
-        dispatch: str | None = None,
+        dispatch: str = "reuse",
         accept: Any = None,
         board: bool = True,
         max_rounds: int | None = None,
@@ -2563,14 +2562,12 @@ class Agent:
         self._plan_tool = plan_tool
         self._memory_tool = memory_tool
         self._mode = (mode or "").strip().lower() or None
-        self._fan_out = fan_out
-        self._dispatch = dispatch
+        self._dispatch = dispatch if dispatch in ("reuse", "spawn") else "reuse"
         self._accept = accept
         self._board = board
         self._max_rounds = max_rounds
         self._max_plan_steps = max_plan_steps
         self._feedback_media = feedback_media
-        # Prefer accept= over verifier= for case mode when both set
         if accept is not None and self._verifier is None:
             self._verifier = accept
 
@@ -2833,26 +2830,11 @@ class Agent:
         context:
             Optional runtime context dict accessible during the run.
         """
-        # Case / tough mode: plan → dispatch → synthesize → accept.
-        if self._mode in ("tough", "plan_act_verify", "plan", "case"):
-            try:
-                from loomable.case import Case
+        # Case mode: plan → dispatch → synthesize → accept.
+        if self._mode == "case":
+            from loomable.case import Case
 
-                result = await Case.from_agent(self).arun(input)
-            except ImportError:
-                from loomable.tough import ToughTask
-
-                max_iters = max(1, int(self._max_verify_retries) + 1)
-                result = await ToughTask(
-                    model=self._model,
-                    verifier=self._verifier,
-                    max_iterations=max_iters,
-                    max_steps=self._max_plan_steps,
-                    fan_out=self._fan_out if self._fan_out in ("map", "spawn") else "map",
-                    session_id=self._session_id,
-                    tools=list(self._tools) if self._tools else None,
-                    modalities=self._modalities_raw,
-                ).arun(input)
+            result = await Case.from_agent(self).arun(input)
             if self._on_complete is not None:
                 self._on_complete(result)
             return result
@@ -2906,9 +2888,9 @@ class Agent:
     ) -> "AsyncIterator[Any]":
         """Yield AG-UI-compatible stream events (lifecycle, tools, text).
 
-        When ``mode`` is ``case`` / ``tough``, streams Case pipeline events.
+        When ``mode="case"``, streams Case pipeline events.
         """
-        if self._mode in ("tough", "plan_act_verify", "plan", "case"):
+        if self._mode == "case":
             from loomable.case import Case
 
             case = Case.from_agent(self)

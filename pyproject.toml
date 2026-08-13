@@ -1,7 +1,23 @@
 [project]
 name = "loomable"
 version = "0.1.0"
+description = "Enterprise AI agent framework — Agent, Team, Workflow, Case, AG-UI SSE"
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
+authors = [
+    { name = "Rakesh Pandey", email = "rakeshpandey820@gmail.com" },
+]
+keywords = ["ai", "agents", "llm", "workflow", "ag-ui", "sse"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "fastapi>=0.140.7",
     "httpx>=0.27.0",
@@ -11,11 +27,18 @@ dependencies = [
     "uvicorn>=0.51.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/veerupandey/loomable"
+Repository = "https://github.com/veerupandey/loomable"
+Issues = "https://github.com/veerupandey/loomable/issues"
+Documentation = "https://github.com/veerupandey/loomable/blob/main/docs/API.md"
+
 [project.optional-dependencies]
 dev = [
     "hypothesis>=6.100.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+    "pytest-httpx>=0.35.0",
 ]
 pdf = ["pypdf"]
 ppt = ["python-pptx"]

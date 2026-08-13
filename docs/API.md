@@ -1,6 +1,7 @@
 # Loomable — High-Level API Reference
 
-A lightweight, production-grade agent framework. Build agents in 3 lines, scale to multi-agent workflows with memory, streaming, and tool orchestration.
+A production-grade agent framework. Build agents in a few lines, scale to Teams,
+Workflows, and Cases with SharedState, HITL, checkpoints, and AG-UI SSE.
 
 ---
 
@@ -9,6 +10,7 @@ A lightweight, production-grade agent framework. Build agents in 3 lines, scale 
 - [Progressive Disclosure (Levels 0–7)](#progressive-disclosure-levels-07)
 - [Quick Start](#quick-start)
 - [Agent](#agent)
+- [Case](#case)
 - [Subagents & Teams](#subagents--teams)
 - [Tools](#tools)
 - [Model Providers](#model-providers)
@@ -16,6 +18,7 @@ A lightweight, production-grade agent framework. Build agents in 3 lines, scale 
 - [Structured Output](#structured-output)
 - [Multimodal I/O](#multimodal-io)
 - [Streaming](#streaming)
+- [AG-UI SSE](#ag-ui-sse)
 - [Flow Engine](#flow-engine)
 - [Knowledge / RAG](#knowledge--rag)
 - [Production Hardening](#production-hardening)
@@ -404,6 +407,34 @@ result.tool_activity       # tool outcomes from this run
 result.metadata            # {"stop_reason": "final", ...}
 result.trace               # list of Event objects (when debug=True)
 ```
+
+---
+
+## Case
+
+Long-running goal work with an optional WorkItems board. Compiles to a `Workflow`
+(plan → dispatch → synthesize → accept) and shares `SharedState` with Flow engines.
+
+```python
+from loomable import Case
+
+case = Case(
+    model=provider,
+    goal="Close INC-88421 with SEV packet",
+    board=True,              # open → in_progress → blocked → done
+    dispatch="spawn",        # or "reuse" (one worker mapped over steps)
+    accept=lambda out, ctx: "SEV-" in out.text(),
+    max_rounds=3,
+)
+result = await case.arun(email)
+print(result.metadata["board"])
+
+# Same pipeline as Agent(mode="case", ...)
+agent = Agent(model=provider, mode="case", dispatch="reuse", accept=check)
+```
+
+`Case.as_workflow()` returns a nestable `Workflow`. Board mutations stream as
+`STATE_SNAPSHOT` / `STATE_DELTA` via `astream_events`.
 
 ---
 
@@ -984,6 +1015,8 @@ agent = Agent(
 
 ## Streaming
 
+### Token chunks (NDJSON-friendly)
+
 ```python
 agent = Agent(model="openai:gpt-4o-mini")
 
@@ -994,15 +1027,55 @@ async for chunk in agent.astream("Tell me about AI"):
         print()  # final chunk
 ```
 
-- Real token-level deltas when the provider supports `stream()` (OpenAI, Azure, Anthropic, Groq, Ollama, Gemini)
+- Real token-level deltas when the provider supports `stream()`
 - Automatic fallback to chunked output for non-streaming providers
 - Same context assembly, memory, and capability gating as `arun()`
+
+### AG-UI events (in-process)
+
+```python
+async for ev in agent.astream_events(prompt):
+    print(ev.type, ev.data)
+# RUN_STARTED → TEXT_* / TOOL_* → RUN_FINISHED
+
+async for ev in case.astream_events(prompt):
+    ...  # also NODE_* and STATE_*
+
+async for ev in workflow.astream_events(prompt):
+    ...  # NODE_STARTED / NODE_FINISHED
+```
+
+---
+
+## AG-UI SSE
+
+CopilotKit-compatible event types over `text/event-stream`. No hard CopilotKit dependency.
+
+| Type family | Events |
+|-------------|--------|
+| Lifecycle | `RUN_STARTED`, `RUN_FINISHED`, `RUN_ERROR` |
+| Text | `TEXT_MESSAGE_START`, `TEXT_MESSAGE_CONTENT`, `TEXT_MESSAGE_END` |
+| Tools | `TOOL_CALL_START`, `TOOL_CALL_ARGS`, `TOOL_CALL_END`, `TOOL_CALL_RESULT` |
+| Graph | `NODE_STARTED`, `NODE_FINISHED` |
+| State | `STATE_SNAPSHOT`, `STATE_DELTA` |
+
+```python
+from fastapi import FastAPI
+from loomable.serve import mount_agent, mount_case
+
+app = FastAPI()
+mount_agent(app, agent, prefix="/agent")
+mount_case(app, case, prefix="/cases")
+# POST /agent/run/events  → text/event-stream
+# POST /cases/run/events  → text/event-stream
+# POST /agent/run/stream  → application/x-ndjson (legacy)
+```
 
 ---
 
 ## Flow Engine
 
-The unified composition model replacing the previous `Pipeline`, `Orchestrator`, and `AutoPlan` classes. One primitive (`Runnable`), one composition path (`Flow`).
+The unified composition model. One primitive (`Runnable`), one composition path (`Flow` / `Workflow`).
 
 ### Core Concepts
 
@@ -1010,7 +1083,9 @@ The unified composition model replacing the previous `Pipeline`, `Orchestrator`,
 |---------|------|
 | `Runnable` | The protocol everything implements: `arun(input, *, context) -> RunResult` |
 | `Loop` | Repeat a Runnable until a Verifier passes or a cap is hit |
-| `Flow` | A directed graph of Runnables with shared state and pluggable engines |
+| `Workflow` | Fluent multi-step process (compiles to Flow) |
+| `Flow` | Directed graph of Runnables with **SharedState** and pluggable engines |
+| `SharedState` | Key/value blackboard for the run (node outputs, `plan_steps`, board, …) |
 | `Node` | A vertex in a Flow wrapping one Runnable |
 | `Edge` | A directed connection between nodes (optionally gated by a condition) |
 | `Map` | Fan-out one Runnable over a runtime list |
@@ -1184,16 +1259,35 @@ agent = Agent(
 
 ## Serving
 
-### HTTP (FastAPI)
+### HTTP (FastAPI) — Agent
 
 ```python
-from loomable.serve import FastAPIAdapter
+from fastapi import FastAPI
+from loomable import Agent
+from loomable.serve import mount_agent, FastAPIAdapter
 
-agent = Agent(model="openai:gpt-4o-mini", tools=[search])
-app = FastAPIAdapter(agent.build()).app()
+agent = Agent(model=provider, tools=[search])
 
-# Run with: uvicorn app:app
-# Routes: GET /health, POST /run, POST /run/stream
+app = FastAPI()
+mount_agent(app, agent, prefix="/agent")
+# GET  /agent/health
+# POST /agent/run
+# POST /agent/run/stream   (NDJSON)
+# POST /agent/run/events   (AG-UI SSE)
+
+# Or dual-mount at / and /agent:
+app = FastAPIAdapter(agent).app()
+```
+
+### HTTP (FastAPI) — Case
+
+```python
+from loomable import Case
+from loomable.serve import mount_case
+
+case = Case(model=provider, goal="...", board=True, accept=ok)
+mount_case(app, case, prefix="/cases")
+# POST /cases/run/events → text/event-stream
 ```
 
 ### MCP Server (expose agent as a tool)
@@ -1201,7 +1295,7 @@ app = FastAPIAdapter(agent.build()).app()
 ```python
 from loomable.serve import MCPServerAdapter
 
-agent = Agent(model="openai:gpt-4o-mini", tools=[search])
+agent = Agent(model=provider, tools=[search])
 server = MCPServerAdapter(agent.build()).server()
 # Other MCP clients can discover and call this agent as a tool
 ```

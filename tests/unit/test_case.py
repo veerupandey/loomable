@@ -1,10 +1,10 @@
-"""Unit tests for Case / WorkItems board / aliases."""
+"""Unit tests for Case, Board, and SharedState plan glue."""
 
 from __future__ import annotations
 
 import pytest
 
-from loomable import Agent, Case, ToughTask, plan_act_verify
+from loomable import Agent, Case, build_case_workflow
 from loomable.agent import ModelSpec
 from loomable.case import Board, parse_plan_steps
 from loomable.flow.loop import VerdictResult
@@ -34,7 +34,7 @@ class _Scripted:
                 content='["Gather ticket facts", "Assess SLA risk", "Draft SEV packet"]',
                 usage={"input_tokens": 5, "output_tokens": 10},
             )
-        if "verification failed" in blob or "failed verification" in blob:
+        if "verification failed" in blob or "failed verification" in blob or "failed acceptance" in blob:
             return ModelResponse(
                 content="FINAL SEV-1 packet with evidence and next actions.",
                 usage={"input_tokens": 5, "output_tokens": 8},
@@ -59,13 +59,14 @@ def _model() -> ModelSpec:
     return ModelSpec(provider="scripted", provider_impl=_Scripted())
 
 
-def _sev_verifier(output, context) -> VerdictResult:
+def _sev_accept(output, context) -> VerdictResult:
     ok = "SEV-" in (output.text() or "")
     return VerdictResult(ok=ok, detail="missing SEV-" if not ok else "")
 
 
-def test_parse_plan_steps_still_works() -> None:
+def test_parse_plan_steps_json_and_bullets() -> None:
     assert parse_plan_steps('["A", "B"]') == ["A", "B"]
+    assert parse_plan_steps("- one\n- two") == ["one", "two"]
 
 
 def test_board_lifecycle() -> None:
@@ -75,7 +76,40 @@ def test_board_lifecycle() -> None:
     board.update(item.id, status="in_progress")
     board.complete(item.id)
     assert board.list()[0].status == "done"
-    assert "items" in board.to_dict()
+
+
+@pytest.mark.asyncio
+async def test_function_runnable_dict_writes_state_updates() -> None:
+    from loomable.flow.runnable import FunctionRunnable
+
+    async def planner(inp):
+        return {"plan_steps": ["a", "b"]}
+
+    result = await FunctionRunnable(planner).arun("task")
+    assert result.metadata["state_updates"]["plan_steps"] == ["a", "b"]
+    assert result.structured["plan_steps"] == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_plan_and_execute_shared_state_glue() -> None:
+    from loomable.flow.helpers import plan_and_execute
+
+    async def planner(inp):
+        return {"plan_steps": ["step-one", "step-two"]}
+
+    async def worker(inp):
+        return f"worked:{inp}"
+
+    async def synthesizer(inp, *, context=None):
+        pieces = []
+        if context is not None and context.shared_state is not None:
+            pieces = context.shared_state.get("map") or []
+        return " | ".join(pieces)
+
+    flow = plan_and_execute(planner, worker, synthesizer)
+    result = await flow.arun("do it")
+    assert "worked:step-one" in result.output.text()
+    assert "worked:step-two" in result.output.text()
 
 
 @pytest.mark.asyncio
@@ -85,30 +119,15 @@ async def test_case_dispatch_reuse_with_accept() -> None:
         goal="Close INC-88421",
         board=True,
         dispatch="reuse",
-        accept=_sev_verifier,
+        accept=_sev_accept,
         max_rounds=4,
         max_steps=3,
     )
     result = await case.arun("Handle INC-88421")
     assert result.metadata.get("case") is True
-    assert result.metadata.get("tough") is True
     assert "SEV-" in result.output.text()
     assert result.metadata.get("board")
     assert len(result.metadata["board"]["items"]) >= 1
-
-
-@pytest.mark.asyncio
-async def test_tough_task_alias_still_works() -> None:
-    task = ToughTask(
-        model=_model(),
-        fan_out="map",
-        verify=_sev_verifier,
-        max_iterations=4,
-        max_steps=3,
-    )
-    result = await task.arun("Handle INC-88421 for BharatNova")
-    assert result.metadata.get("tough") is True
-    assert "SEV-" in result.output.text()
 
 
 @pytest.mark.asyncio
@@ -117,7 +136,7 @@ async def test_agent_mode_case() -> None:
         model=_model(),
         mode="case",
         dispatch="reuse",
-        accept=_sev_verifier,
+        accept=_sev_accept,
         max_rounds=4,
         max_plan_steps=3,
         modalities="text",
@@ -128,24 +147,8 @@ async def test_agent_mode_case() -> None:
 
 
 @pytest.mark.asyncio
-async def test_agent_mode_tough_alias() -> None:
-    agent = Agent(
-        model=_model(),
-        mode="tough",
-        fan_out="map",
-        verifier=_sev_verifier,
-        max_verify_retries=3,
-        max_plan_steps=3,
-        modalities="text",
-    )
-    result = await agent.arun("Escalate INC-88421")
-    assert result.metadata.get("tough") is True
-    assert "SEV-" in result.output.text()
-
-
-@pytest.mark.asyncio
-async def test_plan_act_verify_returns_workflow() -> None:
-    wf = plan_act_verify(model=_model(), dispatch="reuse", max_steps=2)
+async def test_build_case_workflow() -> None:
+    wf = build_case_workflow(model=_model(), dispatch="reuse", max_steps=2)
     assert wf.name == "case"
     result = await wf.arun("plan a caching strategy")
     assert result.output.text()
@@ -158,7 +161,7 @@ async def test_case_astream_events_board_delta() -> None:
         goal="Close INC",
         board=True,
         dispatch="reuse",
-        accept=_sev_verifier,
+        accept=_sev_accept,
         max_rounds=4,
         max_steps=3,
     )

@@ -1,13 +1,13 @@
-"""loomable - Enterprise-grade AI agent framework.
+"""loomable — enterprise AI agent framework.
 
-High-level imports (preferred)::
+High-level imports::
 
     from loomable import Agent, Team, Workflow, Case, Step, Loop, tool
 
 Progressive disclosure:
   Agent → Team → Workflow (+ Step / Loop / branch / parallel)
-  Case / plan_act_verify for goal + WorkItems + dispatch + accept
-  Flow / engines / edges remain available for advanced graph control.
+  Case for goal + WorkItems board + dispatch + accept
+  Flow / engines / edges for advanced graph control
 """
 
 from __future__ import annotations
@@ -26,11 +26,9 @@ from loomable.agent import (
 from loomable.case import (
     Board,
     Case,
-    ToughTask,
     WorkItem,
-    WorkItems,
+    build_case_workflow,
     map_specialists,
-    plan_act_verify,
 )
 from loomable.flow import (
     Condition,
@@ -56,7 +54,6 @@ from loomable.persist import (
 
 __all__ = [
     "__version__",
-    # Core primitives
     "Agent",
     "BuiltAgent",
     "Team",
@@ -64,7 +61,6 @@ __all__ = [
     "Case",
     "Board",
     "WorkItem",
-    "WorkItems",
     "Step",
     "Loop",
     "Condition",
@@ -74,22 +70,17 @@ __all__ = [
     "ContextPolicy",
     "spawn_specialist",
     "FlowPaused",
-    # Case (plan → dispatch → accept); ToughTask alias one release
-    "ToughTask",
-    "plan_act_verify",
+    "build_case_workflow",
     "map_specialists",
     "Verifier",
     "VerdictResult",
-    # Helpers (aliases that return Flow)
     "sequential",
     "parallel",
     "route",
     "coordinate",
     "plan_and_execute",
-    # Durability
     "JsonFileCheckpointer",
     "SQLiteCheckpointer",
     "InMemoryCheckpointer",
-    # Advanced escape hatch
     "Flow",
 ]

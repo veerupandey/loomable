@@ -236,7 +236,7 @@ class MapNode:
                 )
 
         # 5. Assemble final RunResult + write texts into SharedState["map"]
-        #    so synthesizers / ToughTask can consume step outputs easily.
+        #    so synthesizers / Case can consume step outputs easily.
         total = len(items)
         succeeded = len(successful_results)
         failed = len(map_errors)

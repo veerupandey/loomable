@@ -1,41 +1,57 @@
 <div align="center" id="top">
   <h1>loomable</h1>
-  <p>Build agents that think, use tools, and compose into flows.</p>
+  <p>Enterprise AI agents — Agent · Team · Workflow · Case · AG-UI SSE</p>
+  <p>
+    <a href="https://github.com/veerupandey/loomable/actions/workflows/ci.yml"><img src="https://github.com/veerupandey/loomable/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+    <img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+" />
+    <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT" />
+    <img src="https://img.shields.io/badge/status-alpha-orange.svg" alt="Status: alpha" />
+  </p>
 </div>
 
 <p align="center">
   <a href="#get-started">Get Started</a> ·
-  <a href="#features">Features</a> ·
+  <a href="#core-primitives">Primitives</a> ·
+  <a href="#ag-ui-sse">AG-UI SSE</a> ·
   <a href="#examples">Examples</a> ·
   <a href="docs/API.md">API Reference</a>
 </p>
 
 ## Introduction
 
-Loomable is a lightweight Python framework for building AI agents. Three tiers, one interface:
+Loomable is a Python framework for production agent systems. One `Runnable` contract (`arun` → `RunResult`), progressive disclosure:
 
-- **Agent** — single model call with tools, memory, and knowledge
-- **Loop** — retry with verification until correct
-- **Flow** — directed graph of agents, functions, and loops
+| Primitive | Role |
+|-----------|------|
+| **Agent** | Model + tools + memory + structured I/O |
+| **Team** | Specialists (broadcast / sequential / coordinate) |
+| **Workflow** | Durable multi-step process (HITL, checkpoints, SharedState) |
+| **Case** | Goal + WorkItems board + plan → dispatch → accept |
+| **Flow** | Low-level graph escape hatch |
 
-Everything is a `Runnable`. Agents compose into loops, loops compose into flows, flows compose into flows.
+Everything that runs is a `Runnable`. Agents nest in workflows; cases compile to workflows; workflows stream the same AG-UI events as agents.
 
 ```python
-from loomable.agent import Agent, tool
-from loomable.providers.openai import AzureOpenAIProvider
+from loomable import Agent, Case, Workflow, tool
+from loomable.serve import mount_agent
 
 @tool
 def search(query: str) -> str:
     """Search the knowledge base."""
-    return "Result: Python was created in 1991."
+    return "Python was created in 1991."
 
-agent = Agent(
-    model=AzureOpenAIProvider(),
-    instructions="You are a research assistant.",
-    tools=[search],
-)
+agent = Agent(model=provider, tools=[search], goal="Answer precisely")
 result = await agent.arun("When was Python created?")
-print(result.output.text())
+
+case = Case(
+    model=provider,
+    goal="Close INC-88421",
+    board=True,
+    dispatch="spawn",
+    accept=lambda out, ctx: "SEV-" in out.text(),
+)
+async for event in case.astream_events(email):
+    ...  # RUN_* / NODE_* / STATE_* / TEXT_*
 ```
 
 ## Get Started
@@ -43,235 +59,161 @@ print(result.output.text())
 ### Installation
 
 ```bash
-# From GitHub (recommended until published to PyPI)
 pip install "loomable @ git+https://github.com/veerupandey/loomable.git"
-
-# Or with uv
+# or
 uv add "loomable @ git+https://github.com/veerupandey/loomable.git"
-
-# Or clone and install locally
-git clone https://github.com/veerupandey/loomable.git
-cd loomable
-pip install -e .
+# or
+git clone https://github.com/veerupandey/loomable.git && cd loomable && pip install -e ".[dev]"
 ```
 
-### Set up your provider
+### Provider credentials
 
 ```bash
-# Azure OpenAI
-export AZURE_OPENAI_ENDPOINT="https://your-resource.openai.azure.com"
-export AZURE_OPENAI_API_KEY="your-key"
-export AZURE_OPENAI_DEPLOYMENT_NAME="gpt-4o-mini"
-
-# Or OpenAI
-export OPENAI_API_KEY="sk-..."
+export GEMINI_API_KEY="..."          # Gemini
+# or
+export OPENAI_API_KEY="sk-..."       # OpenAI
+# or Azure: AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_API_KEY / AZURE_OPENAI_DEPLOYMENT_NAME
 ```
 
 ### Your first agent
 
 ```python
 import asyncio
-from loomable.agent import Agent
-from loomable.providers.openai import AzureOpenAIProvider
+from loomable import Agent
+from loomable.providers.gemini import GeminiProvider
 
-agent = Agent(
-    model=AzureOpenAIProvider(),
-    instructions="You are a helpful assistant.",
-)
-
-result = asyncio.run(agent.arun("What is the capital of France?"))
-print(result.output.text())
-# => The capital of France is Paris.
+agent = Agent(model=GeminiProvider(), instructions="Be concise.")
+print(asyncio.run(agent.arun("Capital of France?")).output.text())
 ```
 
-### Add tools
+## Core primitives
+
+### Agent
 
 ```python
-from loomable.agent import Agent, tool
-from loomable.providers.openai import AzureOpenAIProvider
+from loomable import Agent, tool
 
-@tool
-def multiply(a: int, b: int) -> int:
-    """Multiply two numbers."""
-    return a * b
-
-agent = Agent(
-    model=AzureOpenAIProvider(),
-    tools=[multiply],
-)
+agent = Agent(model=provider, tools=[multiply], response_model=Packet)
 result = await agent.arun("What is 7 * 8?")
 ```
 
-The agent enters a tool-use loop automatically: call tools, feed results back, repeat until done.
-
-### Multimodal — images, audio, tool media
+### Workflow (+ SharedState)
 
 ```python
-from loomable.agent import Agent, tool, Image
+from loomable import Workflow, JsonFileCheckpointer
 
-@tool
-def generate_chart(data: str) -> Image:
-    """Generate a chart from data."""
-    return Image(content=render_chart(data), format="png")
-
-agent = Agent(model=provider, tools=[generate_chart])
-
-# Pass images as input, get tool-generated media on the result
-result = await agent.arun("Visualize Q4 sales", images=["data.png"])
-result.images[0].save("chart.png")  # save tool-generated image
-print(result.text)                  # model's text response
+wf = (
+    Workflow("sev", session_id="inc-1", checkpointer=cp)
+    .step("gather", gatherer)
+    .parallel(analyst=analyst, visual=visual)
+    .step("scribe", scribe, confirm=True)  # HITL
+)
+result = await wf.arun(email)
+# SharedState holds per-node outputs + plan_steps / board keys
+print(wf.state.get("gather"))
 ```
 
-### Add a loop
+### Case (goal + board)
 
 ```python
-from loomable.agent import Agent
-from loomable.flow import Loop
+from loomable import Case
 
-agent = Agent(model=provider, instructions="Write a haiku (3 lines).")
-
-loop = Loop(
-    body=agent,
-    verifier=lambda output, ctx: len(output.text().strip().split("\n")) == 3,
-    max_iterations=3,
+case = Case(
+    model=provider,
+    goal="Close INC-88421 with SEV packet",
+    board=True,                 # WorkItems: open → in_progress → blocked → done
+    dispatch="reuse",           # or "spawn"
+    accept=packet_ok,
+    max_rounds=3,
 )
-result = await loop.arun("Write a haiku about code.")
+result = await case.arun(email)
+print(result.metadata["board"])
 ```
 
-### Compose a flow
+### Team
 
 ```python
-from loomable.flow import sequential, parallel, coordinate, Flow, Edge
+from loomable import Team
 
-# --- Helpers (most common) ---
-
-# Sequential: research → draft → edit
-pipeline = sequential(research_fn, draft_fn, edit_fn)
-
-# Parallel: run 3 reviewers concurrently
-reviews = parallel(security_fn, performance_fn, ux_fn)
-
-# Coordinate: workers in parallel, then a manager synthesizes
-team = coordinate(
-    workers=[security_fn, performance_fn, ux_fn],
-    manager=synthesize_fn,
-)
-result = await team.arun("Review this pull request")
-
-# --- Low-level Flow (custom graph topology) ---
-
-flow = Flow(
-    nodes={"research": research_fn, "draft": draft_fn, "review": review_fn},
-    edges=[
-        Edge(source="research", target="draft"),
-        Edge(source="research", target="review"),  # fan-out
-    ],
-    engine="parallel",
-)
-result = await flow.arun("Build a feature spec")
+team = Team(members=[sre, legal, exec], mode="broadcast", hard=True)
+result = await team.arun(brief)
 ```
+
+## AG-UI SSE
+
+First-class CopilotKit / AG-UI-compatible events — no hard CopilotKit dependency.
+
+```python
+from fastapi import FastAPI
+from loomable.serve import mount_agent, mount_case
+
+app = FastAPI()
+mount_agent(app, agent, prefix="/agent")  # POST /agent/run/events
+mount_case(app, case, prefix="/cases")    # POST /cases/run/events
+
+# In-process:
+async for ev in agent.astream_events(prompt):
+    print(ev.type)  # RUN_STARTED, TEXT_MESSAGE_CONTENT, TOOL_CALL_*, RUN_FINISHED
+```
+
+Legacy NDJSON remains at `POST /run/stream`.
 
 ## Features
 
 | Feature | What it does |
-|---------|-------------|
-| **Function tools** | `@tool` decorator — auto JSON schema from type hints |
-| **Tool-use loop** | Model calls tools, results feed back, until done |
-| **Think & Plan** | Built-in reasoning scratchpad and dynamic task decomposition |
-| **Memory** | Conversational history with automatic compaction |
-| **Knowledge (RAG)** | Embed docs at build time, recall into context at run time |
-| **Multimodal I/O** | Image/audio/video input, tool media output, feedback injection |
-| **Tiered routing** | Primary/fallback model tiers with automatic failover |
-| **Structured I/O** | Pydantic/dataclass input validation and output parsing |
-| **Verification** | Verifier protocol — same interface for Agent, Loop, and Flow |
-| **Skills** | Load tool packages from directories |
-| **MCP** | Connect to Model Context Protocol servers |
-| **HITL** | Pre/post hooks, tool approval gates, pause & resume |
-| **Parallel flows** | Concurrent branches with result collection |
-| **Routing** | Dynamic branch selection based on input |
-| **Coordination** | Workers + manager synthesis pattern |
-| **Observability** | Structured events, traces, and run metadata |
+|---------|--------------|
+| **Function tools** | `@tool` — JSON schema from type hints |
+| **Tool-use loop** | Automatic tool iteration until final answer |
+| **Require tools** | Path-constrained side-effect enforcement |
+| **Memory** | Session / user / tiered stores + compaction |
+| **Knowledge (RAG)** | Embed at build, recall at run |
+| **Multimodal I/O** | Image / audio / video in and out |
+| **Structured I/O** | Pydantic / dataclass schemas |
+| **Verification** | Same verifier protocol on Agent, Loop, Case |
+| **HITL** | Fluent `confirm=True` + `approve()` + resume |
+| **Checkpoints** | JsonFile / SQLite / in-memory durability |
+| **Team modes** | broadcast / sequential / coordinate (+ hard) |
+| **Case board** | WorkItems + `STATE_SNAPSHOT` / `STATE_DELTA` |
+| **AG-UI SSE** | Lifecycle, text, tools, nodes, state |
+| **MCP / Skills** | External tool packages |
+| **Observability** | Structured events and run metadata |
 
 ## Examples
 
 ```
 examples/
-├── agents/          # Single agent patterns (start here)
-├── subagents/       # Multi-agent delegation
-├── patterns/        # Flow composition patterns
-├── memory/          # Memory and persistence
-└── advanced/        # MCP, custom flows, multimodal
+├── agents/               # Start here
+├── subagents/            # Delegation & Team
+├── patterns/             # Loop / pipeline / parallel / plan-execute
+├── memory/               # Session & shared memory
+├── advanced/             # MCP, checkpoints, multimodal
+├── simple_use_cases/     # News, research, docs
+└── escalation_war_room/  # Full SEV ladder (Case + SSE)
 ```
-
-Run any example:
 
 ```bash
 python examples/agents/01_hello_world.py
+python examples/escalation_war_room/10_case.py
+python examples/escalation_war_room/12_agent_agui_sse.py
 ```
 
-### Agents (`examples/agents/`)
-
-| File | What it shows |
-|------|---------------|
-| `01_hello_world.py` | Minimal agent — 3 lines |
-| `02_with_tools.py` | `@tool` decorator, automatic tool loop |
-| `03_structured_io.py` | Input validation + structured output |
-| `04_with_memory.py` | Multi-turn conversation memory |
-| `05_with_knowledge.py` | RAG — embed docs, recall at runtime |
-| `06_production.py` | Resilience, hooks, observability |
-
-### Sub-agents (`examples/subagents/`)
-
-| File | What it shows |
-|------|---------------|
-| `01_simple_delegation.py` | Basic sub-agent delegation |
-| `02_with_memory_sharing.py` | Shared session across agents |
-| `03_nested_delegation.py` | Multi-level delegation chains |
-| `04_team_modes.py` | Coordinate/parallel team modes |
-
-### Flow Patterns (`examples/patterns/`)
-
-| File | What it shows |
-|------|---------------|
-| `01_retry_loop.py` | Retry until verifier passes |
-| `02_pipeline.py` | Sequential steps |
-| `03_fan_out.py` | Parallel branches |
-| `04_router.py` | Dynamic routing by intent |
-| `05_plan_execute.py` | Plan → Map → Synthesize |
-| `06_nested_composition.py` | Flows inside flows |
-
-### Memory (`examples/memory/`)
-
-| File | What it shows |
-|------|---------------|
-| `01_session_memory.py` | Session-scoped memory |
-| `02_user_memory.py` | Cross-conversation user memory |
-| `03_flow_shared_memory.py` | TieredMemoryStore across flow nodes |
-
-### Advanced (`examples/advanced/`)
-
-| File | What it shows |
-|------|---------------|
-| `01_mcp_servers.py` | MCP server tools |
-| `02_custom_flow.py` | Custom graph with conditions |
-| `03_checkpointing.py` | Durable state / pause-resume |
-| `04_multimodal.py` | Image input, tool media output, feedback injection |
+See [`examples/README.md`](examples/README.md) for the full map.
 
 ## Architecture
 
 ```
 loomable/
-├── agent/       # Tier 1: Agent builder, tools, memory, reasoning
-├── media/       # High-level media classes (Image, Audio, Video, File)
-├── flow/        # Tier 2 & 3: Loop, Flow, engines, helpers
-├── content/     # Input/output coercion and media types
-├── kernel/      # Core primitives (never modified by extensions)
-├── providers/   # Model providers: OpenAI, Azure, Anthropic, Gemini, Ollama
-├── persist/     # Checkpointing and resume
-└── serve/       # FastAPI + MCP adapters
+├── agent/       # Agent, Team, tools, memory, events
+├── case.py      # Case + Board
+├── stream/      # AG-UI StreamEvent + AsyncStreamBus
+├── flow/        # Workflow, Flow, Loop, engines, SharedState
+├── content/     # Media parts & coercion
+├── kernel/      # Core primitives (import-independent)
+├── providers/   # OpenAI, Azure, Anthropic, Gemini, Groq, Ollama
+├── persist/     # Checkpointers
+├── serve/       # FastAPI + MCP adapters
+└── media/       # High-level Image / Audio / Video helpers
 ```
-
-The kernel is import-independent — it never imports from agent, content, serve, or providers.
 
 ## Providers
 
@@ -284,18 +226,15 @@ The kernel is import-independent — it never imports from agent, content, serve
 | Groq | `GroqProvider` |
 | Ollama | `OllamaProvider` |
 
-All providers read credentials from environment variables by default.
-
-## Contributing
-
-PRs welcome. Run tests with:
+## Development
 
 ```bash
-python -m pytest tests/
+pip install -e ".[dev]"
+python -m pytest tests/unit -q
 ```
 
 ## License
 
-MIT
+[MIT](LICENSE)
 
 <p align="right"><a href="#top">↑ Back to top</a></p>

@@ -1,40 +1,37 @@
-# Escalation War Room — tough real-world Agent exam
+# Escalation War Room
 
-**Scenario:** AcmePay (B2B UPI / settlement SaaS) has a **SEV-1** with partner bank
-**BharatNova**. Settlement batches are failing. You are building the on-call
-**Escalation Analyst** agent that a human war-room lead will trust.
+Real-world SEV exam for Loomable: AcmePay settlement failure with partner bank
+**BharatNova** (INC-88421). Build an on-call Escalation Analyst a war-room lead can trust.
 
-## Toughness ladder (build in order)
+## Ladder
 
-| Phase | What we prove | Script |
-|------|----------------|--------|
-| **1a** | Agent → domain tools → unstructured brief + structured JSON | `01_tools_and_io.py` |
-| **1b** | PDF / PPT / Markdown **input + output** | `02_documents.py` |
-| **1c** | Image **input** + tool **image output** (multimodal) | `03_multimodal.py` |
-| 2 | Memory L1 / L2 / L3 across shifts *(later)* | — |
-| 3 | Unify workflow / flow / graph API + complex orchestration *(later)* | — |
-| 4 | Skills + MCP + plan + multi-agent war room *(later)* | — |
+| # | Script | Proves |
+|---|--------|--------|
+| 01 | `01_tools_and_io.py` | Domain tools → brief + structured JSON |
+| 02 | `02_documents.py` | PDF / PPT / Markdown I/O |
+| 03 | `03_multimodal.py` | Image input + tool image output |
+| 04 | `04_workflow.py` | Fluent `Workflow` orchestration |
+| 05 | `05_checkpoint_resume.py` | Kill / resume with checkpointer |
+| 06 | `06_memory_compaction.py` | Tiered memory across shifts |
+| 07 | `07_team_spawn.py` | Hard `Team` + `spawn_specialist` |
+| 08 | `08_stress_exam.py` | Full stress path |
+| 09 | `09_challenge_hitl.py` | Fluent HITL (`confirm` + `approve`) |
+| 10 | `10_case.py` | `Case` — plan → dispatch → accept + board |
+| 11 | `11_case_sse.py` | Case AG-UI SSE + WorkItems `STATE_*` |
+| 12 | `12_agent_agui_sse.py` | Agent FastAPI `text/event-stream` |
 
-## Why this example (not a toy)
-
-- Real stakes: SLA breach, bank partner, money movement
-- Mixed evidence: tickets, health checks, contracts, decks, runbooks, dashboards
-- Mixed outputs: human brief + machine-readable packet + written artifacts
-- Natural growth path into memory (shift handoff) and workflows (escalate → page → notify)
+Engineering notes: `CHALLENGES.md` · `ISSUES.md`
 
 ## Setup
 
 ```bash
 export GEMINI_API_KEY="..."
-export GEMINI_MODEL="gemini-flash-latest"   # optional
-pip install -e ".[web,pdf,ppt]"
+# optional: export GEMINI_MODEL="gemini-flash-latest"
 
+pip install -e ".[web,pdf,ppt]"
 cd examples/escalation_war_room
 python build_fixtures.py
 python 01_tools_and_io.py
-python 02_documents.py
-python 03_multimodal.py
-# or: python run_phase1.py
+# …
+python 12_agent_agui_sse.py
 ```
-
-Issues found while stressing the framework are logged in `ISSUES.md`.
