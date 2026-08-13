@@ -1,16 +1,6 @@
-"""PostgreSQL memory backends (asyncpg).
+"""PostgreSQL MemoryBackend + VectorBackend (asyncpg).
 
-Implements kernel protocols:
-
-- :class:`PostgresMemoryBackend` → :class:`~loomable.kernel.contracts.MemoryBackend`
-- :class:`PgVectorBackend` → :class:`~loomable.kernel.contracts.VectorBackend`
-
-Optional dependency::
-
-    pip install 'loomable[postgres]'  # or: pip install asyncpg
-
-Tables are created automatically on first use. ``user_id`` scopes rows for
-multi-tenant isolation.
+    pip install 'loomable[postgres]'
 """
 
 from __future__ import annotations
