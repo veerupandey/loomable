@@ -26,7 +26,8 @@ from __future__ import annotations
 __all__ = ["Workflow"]
 
 import asyncio
-from typing import Any, Callable, TYPE_CHECKING
+import uuid
+from typing import Any, AsyncIterator, Callable, TYPE_CHECKING
 
 from loomable.agent.context import RunContext
 from loomable.agent.run import RunResult
@@ -353,6 +354,34 @@ class Workflow:
         else:
             self._last_state = SharedState()
         return result
+
+    async def astream_events(
+        self,
+        input: Any = None,  # noqa: A002
+        *,
+        session_id: str | None = None,
+        run_id: str | None = None,
+        context: RunContext | None = None,
+        resume: bool | None = None,
+    ) -> AsyncIterator[Any]:
+        """Yield AG-UI events (NODE_* lifecycle + nested run frames)."""
+        flow = self._ensure_compiled()
+        captured_state: SharedState | None = None
+
+        async for event in flow.astream_events(
+            input,
+            session_id=session_id or self._session_id,
+            run_id=run_id,
+            context=context,
+            resume=resume,
+        ):
+            yield event
+
+        # Best-effort: refresh last_state after stream completes
+        if context is not None and context.shared_state is not None:
+            self._last_state = context.shared_state
+        elif self._last_state is None:
+            self._last_state = SharedState()
 
     async def approve(
         self,

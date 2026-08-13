@@ -184,61 +184,134 @@ def _chunk_to_dict(chunk: RunChunk) -> dict[str, Any]:
     }
 
 
-class FastAPIAdapter:
-    """Expose a :class:`BuiltAgent` over HTTP with FastAPI (Req 7.1).
+def _register_agent_routes(app: FastAPI, agent: Any, *, prefix: str = "") -> None:
+    """Register health / run / NDJSON stream / AG-UI SSE routes on ``app``."""
+    p = prefix.rstrip("/")
 
-    The adapter holds no agent logic beyond request/response translation and
-    session routing (Req 7.7, 9.3). ``session_id`` is accepted for routing; the
-    wrapped ``BuiltAgent`` owns a single session whose state persists across calls
-    (Req 7.5), so successive requests to the same adapter share that session.
+    @app.get(f"{p}/health")
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.post(f"{p}/run")
+    async def run(body: RunRequestModel) -> JSONResponse:
+        try:
+            agent_input = _request_to_agent_input(body)
+        except ValueError as exc:
+            return JSONResponse(status_code=422, content={"detail": str(exc)})
+        try:
+            result = await agent.arun(agent_input)
+        except UnsupportedModalityError as exc:
+            return JSONResponse(status_code=400, content={"detail": str(exc)})
+        return JSONResponse(
+            status_code=200,
+            content=_run_result_to_model(result).model_dump(),
+        )
+
+    @app.post(f"{p}/run/stream")
+    async def run_stream(body: RunRequestModel) -> Any:
+        try:
+            agent_input = _request_to_agent_input(body)
+        except ValueError as exc:
+            return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+        async def event_stream():
+            try:
+                async for chunk in agent.astream(agent_input):
+                    yield json.dumps(_chunk_to_dict(chunk)) + "\n"
+            except UnsupportedModalityError as exc:
+                yield json.dumps({"error": str(exc)}) + "\n"
+
+        return StreamingResponse(event_stream(), media_type="application/x-ndjson")
+
+    @app.post(f"{p}/run/events")
+    async def run_events(body: RunRequestModel) -> Any:
+        """AG-UI-compatible Server-Sent Events stream."""
+        from loomable.stream import sse_encode
+
+        try:
+            agent_input = _request_to_agent_input(body)
+        except ValueError as exc:
+            return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+        if not hasattr(agent, "astream_events"):
+            return JSONResponse(
+                status_code=501,
+                content={"detail": "agent does not support astream_events"},
+            )
+
+        async def sse_stream():
+            try:
+                async for event in agent.astream_events(agent_input):
+                    yield sse_encode(event)
+            except UnsupportedModalityError as exc:
+                from loomable.stream import RUN_ERROR, StreamEvent
+
+                yield sse_encode(
+                    StreamEvent(
+                        type=RUN_ERROR,
+                        run_id="error",
+                        data={"message": str(exc)},
+                    )
+                )
+
+        return StreamingResponse(
+            sse_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+
+def mount_agent(app: FastAPI, agent: Any, *, prefix: str = "/agent") -> FastAPI:
+    """Mount Agent AG-UI routes on an existing FastAPI app.
+
+    Routes: ``{prefix}/health``, ``{prefix}/run``, ``{prefix}/run/stream``,
+    ``{prefix}/run/events`` (SSE).
+    """
+    # High-level Agent → BuiltAgent when needed for legacy adapter compat
+    target = agent
+    if hasattr(agent, "build") and not hasattr(agent, "astream_events"):
+        target = agent.build()
+    elif hasattr(agent, "_get_built") and not hasattr(agent, "astream_events"):
+        target = agent._get_built()
+    _register_agent_routes(app, target, prefix=prefix)
+    return app
+
+
+def mount_case(app: FastAPI, case: Any, *, prefix: str = "/cases") -> FastAPI:
+    """Mount Case AG-UI SSE routes (same shape as Agent)."""
+    _register_agent_routes(app, case, prefix=prefix)
+    return app
+
+
+class FastAPIAdapter:
+    """Expose a :class:`BuiltAgent` or :class:`Agent` over HTTP with FastAPI.
+
+    Routes (Req 7.1-7.4 + AG-UI SSE):
+    - ``GET  /health``
+    - ``POST /run``
+    - ``POST /run/stream`` (NDJSON)
+    - ``POST /run/events`` (``text/event-stream`` AG-UI events)
     """
 
-    def __init__(self, agent: BuiltAgent) -> None:
-        self._agent = agent
+    def __init__(self, agent: Any) -> None:
+        # Accept BuiltAgent or high-level Agent
+        if hasattr(agent, "astream_events"):
+            self._agent = agent
+        elif hasattr(agent, "_get_built"):
+            self._agent = agent  # Agent has astream_events after our change
+        elif hasattr(agent, "build"):
+            self._agent = agent.build()
+        else:
+            self._agent = agent
 
     def app(self) -> FastAPI:
         """Build and return the FastAPI application exposing the agent."""
         app = FastAPI(title="loomable agent")
-        agent = self._agent
-
-        @app.get("/health")
-        async def health() -> dict[str, str]:
-            """Report agent readiness (Req 7.4)."""
-            return {"status": "ok"}
-
-        @app.post("/run")
-        async def run(body: RunRequestModel) -> JSONResponse:
-            """Run the agent once and return a :class:`RunResult` body (Req 7.2)."""
-            try:
-                agent_input = _request_to_agent_input(body)
-            except ValueError as exc:  # MediaPartError / empty input / bad base64
-                return JSONResponse(status_code=422, content={"detail": str(exc)})
-
-            try:
-                result = await agent.arun(agent_input)
-            except UnsupportedModalityError as exc:
-                return JSONResponse(status_code=400, content={"detail": str(exc)})
-
-            return JSONResponse(
-                status_code=200,
-                content=_run_result_to_model(result).model_dump(),
-            )
-
-        @app.post("/run/stream")
-        async def run_stream(body: RunRequestModel) -> Any:
-            """Stream incremental output as newline-delimited JSON chunks (Req 7.3)."""
-            try:
-                agent_input = _request_to_agent_input(body)
-            except ValueError as exc:
-                return JSONResponse(status_code=422, content={"detail": str(exc)})
-
-            async def event_stream():
-                try:
-                    async for chunk in agent.astream(agent_input):
-                        yield json.dumps(_chunk_to_dict(chunk)) + "\n"
-                except UnsupportedModalityError as exc:
-                    yield json.dumps({"error": str(exc)}) + "\n"
-
-            return StreamingResponse(event_stream(), media_type="application/x-ndjson")
-
+        _register_agent_routes(app, self._agent, prefix="")
+        # Also expose under /agent for enterprise convention
+        _register_agent_routes(app, self._agent, prefix="/agent")
         return app

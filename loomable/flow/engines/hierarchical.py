@@ -79,7 +79,12 @@ class HierarchicalEngine:
         }
 
         if pending_workers:
+            from loomable.flow.observability import emit_node_start, emit_node_end
+
             manager = SubagentManager()
+            start_times = {
+                nid: emit_node_start(context.events, nid) for nid in pending_workers
+            }
             tasks = [
                 DelegatedTask(
                     task_id=nid,
@@ -92,6 +97,10 @@ class HierarchicalEngine:
                 for nid in sorted(pending_workers.keys())
             ]
             outcomes: list[SubagentOutcome] = await manager.run_all(tasks)
+            for outcome in outcomes:
+                st = start_times.get(outcome.task_id)
+                if st is not None:
+                    emit_node_end(context.events, outcome.task_id, st)
             self._commit_worker_results(outcomes, state, sub_results)
             for nid in pending_workers:
                 completed.add(nid)
@@ -99,14 +108,20 @@ class HierarchicalEngine:
                 await self._write_checkpoint(checkpointer, state, completed, session_id)
 
         # Manager: skip if already completed on resume
+        from loomable.flow.observability import emit_node_start, emit_node_end
+
         if manager_id in completed and state.get(manager_id) is not None:
             out = state.get(manager_id)
             if isinstance(out, AgentOutput):
                 manager_result = RunResult(output=out, session_id=session_id or "")
             else:
+                start_t = emit_node_start(context.events, manager_id)
                 manager_result = await manager_node.runnable.arun(input, context=context)
+                emit_node_end(context.events, manager_id, start_t)
         else:
+            start_t = emit_node_start(context.events, manager_id)
             manager_result = await manager_node.runnable.arun(input, context=context)
+            emit_node_end(context.events, manager_id, start_t)
             sub_results[manager_id] = manager_result
             state.write(manager_id, manager_result.output)
             completed.add(manager_id)
