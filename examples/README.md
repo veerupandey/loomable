@@ -27,17 +27,19 @@
 | Durable state / pause-resume           | `CheckpointStore`                    | `advanced/03_checkpointing.py`|
 | Multimodal: image input, tool media, feedback | `Agent + multimodal=True + @tool → Image` | `advanced/04_multimodal.py`   |
 | Simple real-world Q&A / docs / tools           | `Agent + WebSearch/File/PDF/PPT`         | `simple_use_cases/`           |
+| Tough SEV war-room exam (tools→docs→images)    | `Agent + tools + File/PDF/PPT + multimodal` | `escalation_war_room/`     |
 
 ## Structure
 
 ```
 examples/
-├── agents/             # Single agent patterns (start here)
-├── simple_use_cases/   # News, research, structured I/O, docs, tools
-├── subagents/          # Multi-agent delegation
-├── patterns/           # Flow composition patterns
-├── memory/             # Memory and persistence
-└── advanced/           # MCP, custom flows, multimodal
+├── agents/               # Single agent patterns (start here)
+├── simple_use_cases/     # News, research, structured I/O, docs, tools
+├── escalation_war_room/  # Tough real-world ladder (Phase 1 done)
+├── subagents/            # Multi-agent delegation
+├── patterns/             # Flow composition patterns
+├── memory/               # Memory and persistence
+└── advanced/             # MCP, custom flows, multimodal
 ```
 
 ## Running

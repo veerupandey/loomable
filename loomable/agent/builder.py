@@ -1511,33 +1511,41 @@ class BuiltAgent:
 
             # --- Feedback injection: inject tool-generated media into the
             # conversation so the model can reason about it (Req 7.1–7.5). ---
+            # IMPORTANT: append media as a follow-up *user* message. Attaching
+            # image_url parts onto role=tool messages breaks Gemini's OpenAI-
+            # compatible endpoint ("Invalid content part type: image_url").
             if self._feedback_media:
                 from loomable.content.capabilities import _part_to_content
 
+                feedback_parts: list[dict[str, Any]] = []
                 for outcome in gated_result.outcomes:
                     if outcome.result is None:
                         continue
                     media_items = outcome.result.metadata.get("media", [])
                     if not media_items:
                         continue
-                    # Find the tool result message for this outcome's call_id.
-                    # It was just appended above, so scan from the end.
-                    tool_msg = None
-                    for msg in reversed(request.messages):
-                        if (
-                            msg.get("role") == "tool"
-                            and msg.get("tool_call_id") == outcome.call_id
-                        ):
-                            tool_msg = msg
-                            break
-                    if tool_msg is None:
-                        continue
                     for media_item in media_items:
                         modality = getattr(media_item, "_modality", None)
                         if modality is not None and modality in self.capabilities.input:
                             part = media_item.to_media_part()
                             content_entry = _part_to_content(part)
-                            tool_msg["content"].append(content_entry)
+                            feedback_parts.append(content_entry)
+                if feedback_parts:
+                    request.messages.append(
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": (
+                                        "[System: the previous tool call produced "
+                                        "media. Inspect it before continuing.]"
+                                    ),
+                                },
+                                *feedback_parts,
+                            ],
+                        }
+                    )
 
             # Append error messages for blocked calls (guardrail rejections).
             # Map blocked tool_names back to their call_ids from the original request.
@@ -1589,6 +1597,28 @@ class BuiltAgent:
             output = AgentOutput(
                 parts=[MediaPart(modality=Modality.TEXT, media_type="text/plain", data=b"")]
             )
+
+        # (5b) Structured-output recovery: some providers (notably Gemini after a
+        # tool-only turn) return empty final content even when tools succeeded.
+        # When an output schema is required, re-prompt once without tools.
+        if (
+            output_schema is not None
+            and response is not None
+            and not (output.text() or "").strip()
+            and not ctx.cancelled
+        ):
+            request.messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Your previous reply had no text. "
+                        + _schema_instruction(output_schema)
+                    ),
+                }
+            )
+            request.tools = []
+            response = await self.model_interface.invoke(request)
+            output = from_model_response(response)
 
         # (6) Output capability gating (Req 5.4).
         for modality in output.modalities():
@@ -2038,6 +2068,7 @@ class Agent:
         # harness knobs (avoids needing build() for common config):
         tool_timeout: float | None = None,
         tool_concurrency: int | None = None,
+        max_tool_iterations: int | None = None,
         # Tiered model routing:
         tiers: dict[str, Any] | None = None,
         tier_policy: dict[str, Any] | None = None,
@@ -2118,6 +2149,7 @@ class Agent:
         self._require_confirmation = require_confirmation
         self._tool_timeout = tool_timeout
         self._tool_concurrency = tool_concurrency
+        self._max_tool_iterations = max_tool_iterations
 
         # Tiered model routing.
         self._tiers = tiers
@@ -2325,6 +2357,8 @@ class Agent:
             built.tool_timeout = self._tool_timeout
         if self._tool_concurrency is not None:
             built.tool_concurrency = self._tool_concurrency
+        if self._max_tool_iterations is not None:
+            built.max_tool_iterations = self._max_tool_iterations
 
         # --- Wire debug mode: use a console-friendly tracer ---
         if self._debug and self._events is None:
