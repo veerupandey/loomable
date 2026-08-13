@@ -188,6 +188,53 @@ def _register_agent_routes(app: FastAPI, agent: Any, *, prefix: str = "") -> Non
     """Register health / run / NDJSON stream / AG-UI SSE routes on ``app``."""
     p = prefix.rstrip("/")
 
+    def _apply_session(body: RunRequestModel) -> None:
+        sid = body.session_id
+        if not sid:
+            return
+        if hasattr(agent, "session_id"):
+            try:
+                agent.session_id = sid  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
+        if hasattr(agent, "_session_id"):
+            try:
+                agent._session_id = sid  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
+        # Cached Case should pick up session for streaming labels
+        case = getattr(agent, "_case", None)
+        if case is not None and hasattr(case, "session_id"):
+            case.session_id = sid
+
+    async def _invoke_arun(agent_input: AgentInput, body: RunRequestModel) -> RunResult:
+        _apply_session(body)
+        # Case / Workflow-style runnables prefer plain text
+        if type(agent).__name__ == "Case" or getattr(agent, "_mode", None) == "case":
+            from loomable.agent.builder import _input_text
+
+            return await agent.arun(_input_text(agent_input))
+        return await agent.arun(agent_input)
+
+    async def _invoke_astream_events(agent_input: AgentInput, body: RunRequestModel):
+        _apply_session(body)
+        kwargs: dict[str, Any] = {}
+        if body.session_id:
+            kwargs["session_id"] = body.session_id
+        if type(agent).__name__ == "Case" or getattr(agent, "_mode", None) == "case":
+            from loomable.agent.builder import _input_text
+
+            text = _input_text(agent_input)
+            if "session_id" in kwargs:
+                async for event in agent.astream_events(text, session_id=kwargs["session_id"]):
+                    yield event
+            else:
+                async for event in agent.astream_events(text):
+                    yield event
+            return
+        async for event in agent.astream_events(agent_input):
+            yield event
+
     @app.get(f"{p}/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
@@ -199,7 +246,7 @@ def _register_agent_routes(app: FastAPI, agent: Any, *, prefix: str = "") -> Non
         except ValueError as exc:
             return JSONResponse(status_code=422, content={"detail": str(exc)})
         try:
-            result = await agent.arun(agent_input)
+            result = await _invoke_arun(agent_input, body)
         except UnsupportedModalityError as exc:
             return JSONResponse(status_code=400, content={"detail": str(exc)})
         return JSONResponse(
@@ -213,12 +260,15 @@ def _register_agent_routes(app: FastAPI, agent: Any, *, prefix: str = "") -> Non
             agent_input = _request_to_agent_input(body)
         except ValueError as exc:
             return JSONResponse(status_code=422, content={"detail": str(exc)})
+        _apply_session(body)
 
         async def event_stream():
             try:
                 async for chunk in agent.astream(agent_input):
                     yield json.dumps(_chunk_to_dict(chunk)) + "\n"
             except UnsupportedModalityError as exc:
+                yield json.dumps({"error": str(exc)}) + "\n"
+            except Exception as exc:  # noqa: BLE001
                 yield json.dumps({"error": str(exc)}) + "\n"
 
         return StreamingResponse(event_stream(), media_type="application/x-ndjson")
@@ -240,17 +290,25 @@ def _register_agent_routes(app: FastAPI, agent: Any, *, prefix: str = "") -> Non
             )
 
         async def sse_stream():
+            from loomable.stream import RUN_ERROR, StreamEvent
+
             try:
-                async for event in agent.astream_events(agent_input):
+                async for event in _invoke_astream_events(agent_input, body):
                     yield sse_encode(event)
             except UnsupportedModalityError as exc:
-                from loomable.stream import RUN_ERROR, StreamEvent
-
                 yield sse_encode(
                     StreamEvent(
                         type=RUN_ERROR,
                         run_id="error",
                         data={"message": str(exc)},
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                yield sse_encode(
+                    StreamEvent(
+                        type=RUN_ERROR,
+                        run_id="error",
+                        data={"message": str(exc), "error_type": type(exc).__name__},
                     )
                 )
 

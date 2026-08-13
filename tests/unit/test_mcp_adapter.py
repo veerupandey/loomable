@@ -50,7 +50,7 @@ async def test_text_run_returns_text_content():
 
     result = await adapter.run_tool({"text": "hi"})
 
-    assert result.isError is False
+    assert result.is_error is False
     assert len(result.content) == 1
     block = result.content[0]
     assert isinstance(block, types.TextContent)
@@ -70,10 +70,10 @@ async def test_image_output_maps_to_image_content():
 
     result = await adapter.run_tool({"text": "make an image"})
 
-    assert result.isError is False
+    assert result.is_error is False
     block = result.content[0]
     assert isinstance(block, types.ImageContent)
-    assert block.mimeType == "image/png"
+    assert block.mime_type == "image/png"
     assert base64.b64decode(block.data) == raw
 
 
@@ -104,7 +104,7 @@ async def test_video_output_maps_to_embedded_resource():
     block = result.content[0]
     assert isinstance(block, types.EmbeddedResource)
     assert isinstance(block.resource, types.BlobResourceContents)
-    assert block.resource.mimeType == "video/mp4"
+    assert block.resource.mime_type == "video/mp4"
     assert base64.b64decode(block.resource.blob) == raw
 
 
@@ -115,7 +115,7 @@ async def test_failing_run_yields_error_result():
 
     result = await adapter.run_tool({"text": "hi"})
 
-    assert result.isError is True
+    assert result.is_error is True
     assert len(result.content) == 1
     assert isinstance(result.content[0], types.TextContent)
     assert "provider exploded" in result.content[0].text
@@ -130,7 +130,7 @@ async def test_invalid_arguments_yield_error_result():
     # Neither 'text' nor 'messages' provided.
     result = await adapter.run_tool({})
 
-    assert result.isError is True
+    assert result.is_error is True
     assert isinstance(result.content[0], types.TextContent)
 
 
@@ -154,7 +154,7 @@ async def test_structured_messages_with_multimodal_parts():
 
     result = await adapter.run_tool(arguments)
 
-    assert result.isError is False
+    assert result.is_error is False
     assert agent.received is not None
     parts = agent.received.messages[0].parts
     assert parts[0].data == b"describe this"
