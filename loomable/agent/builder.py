@@ -1344,7 +1344,8 @@ class BuiltAgent:
         iterations = 0
         stop_reason: StopReason | None = None
         response = None  # May remain None if we break before the first model call.
-        require_tools_nudged = False
+        require_tools_nudges = 0
+        max_require_tools_nudges = max(1, len(self.require_tools)) if self.require_tools else 0
 
         while True:
             # --- Check cooperative cancellation at each loop boundary (Req 4.1) ---
@@ -1421,11 +1422,11 @@ class BuiltAgent:
                 ]
                 if (
                     missing_required
-                    and not require_tools_nudged
+                    and require_tools_nudges < max_require_tools_nudges
                     and not ctx.cancelled
                     and iterations < self.max_tool_iterations
                 ):
-                    require_tools_nudged = True
+                    require_tools_nudges += 1
                     prior_text = ""
                     if getattr(response, "content", None):
                         prior_text = str(response.content)
@@ -1789,8 +1790,9 @@ class BuiltAgent:
         metadata["stop_reason"] = stop_reason.kind
         if final_text_reprompted:
             metadata["final_text_reprompted"] = True
-        if require_tools_nudged:
+        if require_tools_nudges:
             metadata["require_tools_nudged"] = True
+            metadata["require_tools_nudges"] = require_tools_nudges
         if structured_from_write_json:
             metadata["structured_from_write_json"] = True
         still_missing = [
