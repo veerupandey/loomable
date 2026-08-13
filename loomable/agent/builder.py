@@ -272,8 +272,26 @@ def _strip_json_fences(text: str) -> str:
     return cleaned
 
 
+def _path_constraint_met(path_arg: str, required: str) -> bool:
+    """Return True when ``path_arg`` satisfies a require_tools path constraint.
+
+    Matches exact path or a path that ends with ``/<required>`` after normalizing
+    separators. Substring matches (e.g. ``myoutput/brief.md`` for ``output/brief.md``)
+    do **not** count.
+    """
+    from pathlib import Path
+
+    a = Path(str(path_arg).replace("\\", "/")).as_posix().lstrip("./")
+    r = Path(str(required).replace("\\", "/")).as_posix().lstrip("./")
+    if not r:
+        return True
+    if a == r:
+        return True
+    return a.endswith("/" + r)
+
+
 def _parse_require_tool_specs(specs: list[str]) -> list[tuple[str, str | None]]:
-    """Parse ``require_tools`` entries into ``(name, path_substr|None)``.
+    """Parse ``require_tools`` entries into ``(name, path_constraint|None)``.
 
     Supports plain names (``\"write_file\"``) and path constraints
     (``\"write_file:output/brief.md\"``) so scribes cannot "satisfy" the
@@ -313,7 +331,7 @@ def _format_require_tools_nudge(missing: list[str]) -> str:
         if ":" in item:
             name, _, path = item.partition(":")
             parts.append(
-                f"call {name} with path containing {path!r}"
+                f"call {name} with path matching {path!r} (exact or ending with /{path})"
             )
         else:
             parts.append(f"call {item}")
@@ -1596,6 +1614,28 @@ class BuiltAgent:
                         continue  # Skip re-dispatch of non-idempotent tool
                 calls_to_dispatch.append(tc)
 
+            # Emit AG-UI tool frames around the actual dispatch (START/ARGS before,
+            # RESULT/END after) when the event sink supports publish().
+            _agui = getattr(ctx.events, "publish", None)
+            if callable(_agui):
+                from loomable.stream import (
+                    TOOL_CALL_ARGS,
+                    TOOL_CALL_END,
+                    TOOL_CALL_RESULT,
+                    TOOL_CALL_START,
+                )
+
+                for tc in calls_to_dispatch:
+                    _agui(TOOL_CALL_START, {"tool_call_id": tc.id, "tool_name": tc.tool_name})
+                    _agui(
+                        TOOL_CALL_ARGS,
+                        {
+                            "tool_call_id": tc.id,
+                            "tool_name": tc.tool_name,
+                            "args": dict(tc.args or {}),
+                        },
+                    )
+
             # Dispatch tool calls through the gated path (hooks/guardrails, Req 3.5/3.7).
             _tool_dispatch_t0 = time.monotonic()
             gated_result = await self.dispatch_tools_gated(calls_to_dispatch)
@@ -1614,7 +1654,7 @@ class BuiltAgent:
                 for name, path_sub in require_tool_specs:
                     if tc.tool_name != name:
                         continue
-                    if path_sub is None or path_sub in path_arg:
+                    if path_sub is None or _path_constraint_met(path_arg, path_sub):
                         satisfied_require_tools.add((name, path_sub))
                 if tc.tool_name == "write_json":
                     outcome = next(
@@ -1633,7 +1673,43 @@ class BuiltAgent:
                         else:
                             write_json_payloads.append(json.dumps(raw))
 
-            # Emit tool_call event (Req 11.3).
+            if callable(_agui):
+                from loomable.stream import TOOL_CALL_END, TOOL_CALL_RESULT
+
+                outcome_by_id = {o.call_id: o for o in gated_result.outcomes}
+                for tc in calls_to_dispatch:
+                    outcome = outcome_by_id.get(tc.id)
+                    content = ""
+                    is_error = False
+                    if outcome is not None and outcome.result is not None:
+                        is_error = bool(outcome.result.is_error)
+                        if is_error:
+                            content = outcome.result.error or ""
+                        else:
+                            content = (
+                                str(outcome.result.content)
+                                if outcome.result.content is not None
+                                else ""
+                            )
+                    _agui(
+                        TOOL_CALL_RESULT,
+                        {
+                            "tool_call_id": tc.id,
+                            "tool_name": tc.tool_name,
+                            "content": content[:4000],
+                            "is_error": is_error,
+                        },
+                    )
+                    _agui(
+                        TOOL_CALL_END,
+                        {
+                            "tool_call_id": tc.id,
+                            "tool_name": tc.tool_name,
+                            "duration_ms": _tool_dispatch_duration,
+                        },
+                    )
+
+            # Emit tool_call event (Req 11.3) for observability; AG-UI already published.
             tool_names = [tc.tool_name for tc in calls_to_dispatch]
             ctx.events.emit(Event(
                 kind="tool_call",
@@ -1642,6 +1718,7 @@ class BuiltAgent:
                 attributes={
                     "gen_ai.tool.name": ",".join(tool_names) if tool_names else "",
                     "tool_count": len(calls_to_dispatch),
+                    "agui_skip": bool(callable(_agui)),
                 },
             ))
 

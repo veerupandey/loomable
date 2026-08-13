@@ -1,17 +1,16 @@
 # Framework audit — main (post Case + AG-UI SSE)
 
-Date: 2026-08-13. Rigorous review after merging Case/SSE onto `main`.
+Date: 2026-08-13 (updated). Rigorous review after merging Case/SSE onto `main`.
 
 ## Test results (this pass)
 
 | Suite | Result |
 |-------|--------|
-| Case / stream / FastAPI SSE / MCP adapter | **26 passed** |
-| Core enterprise + require_tools (earlier) | **82 passed** |
-| Live Gemini Agent SSE (`12_agent_agui_sse.py`) | **passed** |
-| Live Gemini Case SSE (`11_case_sse.py`) | **passed** (board STATE_DELTA + coerced text input) |
+| Case / stream / FastAPI SSE / MCP adapter | covered by unit suites |
+| Audit bugfix regressions (`test_audit_bugfixes.py` + related) | targeted green gate |
+| Live Gemini Agent/Case SSE | previously passed on main |
 
-## Bugs found & fixed (this branch)
+## Bugs found & fixed
 
 | Sev | Issue | Fix |
 |-----|-------|-----|
@@ -21,29 +20,28 @@ Date: 2026-08-13. Rigorous review after merging Case/SSE onto `main`.
 | P1 | `Workflow.state` empty unless caller passed `RunContext` | Always create/capture context SharedState |
 | P1 | `BuiltAgent.astream_events` did not cancel on consumer break | Cancel runner task like Case/Flow |
 | P1 | MCP SDK drift: `isError`/`mimeType`/`Server.list_tools` | `is_error` / `mime_type` / `MCPServer.add_tool` |
+| P1 | Tool AG-UI: `TOOL_CALL_ARGS` / `TOOL_CALL_RESULT` not emitted | Emit START/ARGS before dispatch and RESULT/END after; skip legacy duplicate via `agui_skip` |
+| P1 | Case board not rehydrated from checkpoint SharedState | `_hydrate_board_from_checkpoint` + `_hydrate_board_from_state` |
+| P1 | Flow stream `session_id` labeled events only | Temporarily bind `Flow._session_id` for stream runs (checkpoints use stream session) |
+| P2 | Parallel/hierarchical node durations = superstep wall time | Emit `node_start`/`node_end` inside each worker factory |
+| P2 | Parallel/hierarchical ignore `metadata["state_updates"]` | `_apply_state_updates` in barrier / worker commit / manager |
+| P2 | `require_tools` path match is substring | `_path_constraint_met` exact or `*/required` suffix |
+| P2 | Team has no `astream_events` | Soft modes → Agent SSE; hard modes emit RUN_* + NODE_* per member |
+| P2 | Unknown `pytest.mark.unit` warnings | Register `unit` / `integration` markers in `pyproject.toml` |
 
-## Still open (improvement backlog)
+## Deferred
 
-| Sev | Issue | Suggested fix |
-|-----|-------|---------------|
-| P1 | Tool AG-UI: `TOOL_CALL_ARGS` / `TOOL_CALL_RESULT` documented but not emitted | Emit around real tool dispatch with call ids |
-| P1 | Case board not rehydrated from checkpoint SharedState | `Board.from_dict` on resume |
-| P1 | Flow stream `session_id` labels events only (checkpoints use Flow's id) | Bind thread id for stream runs |
-| P2 | Parallel/hierarchical node durations = superstep wall time | Emit start/end inside each worker |
-| P2 | Parallel/hierarchical ignore `metadata["state_updates"]` | Share sequential merge logic |
-| P2 | `require_tools` path match is substring | Normalize + sandbox equality/suffix |
-| P2 | Team has no `astream_events` | Bridge hard-mode member events |
-| P2 | Unknown `pytest.mark.unit` warnings | Register mark in `pyproject.toml` |
+- Postgres / durable vector memory (explicitly deferred)
 
 ## Mistakes / risks to watch
 
-1. **Docs ahead of code** — AG-UI ARGS/RESULT and “session routing” were advertised before fully wired (session now partially fixed).
+1. **Docs ahead of code** — keep AG-UI ARGS/RESULT and session routing aligned with StreamBridge/BuiltAgent (now wired).
 2. **Case via Agent vs bare Case** — must keep cached Case; never `from_agent` per request.
-3. **Engine asymmetry** — Case Workflow is sequential today; plan glue breaks if someone forces parallel engine.
-4. **Env test deps** — `pytest-httpx`, `beautifulsoup4` needed for full unit green; declare in `[project.optional-dependencies] dev` (already listed — install with `pip install -e ".[dev]"`).
+3. **Engine asymmetry** — Case Workflow is sequential today; plan glue breaks if someone forces parallel engine (state_updates merge now exists, but Case planner glue still assumes sequential step order).
+4. **Env test deps** — install with `pip install -e ".[dev]"`.
 
 ## Architecture confirmation
 
-- Agent / Flow / Case / Workflow share **Runnable** (`arun` → `RunResult`) and AG-UI **SSE** vocabulary.
+- Agent / Flow / Case / Workflow / Team share **Runnable** (`arun` → `RunResult`) and AG-UI **SSE** vocabulary.
 - **SharedState** is the Workflow/Flow blackboard (plan_steps, map, board dict, node outputs).
 - Standalone Agent tool-loops do not create SharedState unless nested in a Flow.

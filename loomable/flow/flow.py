@@ -470,6 +470,11 @@ class Flow:
         ctx = context or RunContext()
         ctx.events = bridge
 
+        # Bind checkpoint thread to the stream session_id for this run.
+        prev_session = self._session_id
+        if session_id:
+            self._session_id = session_id
+
         async def _runner() -> None:
             try:
                 bridge.publish(RUN_STARTED, {"input": str(input)[:500] if input is not None else ""})
@@ -481,6 +486,7 @@ class Flow:
             except Exception as exc:  # noqa: BLE001
                 bridge.publish(RUN_ERROR, {"message": str(exc), "error_type": type(exc).__name__})
             finally:
+                self._session_id = prev_session
                 await bus.close()
 
         task = asyncio.create_task(_runner())
@@ -494,6 +500,7 @@ class Flow:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
+            self._session_id = prev_session
 
     def _resolve_engine(self) -> Any:
         """Resolve which engine to use for this flow run.

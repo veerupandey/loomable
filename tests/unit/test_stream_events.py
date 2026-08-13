@@ -10,6 +10,9 @@ from loomable.stream import (
     RUN_FINISHED,
     RUN_STARTED,
     TEXT_MESSAGE_CONTENT,
+    TOOL_CALL_ARGS,
+    TOOL_CALL_END,
+    TOOL_CALL_RESULT,
     TOOL_CALL_START,
     StreamEvent,
     sse_encode,
@@ -73,9 +76,27 @@ async def test_agent_astream_events_tool_loop() -> None:
         max_tool_iterations=6,
     )
     types: list[str] = []
+    events = []
     async for ev in agent.astream_events("ping please"):
         types.append(ev.type)
+        events.append(ev)
     assert RUN_STARTED in types
     assert TOOL_CALL_START in types
+    assert TOOL_CALL_ARGS in types
+    assert TOOL_CALL_RESULT in types
+    assert TOOL_CALL_END in types
     assert TEXT_MESSAGE_CONTENT in types
     assert RUN_FINISHED in types
+
+    args_ev = next(e for e in events if e.type == TOOL_CALL_ARGS)
+    assert args_ev.data.get("tool_call_id") == "c1"
+    assert args_ev.data.get("tool_name") == "ping"
+    assert args_ev.data.get("args") == {"x": "1"}
+
+    result_ev = next(e for e in events if e.type == TOOL_CALL_RESULT)
+    assert result_ev.data.get("tool_call_id") == "c1"
+    assert "pong:1" in str(result_ev.data.get("content") or "")
+    assert result_ev.data.get("is_error") is False
+
+    # Exactly one START per call (no legacy duplicate from tool_call bridge)
+    assert types.count(TOOL_CALL_START) == 1

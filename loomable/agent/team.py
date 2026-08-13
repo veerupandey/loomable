@@ -266,3 +266,181 @@ class Team:
                 context=context,
             )
         )
+
+    async def astream_events(
+        self,
+        input: "AgentInput | str",  # noqa: A002
+        *,
+        images: "list[str | Any] | None" = None,
+        videos: "list[str | Any] | None" = None,
+        audio: "list[str | Any] | None" = None,
+        output_schema: type | None = None,
+        context: dict[str, Any] | None = None,
+        session_id: str | None = None,
+    ):
+        """Yield AG-UI :class:`~loomable.stream.StreamEvent` frames for the team.
+
+        Soft modes (``coordinate`` / ``route``) delegate to the coordinator
+        agent's ``astream_events``. Hard modes (``broadcast`` / ``sequential``)
+        emit RUN_* lifecycle plus NODE_* frames per member.
+        """
+        # Soft / LLM-coordinated path: reuse Agent SSE (tools include delegates).
+        if not (self._hard and self._mode in ("broadcast", "sequential")):
+            async for ev in self._agent.astream_events(
+                input,
+                images=images,
+                videos=videos,
+                audio=audio,
+                output_schema=output_schema,
+                context=context,
+            ):
+                yield ev
+            return
+
+        import uuid
+
+        from loomable.stream import (
+            RUN_ERROR,
+            RUN_FINISHED,
+            RUN_STARTED,
+            TEXT_MESSAGE_CONTENT,
+            TEXT_MESSAGE_END,
+            TEXT_MESSAGE_START,
+            AsyncStreamBus,
+            StreamBridge,
+        )
+
+        text = input if isinstance(input, str) else str(input)
+        rid = uuid.uuid4().hex
+        sid = session_id or self._session_id or ""
+        bus = AsyncStreamBus(run_id=rid, session_id=sid)
+        bridge = StreamBridge(bus, run_id=rid, session_id=sid)
+
+        async def _runner() -> None:
+            try:
+                bridge.publish(RUN_STARTED, {"input": text[:500], "team_mode": self._mode})
+                if self._mode == "broadcast":
+                    result = await self._run_broadcast_streaming(text, bridge)
+                else:
+                    result = await self._run_sequential_streaming(text, bridge)
+                out = result.output.text() if result.output is not None else ""
+                bridge.publish(TEXT_MESSAGE_START, {"role": "assistant"})
+                if out:
+                    bridge.publish(TEXT_MESSAGE_CONTENT, {"delta": out})
+                bridge.publish(TEXT_MESSAGE_END, {})
+                bridge.publish(RUN_FINISHED, {"text": out[:2000], "team_mode": self._mode})
+            except Exception as exc:  # noqa: BLE001
+                bridge.publish(
+                    RUN_ERROR,
+                    {"message": str(exc), "error_type": type(exc).__name__},
+                )
+            finally:
+                await bus.close()
+
+        task = asyncio.create_task(_runner())
+        try:
+            async for event in bus:
+                yield event
+        finally:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+    async def _run_broadcast_streaming(self, task: str, bridge: Any) -> "RunResult":
+        import time
+
+        from loomable.agent.run import RunResult
+        from loomable.content import AgentOutput, Text
+        from loomable.stream import NODE_FINISHED, NODE_STARTED
+
+        async def _one(member: Agent, index: int) -> tuple[str, str]:
+            label = _member_label(member, index)
+            t0 = time.monotonic()
+            bridge.publish(NODE_STARTED, {"node_id": label, "role": label})
+            try:
+                result = await member.arun(task)
+                text = result.output.text()
+                bridge.publish(
+                    NODE_FINISHED,
+                    {
+                        "node_id": label,
+                        "duration_ms": int((time.monotonic() - t0) * 1000),
+                        "success": True,
+                    },
+                )
+                return label, text
+            except Exception as exc:  # noqa: BLE001
+                bridge.publish(
+                    NODE_FINISHED,
+                    {
+                        "node_id": label,
+                        "duration_ms": int((time.monotonic() - t0) * 1000),
+                        "success": False,
+                        "error": str(exc),
+                    },
+                )
+                return label, f"ERROR: {exc}"
+
+        pairs = await asyncio.gather(
+            *[_one(m, i) for i, m in enumerate(self._members)]
+        )
+        lines = [f"## {label}\n{text}" for label, text in pairs]
+        merged = "\n\n".join(lines)
+        return RunResult(
+            output=AgentOutput(parts=[Text(merged)]),
+            session_id=self._session_id or "",
+            metadata={"team_mode": "broadcast", "hard": True},
+        )
+
+    async def _run_sequential_streaming(self, task: str, bridge: Any) -> "RunResult":
+        import time
+
+        from loomable.agent.run import RunResult
+        from loomable.content import AgentOutput, Text
+        from loomable.stream import NODE_FINISHED, NODE_STARTED
+
+        current = task
+        trail: list[str] = []
+        for i, member in enumerate(self._members):
+            label = _member_label(member, i)
+            prompt = current if i == 0 else (
+                f"Prior output from previous team member:\n{current}\n\n"
+                f"Continue the pipeline for the original task:\n{task}"
+            )
+            t0 = time.monotonic()
+            bridge.publish(NODE_STARTED, {"node_id": label, "role": label})
+            try:
+                result = await member.arun(prompt)
+                current = result.output.text()
+                bridge.publish(
+                    NODE_FINISHED,
+                    {
+                        "node_id": label,
+                        "duration_ms": int((time.monotonic() - t0) * 1000),
+                        "success": True,
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                current = f"ERROR from {label}: {exc}"
+                bridge.publish(
+                    NODE_FINISHED,
+                    {
+                        "node_id": label,
+                        "duration_ms": int((time.monotonic() - t0) * 1000),
+                        "success": False,
+                        "error": str(exc),
+                    },
+                )
+            trail.append(f"[{label}] {current[:500]}")
+        return RunResult(
+            output=AgentOutput(parts=[Text(current)]),
+            session_id=self._session_id or "",
+            metadata={
+                "team_mode": "sequential",
+                "hard": True,
+                "trail": trail,
+            },
+        )

@@ -60,3 +60,7 @@ build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "unit: fast isolated unit tests",
+    "integration: slower integration tests",
+]
