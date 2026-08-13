@@ -366,9 +366,13 @@ class Workflow:
         cp = await self._checkpointer.get(self._session_id)
         if cp is None or not cp.pending:
             raise RuntimeError(f"No pending HITL action for session {self._session_id!r}")
+        matched = False
         for pa in cp.pending:
             if pa.tool_name == node_id or pa.args.get("node_id") == node_id:
                 pa.status = status
+                matched = True
+        if not matched:
+            raise RuntimeError(f"No pending HITL action matching node {node_id!r}")
         await self._checkpointer.put(cp)
 
     async def clear_checkpoint(self) -> None:
