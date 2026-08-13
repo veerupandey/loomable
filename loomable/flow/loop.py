@@ -116,6 +116,8 @@ class CallableVerifier:
     def check(self, output: AgentOutput, context: RunContext) -> VerdictResult:
         """Delegate to the wrapped callable and wrap into a VerdictResult."""
         result = self._fn(output, context)
+        if isinstance(result, VerdictResult):
+            return result
         return VerdictResult(ok=bool(result))
 
 
@@ -176,7 +178,17 @@ class Loop:
                 steps=steps,
             )
         elif body is not None:
-            self._body = body
+            # Accept plain callables the same way Step does.
+            from loomable.flow.runnable import FunctionRunnable, Runnable
+
+            if isinstance(body, Runnable):
+                self._body = body
+            elif callable(body):
+                self._body = FunctionRunnable(body)
+            else:
+                raise TypeError(
+                    f"Loop body must be a Runnable or callable, got {type(body).__name__}"
+                )
         else:
             raise ValueError("Either 'body' or 'steps' must be provided")
 

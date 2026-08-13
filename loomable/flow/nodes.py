@@ -235,11 +235,20 @@ class MapNode:
                     }
                 )
 
-        # 5. Assemble final RunResult
+        # 5. Assemble final RunResult + write texts into SharedState["map"]
+        #    so synthesizers / ToughTask can consume step outputs easily.
         total = len(items)
         succeeded = len(successful_results)
         failed = len(map_errors)
         summary = f"MapNode: {succeeded}/{total} succeeded, {failed}/{total} failed"
+        map_texts: list[str] = []
+        for item_result in successful_results:
+            try:
+                map_texts.append(item_result.output.text())
+            except Exception:  # noqa: BLE001
+                map_texts.append(str(item_result))
+        if context is not None and context.shared_state is not None:
+            context.shared_state.write("map", map_texts)
 
         output = AgentOutput(
             parts=[
@@ -259,6 +268,7 @@ class MapNode:
                 "map_total": total,
                 "map_succeeded": succeeded,
                 "map_failed": failed,
+                "state_updates": {"map": map_texts},
             },
         )
 

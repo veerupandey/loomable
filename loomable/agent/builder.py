@@ -1136,12 +1136,18 @@ class BuiltAgent:
             )
             return result.output.text()
 
-        async def _synthesizer(input: Any, **kwargs: Any) -> str:
+        async def _synthesizer(input: Any, *, context: Any = None, **kwargs: Any) -> str:
             """Combine step results into a final cohesive answer."""
-            # input contains the shared state; extract step results
-            state_data = input if isinstance(input, dict) else {}
-            pieces = state_data.get("map", []) or []
-            combined = "\n".join(f"- {p}" for p in pieces) if pieces else str(input)
+            pieces: list[Any] = []
+            if context is not None and getattr(context, "shared_state", None) is not None:
+                raw = context.shared_state.get("map")
+                if isinstance(raw, list):
+                    pieces = raw
+            if not pieces and isinstance(input, dict):
+                pieces = input.get("map", []) or []
+            if not pieces:
+                pieces = [str(input)]
+            combined = "\n".join(f"- {p}" for p in pieces)
             prompt = (
                 f"Original task:\n{task_text}\n\n"
                 f"Results from the planned steps:\n{combined}\n\n"
@@ -2324,6 +2330,10 @@ class Agent:
         think_tool: bool = False,
         plan_tool: bool = False,
         memory_tool: bool = False,
+        # Tough-task mode (plan → fan-out → synthesize → verify):
+        mode: str | None = None,
+        fan_out: str = "map",
+        max_plan_steps: int = 5,
         # Multimodal feedback (Req 7.5):
         feedback_media: bool = True,
         # Developer experience:
@@ -2356,6 +2366,10 @@ class Agent:
         # High-level modality DX: modalities="text" / text_only=True preferred over
         # constructing ModelCapabilities with frozensets.
         from loomable.content.capabilities import capabilities_for
+
+        self._modalities_raw = modalities if isinstance(modalities, str) else None
+        if text_only:
+            self._modalities_raw = "text"
 
         if text_only and (modalities is not None or capabilities is not None):
             raise AgentConfigError("text_only")
@@ -2422,6 +2436,9 @@ class Agent:
         self._think_tool = think_tool
         self._plan_tool = plan_tool
         self._memory_tool = memory_tool
+        self._mode = (mode or "").strip().lower() or None
+        self._fan_out = fan_out
+        self._max_plan_steps = max_plan_steps
         self._feedback_media = feedback_media
 
         # Developer experience.
@@ -2683,6 +2700,26 @@ class Agent:
         context:
             Optional runtime context dict accessible during the run.
         """
+        # Tough mode: plan → fan-out → synthesize → verify via ToughTask.
+        if self._mode in ("tough", "plan_act_verify", "plan"):
+            from loomable.tough import ToughTask
+
+            max_iters = max(1, int(self._max_verify_retries) + 1)
+            tough = ToughTask(
+                model=self._model,
+                verifier=self._verifier,
+                max_iterations=max_iters,
+                max_steps=self._max_plan_steps,
+                fan_out=self._fan_out if self._fan_out in ("map", "spawn") else "map",
+                session_id=self._session_id,
+                tools=list(self._tools) if self._tools else None,
+                modalities=self._modalities_raw,
+            )
+            result = await tough.arun(input)
+            if self._on_complete is not None:
+                self._on_complete(result)
+            return result
+
         built = self._get_built()
         # Use response_model as default output_schema when not overridden per-call
         schema = output_schema or self._response_model
