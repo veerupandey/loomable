@@ -136,7 +136,10 @@ async def run_challenge() -> FinalPacket:
         ),
         tools=[FileTools(base_dir=str(work), json_schema=FinalPacket)],
         response_model=FinalPacket,
-        require_tools=["write_file", "write_json"],
+        require_tools=[
+            "write_file:output/challenge_brief.md",
+            "write_json:output/challenge_packet.json",
+        ],
         max_tool_iterations=12,
         text_only=True,
         session_id=f"{SESSION}-scribe",

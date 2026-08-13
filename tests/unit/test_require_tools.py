@@ -243,3 +243,91 @@ async def test_require_tools_renudges_until_all_called() -> None:
         for o in (result.tool_activity or [])
     ]
     assert "write_a" in names and "write_b" in names
+
+
+class _WrongPathThenFixProvider:
+    """write_file to wrong path, then after path nudge write correct path."""
+
+    def __init__(self) -> None:
+        self.fixed = False
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        last = request.messages[-1] if request.messages else {}
+        if isinstance(last, dict) and last.get("role") == "tool":
+            return ModelResponse(
+                content='{"ok": true}',
+                usage={"input_tokens": 2, "output_tokens": 2},
+            )
+
+        last_user = ""
+        for msg in reversed(request.messages):
+            if not isinstance(msg, dict) or msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if isinstance(content, list):
+                last_user = " ".join(
+                    str(p.get("text", "")) for p in content if isinstance(p, dict)
+                )
+            else:
+                last_user = str(content or "")
+            break
+
+        if "path containing" in last_user and not self.fixed:
+            self.fixed = True
+            return ModelResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="w2",
+                        tool_name="write_file",
+                        args={"path": "output/brief.md", "content": "ok"},
+                    )
+                ],
+                usage={"input_tokens": 3, "output_tokens": 2},
+            )
+
+        if not self.fixed:
+            return ModelResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="w1",
+                        tool_name="write_file",
+                        args={"path": "wrong.txt", "content": "nope"},
+                    )
+                ],
+                usage={"input_tokens": 3, "output_tokens": 2},
+            )
+
+        return ModelResponse(
+            content='{"ok": true}',
+            usage={"input_tokens": 2, "output_tokens": 2},
+        )
+
+
+@tool
+def write_file(path: str, content: str) -> str:
+    """Write a text file."""
+    return f"wrote:{path}"
+
+
+@pytest.mark.asyncio
+async def test_require_tools_path_constraint_renudges() -> None:
+    provider = _WrongPathThenFixProvider()
+    agent = Agent(
+        model=ModelSpec(provider="scripted", provider_impl=provider),
+        tools=[write_file],
+        require_tools=["write_file:output/brief.md"],
+        max_tool_iterations=10,
+    )
+
+    result = await agent.arun("write the brief")
+
+    assert result.metadata.get("require_tools_nudged") is True
+    assert "required_tools_missing" not in (result.metadata or {})
+    paths = []
+    for o in result.tool_activity or []:
+        # path is not on outcome; ensure at least two write_file calls happened
+        if o.result and o.result.metadata.get("tool_name") == "write_file":
+            paths.append(o.result.content)
+    assert any("output/brief.md" in (c or "") for c in paths)
