@@ -175,21 +175,21 @@ def _media_part_to_content(part: MediaPart) -> types.ContentBlock:
             type="resource_link",
             name=part.uri,
             uri=part.uri,
-            mimeType=part.media_type,
+            mime_type=part.media_type,
         )
 
     # Inline bytes → base64.
     encoded = base64.b64encode(part.data).decode("ascii") if part.data is not None else ""
 
     if part.modality is Modality.IMAGE:
-        return types.ImageContent(type="image", data=encoded, mimeType=part.media_type)
+        return types.ImageContent(type="image", data=encoded, mime_type=part.media_type)
 
     # Modality.VIDEO (and any other inline media): embed as a blob resource.
     return types.EmbeddedResource(
         type="resource",
         resource=types.BlobResourceContents(
             uri=part.uri or f"resource://output.{_ext_for(part.media_type)}",
-            mimeType=part.media_type,
+            mime_type=part.media_type,
             blob=encoded,
         ),
     )
@@ -232,14 +232,14 @@ class MCPServerAdapter:
         Builds an :class:`AgentInput` from the arguments, runs
         :meth:`BuiltAgent.arun`, and maps the :class:`AgentOutput` to MCP content
         (Req 8.3, 8.4). On any exception — argument translation or the run itself —
-        returns a :class:`mcp.types.CallToolResult` with ``isError=True`` and a
+        returns a :class:`mcp.types.CallToolResult` with ``is_error=True`` and a
         message identifying the failure rather than propagating (Req 8.5).
         """
         try:
             agent_input = arguments_to_agent_input(arguments)
             result = await self._agent.arun(agent_input)
             content = self.output_to_mcp_content(result.output)
-            return types.CallToolResult(content=content, isError=False)
+            return types.CallToolResult(content=content, is_error=False)
         except Exception as exc:  # noqa: BLE001 - translate any failure to an error result
             return types.CallToolResult(
                 content=[
@@ -248,7 +248,7 @@ class MCPServerAdapter:
                         text=f"{type(exc).__name__}: {exc}",
                     )
                 ],
-                isError=True,
+                is_error=True,
             )
 
     # ------------------------------------------------------------------
@@ -256,36 +256,36 @@ class MCPServerAdapter:
     # ------------------------------------------------------------------
 
     def server(self):
-        """Build and return the low-level MCP :class:`Server` exposing the agent.
+        """Build and return an MCP server exposing the agent as one tool.
 
-        The server advertises exactly one tool (``tool_name``) and routes its
-        invocation to :meth:`run_tool`.
+        Uses :class:`mcp.server.MCPServer` (current SDK). The server advertises
+        exactly one tool (``tool_name``) routed to :meth:`run_tool`.
         """
-        from mcp.server.lowlevel import Server
+        from mcp.server import MCPServer
 
-        server: Server = Server("loomable-agent")
+        server = MCPServer("loomable-agent")
         tool_name = self._tool_name
         run_tool = self.run_tool
 
-        @server.list_tools()
-        async def list_tools() -> list[types.Tool]:
-            return [
-                types.Tool(
-                    name=tool_name,
-                    description="Run the agent with an AgentInput and return its output.",
-                    inputSchema=_INPUT_SCHEMA,
-                )
-            ]
+        async def _agent_tool(messages: list[Any] | None = None) -> str:
+            """Run the loomable agent and return its text output."""
+            result = await run_tool({"messages": messages or []})
+            if getattr(result, "is_error", False):
+                parts = getattr(result, "content", None) or []
+                texts = [getattr(p, "text", "") for p in parts]
+                raise RuntimeError(" ".join(t for t in texts if t) or "agent tool failed")
+            texts: list[str] = []
+            for block in result.content or []:
+                text = getattr(block, "text", None)
+                if text:
+                    texts.append(text)
+            return "\n".join(texts) if texts else ""
 
-        @server.call_tool()
-        async def call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
-            if name != tool_name:
-                return types.CallToolResult(
-                    content=[types.TextContent(type="text", text=f"Unknown tool '{name}'.")],
-                    isError=True,
-                )
-            return await run_tool(arguments)
-
+        server.add_tool(
+            _agent_tool,
+            name=tool_name,
+            description="Run the agent with an AgentInput and return its output.",
+        )
         return server
 
     async def serve_stdio(self) -> None:  # pragma: no cover - thin transport wrapper

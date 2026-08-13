@@ -2135,10 +2135,14 @@ class BuiltAgent:
                 yield event
         finally:
             if not task.done():
-                await task
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
             else:
                 exc = task.exception()
-                if exc is not None:
+                if exc is not None and not isinstance(exc, asyncio.CancelledError):
                     raise exc
 
     async def dispatch_tools(self, calls: list[ToolCall]) -> list[ToolOutcome]:
@@ -2578,6 +2582,8 @@ class Agent:
 
         # Cached BuiltAgent so repeated run calls reuse one runtime/session.
         self._built: BuiltAgent | None = None
+        # Cached Case for mode="case" so board/state survive across arun calls.
+        self._case: Any | None = None
 
     # ------------------------------------------------------------------
     # Build
@@ -2832,9 +2838,9 @@ class Agent:
         """
         # Case mode: plan → dispatch → synthesize → accept.
         if self._mode == "case":
-            from loomable.case import Case
-
-            result = await Case.from_agent(self).arun(input)
+            case = self._get_case()
+            text = self._coerce_run_text(input)
+            result = await case.arun(text)
             if self._on_complete is not None:
                 self._on_complete(result)
             return result
@@ -2891,10 +2897,9 @@ class Agent:
         When ``mode="case"``, streams Case pipeline events.
         """
         if self._mode == "case":
-            from loomable.case import Case
-
-            case = Case.from_agent(self)
-            async for event in case.astream_events(input):
+            case = self._get_case()
+            text = self._coerce_run_text(input)
+            async for event in case.astream_events(text):
                 yield event
             return
 
@@ -2908,6 +2913,27 @@ class Agent:
             output_schema=schema,
         ):
             yield event
+
+    def _coerce_run_text(self, value: Any) -> str:
+        """Normalize string / AgentInput into plain text for Case pipelines."""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, AgentInput):
+            return _input_text(value)
+        if hasattr(value, "messages"):
+            try:
+                return _input_text(value)  # type: ignore[arg-type]
+            except Exception:  # noqa: BLE001
+                pass
+        return str(value)
+
+    def _get_case(self) -> Any:
+        """Lazily build and cache a Case so board state survives across calls."""
+        if self._case is None:
+            from loomable.case import Case
+
+            self._case = Case.from_agent(self)
+        return self._case
 
     # ------------------------------------------------------------------
     # System prompt assembly

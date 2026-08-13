@@ -694,9 +694,10 @@ class Case:
 
     async def arun(self, task: Any, **kwargs: Any) -> RunResult:
         """Run the case pipeline on ``task``."""
-        prompt = task
-        if self.goal and isinstance(task, str):
-            prompt = f"Goal: {self.goal}\n\nTask: {task}"
+        text = self._coerce_task_text(task)
+        prompt = text
+        if self.goal:
+            prompt = f"Goal: {self.goal}\n\nTask: {text}"
         wf = self.as_workflow()
         result = await wf.arun(prompt, **kwargs)
         meta = dict(result.metadata or {})
@@ -710,6 +711,26 @@ class Case:
         result.metadata = meta
         return result
 
+    @staticmethod
+    def _coerce_task_text(task: Any) -> str:
+        if isinstance(task, str):
+            return task
+        if hasattr(task, "text") and callable(task.text):
+            try:
+                return str(task.text())
+            except Exception:  # noqa: BLE001
+                pass
+        if hasattr(task, "messages"):
+            from loomable.agent.builder import _input_text
+            from loomable.content import AgentInput
+
+            if isinstance(task, AgentInput):
+                return _input_text(task)
+            try:
+                return _input_text(task)  # type: ignore[arg-type]
+            except Exception:  # noqa: BLE001
+                pass
+        return str(task)
     def run(self, task: Any, **kwargs: Any) -> RunResult:
         return asyncio.run(self.arun(task, **kwargs))
 
@@ -747,11 +768,9 @@ class Case:
 
         async def _runner() -> None:
             try:
-                prompt = (
-                    f"Goal: {self.goal}\n\nTask: {task}"
-                    if self.goal and isinstance(task, str)
-                    else task
-                )
+                # Reuse arun coercion + goal prefix via as_workflow input
+                text = self._coerce_task_text(task)
+                prompt = f"Goal: {self.goal}\n\nTask: {text}" if self.goal else text
                 wf = self.as_workflow()
                 async for ev in wf.astream_events(
                     prompt, session_id=sid, run_id=rid, **kwargs
@@ -782,7 +801,6 @@ class Case:
                 if self.board is not None:
                     self.board.set_on_change(None)
                 await bus.close()
-
         task_h = asyncio.create_task(_runner())
         try:
             async for ev in bus:

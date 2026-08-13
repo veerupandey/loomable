@@ -348,9 +348,10 @@ class Workflow:
         ``resume=False`` to start fresh.
         """
         flow = self._ensure_compiled()
-        result = await flow.arun(input, context=context, resume=resume)
-        if context is not None and context.shared_state is not None:
-            self._last_state = context.shared_state
+        ctx = context or RunContext()
+        result = await flow.arun(input, context=ctx, resume=resume)
+        if ctx.shared_state is not None:
+            self._last_state = ctx.shared_state
         else:
             self._last_state = SharedState()
         return result
@@ -366,20 +367,19 @@ class Workflow:
     ) -> AsyncIterator[Any]:
         """Yield AG-UI events (NODE_* lifecycle + nested run frames)."""
         flow = self._ensure_compiled()
-        captured_state: SharedState | None = None
+        ctx = context or RunContext()
 
         async for event in flow.astream_events(
             input,
             session_id=session_id or self._session_id,
             run_id=run_id,
-            context=context,
+            context=ctx,
             resume=resume,
         ):
             yield event
 
-        # Best-effort: refresh last_state after stream completes
-        if context is not None and context.shared_state is not None:
-            self._last_state = context.shared_state
+        if ctx.shared_state is not None:
+            self._last_state = ctx.shared_state
         elif self._last_state is None:
             self._last_state = SharedState()
 

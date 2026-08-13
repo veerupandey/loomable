@@ -192,3 +192,41 @@ async def test_workflow_astream_events_nodes() -> None:
     assert RUN_STARTED in types
     assert NODE_STARTED in types
     assert RUN_FINISHED in types
+
+
+@pytest.mark.asyncio
+async def test_agent_mode_case_reuses_board() -> None:
+    """Board must survive across arun calls on the same Agent(mode=case)."""
+    agent = Agent(
+        model=_model(),
+        mode="case",
+        dispatch="reuse",
+        accept=_sev_accept,
+        max_rounds=4,
+        max_plan_steps=3,
+        modalities="text",
+        board=True,
+    )
+    r1 = await agent.arun("Escalate INC-88421 first pass")
+    board1 = (r1.metadata or {}).get("board") or {}
+    assert board1.get("items")
+    case = agent._get_case()
+    n1 = len(case.board.list()) if case.board else 0
+    r2 = await agent.arun("Escalate INC-88421 second pass")
+    case2 = agent._get_case()
+    assert case is case2
+    assert case.board is case2.board
+    assert n1 >= 1
+    assert (r2.metadata or {}).get("case") is True
+
+
+@pytest.mark.asyncio
+async def test_workflow_state_without_caller_context() -> None:
+    from loomable import Workflow
+
+    async def step_a(inp):
+        return "alpha"
+
+    wf = Workflow("s").step("a", step_a)
+    await wf.arun("x")
+    assert wf.state.get("a") is not None
