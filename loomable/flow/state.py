@@ -22,6 +22,79 @@ __all__ = [
 Reducer = Callable[[Any, Any], Any]
 
 
+def _serialize_value(value: Any) -> Any:
+    """Make SharedState values JSON-safe (esp. AgentOutput / MediaPart)."""
+    from loomable.content import AgentOutput
+    from loomable.content.parts import MediaPart
+
+    if isinstance(value, AgentOutput):
+        return {
+            "__type__": "AgentOutput",
+            "parts": [_serialize_value(p) for p in value.parts],
+        }
+    if isinstance(value, MediaPart):
+        data_b64 = None
+        if value.data is not None:
+            import base64
+
+            data_b64 = base64.b64encode(value.data).decode("ascii")
+        return {
+            "__type__": "MediaPart",
+            "modality": value.modality.value if hasattr(value.modality, "value") else str(value.modality),
+            "media_type": value.media_type,
+            "data_b64": data_b64,
+            "uri": value.uri,
+        }
+    if isinstance(value, dict):
+        return {k: _serialize_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_serialize_value(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    # Fallback: deepcopy primitives / leave as-is for in-memory checkpointers
+    try:
+        return copy.deepcopy(value)
+    except Exception:  # noqa: BLE001
+        return str(value)
+
+
+def _deserialize_value(value: Any) -> Any:
+    """Restore AgentOutput / MediaPart from snapshot dicts."""
+    if isinstance(value, dict) and value.get("__type__") == "AgentOutput":
+        from loomable.content import AgentOutput
+
+        parts = [_deserialize_value(p) for p in value.get("parts", [])]
+        if not parts:
+            from loomable.content.parts import Text
+
+            parts = [Text("")]
+        return AgentOutput(parts=parts)
+    if isinstance(value, dict) and value.get("__type__") == "MediaPart":
+        import base64
+
+        from loomable.content.parts import MediaPart, Modality
+
+        data = None
+        if value.get("data_b64"):
+            data = base64.b64decode(value["data_b64"])
+        modality_raw = value.get("modality", "text")
+        try:
+            modality = Modality(modality_raw)
+        except ValueError:
+            modality = Modality.TEXT
+        return MediaPart(
+            modality=modality,
+            media_type=value.get("media_type") or "text/plain",
+            data=data,
+            uri=value.get("uri"),
+        )
+    if isinstance(value, dict):
+        return {k: _deserialize_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_deserialize_value(v) for v in value]
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Built-in reducers
 # ---------------------------------------------------------------------------
@@ -112,7 +185,7 @@ class SharedState:
         The returned dict can be persisted for checkpointing and later
         passed to ``restore()`` to recreate the SharedState.
         """
-        return copy.deepcopy(self._data)
+        return {k: _serialize_value(v) for k, v in self._data.items()}
 
     @classmethod
     def restore(
@@ -133,7 +206,7 @@ class SharedState:
             Same schema as the original state.
         """
         state = cls(reducers=reducers, schema=schema)
-        state._data = copy.deepcopy(data)
+        state._data = {k: _deserialize_value(v) for k, v in data.items()}
         return state
 
     # ------------------------------------------------------------------

@@ -2,10 +2,15 @@
 
 :class:`Team` builds a parent :class:`~loomable.agent.builder.Agent` with
 auto-generated coordination instructions and ``subagents=members``.
+
+Hard modes ``broadcast`` and ``sequential`` bypass the LLM coordinator and
+run members deterministically (enterprise predictability). Soft modes
+``coordinate`` and ``route`` keep LLM-driven delegation.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Literal
 
 from .builder import Agent
@@ -74,23 +79,16 @@ def _assemble_team_instructions(
     return "\n".join(parts)
 
 
+def _member_label(member: Agent, index: int) -> str:
+    return getattr(member, "_role", None) or getattr(member, "_name", None) or f"member_{index}"
+
+
 class Team:
-    """Explicit multi-agent orchestration via auto-generated parent instructions.
+    """Explicit multi-agent orchestration.
 
-    Under the hood this creates a parent :class:`Agent` with ``subagents=members``
-    and mode-specific coordination instructions.
-
-    Parameters
-    ----------
-    members:
-        Specialist agents that the coordinator can delegate to.
-    model:
-        Model for the coordinating parent agent.
-    mode:
-        Orchestration pattern: ``coordinate``, ``route``, ``broadcast``, or
-        ``sequential``.
-    instructions:
-        Optional extra instructions appended to the auto-generated prompt.
+    Soft modes (``coordinate``, ``route``): LLM parent + ``delegate_to_*`` tools.
+    Hard modes (``broadcast``, ``sequential``): deterministic fan-out / pipeline
+    without relying on the coordinator LLM to call tools correctly.
     """
 
     def __init__(
@@ -100,6 +98,10 @@ class Team:
         *,
         mode: TeamMode = "coordinate",
         instructions: str | None = None,
+        session_id: str | None = None,
+        max_delegations: int | None = None,
+        max_depth: int = 4,
+        hard: bool | None = None,
     ) -> None:
         if not members:
             raise ValueError("Team requires at least one member")
@@ -108,13 +110,25 @@ class Team:
         self._model = model
         self._mode = mode
         self._instructions = instructions
-        self._agent = Agent(
-            model=model,
-            role="Team Coordinator",
-            goal=f"Coordinate the team in {mode} mode",
-            instructions=_assemble_team_instructions(mode, members, instructions),
-            subagents=members,
-        )
+        self._session_id = session_id
+        self._max_delegations = max_delegations
+        self._max_depth = max_depth
+        # Hard by default for broadcast/sequential; soft for coordinate/route
+        self._hard = (mode in ("broadcast", "sequential")) if hard is None else hard
+
+        agent_kwargs: dict[str, Any] = {
+            "model": model,
+            "role": "Team Coordinator",
+            "goal": f"Coordinate the team in {mode} mode",
+            "instructions": _assemble_team_instructions(mode, members, instructions),
+            "subagents": members,
+        }
+        if session_id is not None:
+            agent_kwargs["session_id"] = session_id
+        self._agent = Agent(**agent_kwargs)
+        # Stash budgets for build-time wiring (delegation tools rebuilt in arun soft path)
+        self._agent._max_delegations = max_delegations  # type: ignore[attr-defined]
+        self._agent._max_depth = max_depth  # type: ignore[attr-defined]
 
     @property
     def agent(self) -> Agent:
@@ -131,6 +145,57 @@ class Team:
         """The team member agents."""
         return list(self._members)
 
+    async def _run_broadcast(self, task: str) -> "RunResult":
+        from loomable.agent.run import RunResult
+        from loomable.content import AgentOutput, Text
+
+        async def _one(member: Agent, index: int) -> tuple[str, str]:
+            label = _member_label(member, index)
+            try:
+                result = await member.arun(task)
+                return label, result.output.text()
+            except Exception as exc:  # noqa: BLE001
+                return label, f"ERROR: {exc}"
+
+        pairs = await asyncio.gather(
+            *[_one(m, i) for i, m in enumerate(self._members)]
+        )
+        lines = [f"## {label}\n{text}" for label, text in pairs]
+        merged = "\n\n".join(lines)
+        return RunResult(
+            output=AgentOutput(parts=[Text(merged)]),
+            session_id=self._session_id or "",
+            metadata={"team_mode": "broadcast", "hard": True},
+        )
+
+    async def _run_sequential(self, task: str) -> "RunResult":
+        from loomable.agent.run import RunResult
+        from loomable.content import AgentOutput, Text
+
+        current = task
+        trail: list[str] = []
+        for i, member in enumerate(self._members):
+            label = _member_label(member, i)
+            prompt = current if i == 0 else (
+                f"Prior output from previous team member:\n{current}\n\n"
+                f"Continue the pipeline for the original task:\n{task}"
+            )
+            try:
+                result = await member.arun(prompt)
+                current = result.output.text()
+            except Exception as exc:  # noqa: BLE001
+                current = f"ERROR from {label}: {exc}"
+            trail.append(f"[{label}] {current[:500]}")
+        return RunResult(
+            output=AgentOutput(parts=[Text(current)]),
+            session_id=self._session_id or "",
+            metadata={
+                "team_mode": "sequential",
+                "hard": True,
+                "trail": trail,
+            },
+        )
+
     async def arun(
         self,
         input: "AgentInput | str",  # noqa: A002
@@ -141,7 +206,36 @@ class Team:
         output_schema: type | None = None,
         context: dict[str, Any] | None = None,
     ) -> "RunResult":
-        """Run the team coordinator and return a :class:`~loomable.agent.run.RunResult`."""
+        """Run the team and return a :class:`~loomable.agent.run.RunResult`."""
+        if self._hard and self._mode == "broadcast":
+            text = input if isinstance(input, str) else str(input)
+            return await self._run_broadcast(text)
+        if self._hard and self._mode == "sequential":
+            text = input if isinstance(input, str) else str(input)
+            return await self._run_sequential(text)
+
+        # Soft path: rebuild delegation tools with budgets if needed
+        if self._max_delegations is not None or self._max_depth != 4:
+            from .delegation import make_delegation_tools
+
+            built = self._agent.build()
+            # Replace delegation tools with budgeted versions
+            budgeted = make_delegation_tools(
+                self._members,
+                max_delegations=self._max_delegations,
+                max_depth=self._max_depth,
+            )
+            for t in budgeted:
+                built.tool_runtime._tools[t.name] = t
+            return await built.arun(
+                input,
+                images=images,
+                videos=videos,
+                audio=audio,
+                output_schema=output_schema,
+                context=context,
+            )
+
         return await self._agent.arun(
             input,
             images=images,
@@ -162,11 +256,13 @@ class Team:
         context: dict[str, Any] | None = None,
     ) -> "RunResult":
         """Synchronous wrapper around :meth:`arun`."""
-        return self._agent.run(
-            input,
-            images=images,
-            videos=videos,
-            audio=audio,
-            output_schema=output_schema,
-            context=context,
+        return asyncio.run(
+            self.arun(
+                input,
+                images=images,
+                videos=videos,
+                audio=audio,
+                output_schema=output_schema,
+                context=context,
+            )
         )

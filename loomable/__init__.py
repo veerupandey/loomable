@@ -16,8 +16,10 @@ __version__ = "0.1.0"
 from loomable.agent import (
     Agent,
     BuiltAgent,
+    ContextPolicy,
     RunResult,
     Team,
+    spawn_specialist,
     tool,
 )
 from loomable.flow import (
@@ -52,6 +54,8 @@ __all__ = [
     "Parallel_Group",
     "tool",
     "RunResult",
+    "ContextPolicy",
+    "spawn_specialist",
     # Helpers (aliases that return Flow)
     "sequential",
     "parallel",

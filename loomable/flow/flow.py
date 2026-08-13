@@ -300,18 +300,21 @@ class Flow:
     # ------------------------------------------------------------------
 
     async def arun(
-        self, input: Any, *, context: "RunContext | None" = None  # noqa: A002
+        self,
+        input: Any,  # noqa: A002
+        *,
+        context: "RunContext | None" = None,
+        resume: bool | None = None,
     ) -> "RunResult":
         """Execute the flow end-to-end.
 
-        Steps:
-        1. Build SharedState from configured reducers.
-        2. If checkpointer configured, attempt to restore from checkpoint (Req 13.2).
-        3. If optimizer enabled, apply optimization (rewrite the plan).
-        4. Resolve the execution engine (Sequential by default for now).
-        5. Engine drives execution — nodes run, results written to state.
-        6. Write a final (complete) checkpoint if checkpointer is configured.
-        7. Assemble RunResult with sub_results and executed FlowPlan.
+        Parameters
+        ----------
+        resume:
+            ``True`` — require an incomplete checkpoint for ``session_id`` and
+            continue from it (raises if none).
+            ``False`` — ignore any incomplete checkpoint and start fresh.
+            ``None`` (default) — auto-resume when an incomplete checkpoint exists.
         """
         from loomable.agent.context import RunContext
         from loomable.flow.engines.sequential import SequentialEngine
@@ -338,7 +341,26 @@ class Flow:
         pending_decisions: dict[str, str] | None = None
         if self._checkpointer is not None and self._session_id is not None:
             existing_cp = await self._checkpointer.get(self._session_id)
-            if existing_cp is not None and not existing_cp.complete:
+            has_incomplete = existing_cp is not None and not existing_cp.complete
+            if resume is True and not has_incomplete:
+                raise RuntimeError(
+                    f"resume=True but no incomplete checkpoint for session_id="
+                    f"{self._session_id!r}"
+                )
+            if resume is False and has_incomplete:
+                # Start fresh: mark old run complete so it won't auto-restore
+                from loomable.persist.checkpoint import Checkpoint
+
+                await self._checkpointer.put(
+                    Checkpoint(
+                        thread_id=self._session_id,
+                        step=existing_cp.step if existing_cp else 0,
+                        session_state=dict(existing_cp.session_state) if existing_cp else {},
+                        complete=True,
+                    )
+                )
+                has_incomplete = False
+            if has_incomplete and existing_cp is not None:
                 cp_session = existing_cp.session_state
                 if "shared_state" in cp_session:
                     state = SharedState.restore(
@@ -407,6 +429,9 @@ class Flow:
         # 8. Attach the executed FlowPlan with before/after to the result
         plan = self._build_executed_plan(optimized_flow, applied_rules, engine)
         result.metadata["flow_plan"] = plan
+        if completed_node_ids:
+            result.metadata["resumed"] = True
+            result.metadata["skipped_nodes"] = sorted(completed_node_ids)
 
         return result
 

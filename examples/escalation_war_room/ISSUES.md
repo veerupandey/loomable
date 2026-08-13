@@ -43,12 +43,18 @@ Found while stressing a real AcmePay SEV-1 war-room agent on Gemini
 
 ## Still open (to fix next)
 
-### ISSUE-WR-010 — Workflow/Flow/Graph API sprawl (P1 → in progress)
-- **Fix started:** Fluent `Workflow.step/parallel/branch/loop/map` is the
-  preferred high-level process API; `checkpointer`/`session_id` wired through
-  Workflow + helpers; top-level `from loomable import Agent, Team, Workflow`.
-- Low-level `Flow`/`Edge` remain as advanced escape hatch. Full doc migration
-  and helper deprecation messaging continue next.
+### ISSUE-WR-010 — Workflow/Flow/Graph API sprawl (P1 → largely fixed)
+- Fluent `Workflow.step/parallel/branch/loop/map` is the preferred process API
+- `checkpointer`/`session_id`/`resume=` wired; JSON checkpoints round-trip AgentOutput
+- Top-level `from loomable import Agent, Team, Workflow, ContextPolicy, spawn_specialist`
+
+### ISSUE-WR-011 — Memory L1/L2/L3 + auto-compaction (fixed)
+- `ContextPolicy` unifies compaction + hard spill; Agent uses it on persist/bound
+- War-room Phase C gate: `06_memory_compaction.py`
+
+### Durability + Team (Phases B/D)
+- Kill/resume gate: `05_checkpoint_resume.py`
+- Hard Team modes + `spawn_specialist`: `07_team_spawn.py`
 
 ### ISSUE-WR-008 — No first-class PPT/PDF **write** toolkit (P2)
 - Can read pptx/pdf; writing requires custom `@tool` + `python-pptx` / PDF

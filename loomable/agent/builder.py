@@ -460,6 +460,9 @@ class BuiltAgent:
     # from session.l1 (Req 6.1–6.5). Default is 2× memory_window.
     compaction_threshold: int = 16
 
+    # Unified auto-compaction / spill policy (enterprise long-run safety).
+    context_policy: Any | None = None
+
     # Tiered model routing (Req 7): when configured, model calls are routed through
     # this kernel ModelRouter instead of the model_interface directly.
     router: ModelRouter | None = None
@@ -905,6 +908,16 @@ class BuiltAgent:
         """
         if not messages:
             return messages
+
+        from loomable.agent.context_policy import ContextPolicy
+
+        policy = self.context_policy or ContextPolicy(
+            memory_window=self.memory_window,
+            compaction_threshold=self.compaction_threshold,
+            token_budget=budget,
+        )
+        # Hard spill of bulky tool payloads before ContextManager eviction.
+        messages = policy.spill_bulky_tool_messages(list(messages))
 
         # Build ContextItems, one per message, tracking the original index.
         items: list[tuple[int, ContextItem]] = []
@@ -1730,37 +1743,32 @@ class BuiltAgent:
         )
         self.session.step += 1
 
-        # --- Automatic memory compaction (Req 6.1–6.5) ---
-        # When retained turns exceed the compaction_threshold, summarize the oldest
-        # overflow turns (those beyond the most recent window) into session.l2 and
-        # drop them from session.l1, preserving only the most recent window and all
-        # pinned turns.
-        if self.summarizer is not None and len(self.session.l1) > self.compaction_threshold:
-            # Determine how many turns to keep uncompacted (the recent window).
-            window = self.memory_window if self.memory_window else len(self.session.l1)
-            # The overflow turns are everything before the retained window.
-            overflow_count = len(self.session.l1) - window
-            if overflow_count > 0:
-                overflow_slice = self.session.l1[:overflow_count]
-                # Separate pinned turns (never compacted) from non-pinned overflow.
-                pinned_turns = [t for t in overflow_slice if t.step in self.pinned_steps]
-                non_pinned_overflow = [t for t in overflow_slice if t.step not in self.pinned_steps]
-                # Summarize only the non-pinned overflow turns (Req 6.3, 6.5).
-                if non_pinned_overflow:
-                    summary = self.summarizer.summarize(non_pinned_overflow)
-                    # Store the summary in L2 (Req 6.3).
-                    self.session.l2.append(summary)
-                    # Emit compaction event (Req 11.4).
-                    self.events.emit(Event(
-                        kind="compaction",
-                        t=time.monotonic(),
-                        attributes={
-                            "turns_compacted": len(non_pinned_overflow),
-                            "summary_tokens": getattr(summary, "tokens", 0),
-                        },
-                    ))
-                # Rebuild session.l1: pinned overflow turns + recent window (Req 6.2, 6.4).
-                self.session.l1 = pinned_turns + self.session.l1[overflow_count:]
+        # --- Automatic memory compaction via ContextPolicy ---
+        from loomable.agent.context_policy import ContextPolicy
+
+        policy = self.context_policy or ContextPolicy(
+            memory_window=self.memory_window,
+            compaction_threshold=self.compaction_threshold,
+            token_budget=self._token_budget or 8192,
+        )
+        if self.summarizer is not None and policy.should_compact_turns(len(self.session.l1)):
+            new_l1, summaries, outcome = policy.compact_turns(
+                self.session.l1,
+                pinned_steps=self.pinned_steps,
+                summarizer=self.summarizer,
+            )
+            if outcome.compacted:
+                self.session.l1 = new_l1
+                self.session.l2.extend(summaries)
+                self.events.emit(Event(
+                    kind="compaction",
+                    t=time.monotonic(),
+                    attributes={
+                        "turns_compacted": outcome.turns_before - outcome.turns_after,
+                        "summary_tokens": getattr(summaries[0], "tokens", 0) if summaries else 0,
+                        "reason": outcome.reason,
+                    },
+                ))
 
         self.session_store.save(self.session)
 
@@ -2394,6 +2402,7 @@ class Agent:
             use_memory=self._use_memory,
             memory_window=self._memory_window,
             compaction_threshold=self._compaction_threshold,
+            context_policy=None,  # filled below from knobs
             input_schema=self._input_schema,
             tool_hooks=list(self._tool_hooks) if self._tool_hooks else [],
             require_confirmation=(
@@ -2416,6 +2425,14 @@ class Agent:
             retry_on_failure=self._retry_on_failure,
             max_verify_retries=self._max_verify_retries,
             _feedback_media=self._feedback_media,
+        )
+
+        from loomable.agent.context_policy import ContextPolicy
+
+        built.context_policy = ContextPolicy(
+            memory_window=self._memory_window,
+            compaction_threshold=self._compaction_threshold,
+            token_budget=self._token_budget,
         )
 
         # --- Wire harness knobs from Agent constructor (avoids build() boilerplate) ---
