@@ -53,6 +53,11 @@ Found while stressing a real AcmePay SEV-1 war-room agent on Gemini
 - **Symptom:** Fluent Workflow could not pause for approval without building `Node`s.
 - **Fix:** `Step(..., confirm=True)` / `Workflow.step(..., confirm=True)` + `approve()`.
 
+### ISSUE-WR-015 — JsonFileCheckpointer approve race (P0 — fixed)
+- **Symptom:** After `wf.approve("scribe")`, resume re-raised `FlowPaused`.
+- **Cause:** Approved checkpoint kept old timestamp; `get()` returned pre-approve file.
+- **Fix:** `JsonFileCheckpointer.put` refreshes timestamp on every write.
+
 ### ISSUE-WR-010 — Workflow/Flow/Graph API sprawl (P1 → largely fixed)
 - Fluent `Workflow.step/parallel/branch/loop/map` is the preferred process API
 - `checkpointer`/`session_id`/`resume=` wired; JSON checkpoints round-trip AgentOutput
