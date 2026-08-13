@@ -100,7 +100,14 @@ result = await agent.arun("What is 7 * 8?")
 ### Workflow (+ SharedState)
 
 ```python
-from loomable import Workflow, JsonFileCheckpointer
+from loomable import Workflow, JsonFileCheckpointer, PostgresCheckpointer
+
+# Local / simple
+wf = Workflow("job", session_id="job-1", checkpointer=JsonFileCheckpointer("./ckpts"))
+
+# Production
+# pip install 'loomable[postgres]'
+# wf = Workflow("job", session_id="job-1", checkpointer=PostgresCheckpointer(os.environ["POSTGRES_URL"]))
 
 wf = (
     Workflow("sev", session_id="inc-1", checkpointer=cp)
@@ -210,7 +217,8 @@ loomable/
 ├── content/     # Media parts & coercion
 ├── kernel/      # Core primitives (import-independent)
 ├── providers/   # OpenAI, Azure, Anthropic, Gemini, Groq, Ollama
-├── persist/     # Checkpointers
+├── persist/     # Checkpointers (JsonFile, SQLite, Postgres)
+├── providers/   # Model providers + backends (Postgres KV/vector)
 ├── serve/       # FastAPI + MCP adapters
 └── media/       # High-level Image / Audio / Video helpers
 ```
