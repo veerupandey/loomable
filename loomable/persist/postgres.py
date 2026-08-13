@@ -1,10 +1,7 @@
 """PostgreSQL checkpointer (asyncpg).
 
-Production-durable Workflow/Case resume. Optional dependency::
-
-    pip install 'loomable[postgres]'  # or: pip install asyncpg
-
-Tables are created automatically on first use.
+    pip install 'loomable[postgres]'
+    docker compose up -d
 """
 
 from __future__ import annotations
