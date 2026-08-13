@@ -155,3 +155,91 @@ async def test_structured_recovers_from_write_json_when_final_empty() -> None:
     assert result.structured is not None
     assert result.structured.incident_id == "INC-1"
     assert result.structured.severity == "SEV-1"
+
+
+class _PartialRequireToolsProvider:
+    """Finish early twice: nudge1 → write_a; finish again → nudge2 → write_b."""
+
+    def __init__(self) -> None:
+        self.a_done = False
+        self.b_done = False
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        last = request.messages[-1] if request.messages else {}
+        if isinstance(last, dict) and last.get("role") == "tool":
+            # After each write, attempt to finish (framework re-nudges if needed).
+            return ModelResponse(
+                content='{"ok": true}',
+                usage={"input_tokens": 2, "output_tokens": 2},
+            )
+
+        last_user = ""
+        for msg in reversed(request.messages):
+            if not isinstance(msg, dict) or msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if isinstance(content, list):
+                last_user = " ".join(
+                    str(p.get("text", "")) for p in content if isinstance(p, dict)
+                )
+            else:
+                last_user = str(content or "")
+            break
+
+        if "required tools" in last_user:
+            if not self.a_done:
+                self.a_done = True
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(id="a1", tool_name="write_a", args={"x": "1"})
+                    ],
+                    usage={"input_tokens": 3, "output_tokens": 2},
+                )
+            if not self.b_done:
+                self.b_done = True
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(id="b1", tool_name="write_b", args={"x": "2"})
+                    ],
+                    usage={"input_tokens": 3, "output_tokens": 2},
+                )
+
+        return ModelResponse(
+            content='{"ok": true}',
+            usage={"input_tokens": 5, "output_tokens": 3},
+        )
+
+
+@tool
+def write_a(x: str) -> str:
+    """Write artifact A."""
+    return f"a:{x}"
+
+
+@tool
+def write_b(x: str) -> str:
+    """Write artifact B."""
+    return f"b:{x}"
+
+
+@pytest.mark.asyncio
+async def test_require_tools_renudges_until_all_called() -> None:
+    provider = _PartialRequireToolsProvider()
+    agent = Agent(
+        model=ModelSpec(provider="scripted", provider_impl=provider),
+        tools=[write_a, write_b],
+        require_tools=["write_a", "write_b"],
+        max_tool_iterations=10,
+    )
+
+    result = await agent.arun("write both")
+
+    assert result.metadata.get("require_tools_nudges", 0) >= 2
+    assert "required_tools_missing" not in (result.metadata or {})
+    names = [
+        (o.result.metadata.get("tool_name") if o.result else None)
+        for o in (result.tool_activity or [])
+    ]
+    assert "write_a" in names and "write_b" in names
