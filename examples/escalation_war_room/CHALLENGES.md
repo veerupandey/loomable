@@ -21,8 +21,9 @@ Goal: enterprise spine that stays one-line-easy on the happy path.
 1. **Structured output vs side-effect tools (P0 — fixed)**  
    Models often return `FinalPacket` JSON and skip `write_file` / `write_json`.  
    Instructions alone are not enough.  
-   **Fix:** `Agent(require_tools=[...])` — one nudge with tools still enabled; metadata
-   `require_tools_nudged` / `required_tools_missing`.
+   **Fix:** `Agent(require_tools=[...])` — re-nudge with tools still enabled until
+   all required tools are satisfied; metadata `require_tools_nudged` /
+   `require_tools_nudges` / `required_tools_missing`.
 
 1b. **Empty final after successful write_json (P0 — fixed)**  
    After tools (especially under `require_tools` nudge), Gemini sometimes returns
@@ -30,6 +31,12 @@ Goal: enterprise spine that stays one-line-easy on the happy path.
    wrote a valid packet.  
    **Fix:** Recover `structured` (and fill output text) from the last successful
    `write_json` payload; metadata `structured_from_write_json=True`.
+
+1c. **Wrong write paths still "satisfy" name-only require_tools (P0 — fixed)**  
+   Model called `write_file`/`write_json` but wrote `final_packet.txt` at repo root
+   instead of `output/stress_brief.md`.  
+   **Fix:** Path constraints — `require_tools=["write_file:output/stress_brief.md",
+   "write_json:output/final_packet.json"]` match the tool `path` argument.
 
 2. **Soft Team flakiness (P1)**  
    `coordinate` / `route` depend on the LLM calling `delegate_to_*`. Sometimes zero

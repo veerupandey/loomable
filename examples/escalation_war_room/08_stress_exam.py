@@ -291,7 +291,10 @@ def make_scribe(work: Path, *, resumed: bool) -> Agent:
         ),
         tools=[FileTools(base_dir=str(work), json_schema=FinalPacket)],
         response_model=FinalPacket,
-        require_tools=["write_file", "write_json"],
+        require_tools=[
+            "write_file:output/stress_brief.md",
+            "write_json:output/final_packet.json",
+        ],
         max_tool_iterations=12,
         text_only=True,
         session_id=f"{SESSION}-scribe",

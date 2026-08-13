@@ -272,6 +272,58 @@ def _strip_json_fences(text: str) -> str:
     return cleaned
 
 
+def _parse_require_tool_specs(specs: list[str]) -> list[tuple[str, str | None]]:
+    """Parse ``require_tools`` entries into ``(name, path_substr|None)``.
+
+    Supports plain names (``\"write_file\"``) and path constraints
+    (``\"write_file:output/brief.md\"``) so scribes cannot "satisfy" the
+    contract by writing to an arbitrary path.
+    """
+    parsed: list[tuple[str, str | None]] = []
+    for raw in specs:
+        spec = (raw or "").strip()
+        if not spec:
+            continue
+        if ":" in spec:
+            name, _, path = spec.partition(":")
+            name, path = name.strip(), path.strip()
+            if name:
+                parsed.append((name, path or None))
+            continue
+        parsed.append((spec, None))
+    return parsed
+
+
+def _missing_require_tool_specs(
+    specs: list[tuple[str, str | None]],
+    satisfied: set[tuple[str, str | None]],
+) -> list[str]:
+    """Return human-readable missing require_tools specs."""
+    missing: list[str] = []
+    for name, path in specs:
+        if (name, path) in satisfied:
+            continue
+        missing.append(f"{name}:{path}" if path else name)
+    return missing
+
+
+def _format_require_tools_nudge(missing: list[str]) -> str:
+    parts: list[str] = []
+    for item in missing:
+        if ":" in item:
+            name, _, path = item.partition(":")
+            parts.append(
+                f"call {name} with path containing {path!r}"
+            )
+        else:
+            parts.append(f"call {item}")
+    return (
+        "You finished without satisfying required tools: "
+        + "; ".join(parts)
+        + ". Do those tool calls now (exact required paths), then give your final answer."
+    )
+
+
 def _extract_json_object(text: str) -> str:
     """Return the first JSON object substring, or the original text."""
     cleaned = _strip_json_fences(text)
@@ -450,7 +502,9 @@ class BuiltAgent:
     require_final_text: bool = True
 
     # Tool names that MUST be called at least once before the run finishes.
-    # Missing tools trigger one re-prompt with tools still enabled.
+    # Missing tools trigger re-prompts with tools still enabled.
+    # Entries may be plain names ("write_file") or path constraints
+    # ("write_file:output/brief.md") matched against the tool's path argument.
     require_tools: list[str] = field(default_factory=list)
 
     # Per-tool timeout and concurrency cap for gated dispatch (Req 2.1–2.4).
@@ -1340,12 +1394,19 @@ class BuiltAgent:
         tool_activity: list[ToolOutcome] = []
         called_tool_names: set[str] = set()
         write_json_payloads: list[str] = []
+        require_tool_specs = _parse_require_tool_specs(list(self.require_tools))
+        satisfied_require_tools: set[tuple[str, str | None]] = set()
         tier_substitutions: list[TierSubstitution] = []
         iterations = 0
         stop_reason: StopReason | None = None
         response = None  # May remain None if we break before the first model call.
         require_tools_nudges = 0
-        max_require_tools_nudges = max(1, len(self.require_tools)) if self.require_tools else 0
+        has_path_constraints = any(path for _, path in require_tool_specs)
+        max_require_tools_nudges = (
+            max(1, len(require_tool_specs) * 2)
+            if has_path_constraints
+            else max(1, len(require_tool_specs))
+        ) if require_tool_specs else 0
 
         while True:
             # --- Check cooperative cancellation at each loop boundary (Req 4.1) ---
@@ -1417,9 +1478,9 @@ class BuiltAgent:
             # No tool calls: candidate final answer — but required tools may still
             # be missing (e.g. scribe returns JSON without write_file/write_json).
             if not response.tool_calls:
-                missing_required = [
-                    name for name in self.require_tools if name not in called_tool_names
-                ]
+                missing_required = _missing_require_tool_specs(
+                    require_tool_specs, satisfied_require_tools
+                )
                 if (
                     missing_required
                     and require_tools_nudges < max_require_tools_nudges
@@ -1443,13 +1504,7 @@ class BuiltAgent:
                             "content": [
                                 {
                                     "type": "text",
-                                    "text": (
-                                        "You finished without calling required tools: "
-                                        + ", ".join(missing_required)
-                                        + ". Call each of those tools now "
-                                        "(with the correct arguments), then give "
-                                        "your final answer."
-                                    ),
+                                    "text": _format_require_tools_nudge(missing_required),
                                 }
                             ],
                         }
@@ -1549,6 +1604,12 @@ class BuiltAgent:
             tool_activity.extend(gated_result.outcomes)
             for tc in calls_to_dispatch:
                 called_tool_names.add(tc.tool_name)
+                path_arg = str(tc.args.get("path") or "")
+                for name, path_sub in require_tool_specs:
+                    if tc.tool_name != name:
+                        continue
+                    if path_sub is None or path_sub in path_arg:
+                        satisfied_require_tools.add((name, path_sub))
                 if tc.tool_name == "write_json":
                     outcome = next(
                         (o for o in gated_result.outcomes if o.call_id == tc.id),
@@ -1795,9 +1856,9 @@ class BuiltAgent:
             metadata["require_tools_nudges"] = require_tools_nudges
         if structured_from_write_json:
             metadata["structured_from_write_json"] = True
-        still_missing = [
-            name for name in self.require_tools if name not in called_tool_names
-        ]
+        still_missing = _missing_require_tool_specs(
+            require_tool_specs, satisfied_require_tools
+        )
         if still_missing:
             metadata["required_tools_missing"] = still_missing
 

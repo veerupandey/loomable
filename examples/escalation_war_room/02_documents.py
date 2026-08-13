@@ -141,7 +141,10 @@ async def write_artifacts(work: Path, pack: EvidencePack) -> EscalationPacket:
         ),
         tools=[FileTools(base_dir=str(work), json_schema=EscalationPacket)],
         response_model=EscalationPacket,
-        require_tools=["write_file", "write_json"],
+        require_tools=[
+            "write_file:output/war_room_brief.md",
+            "write_json:output/escalation_packet.json",
+        ],
         max_tool_iterations=10,
     )
     result = await agent.arun(
