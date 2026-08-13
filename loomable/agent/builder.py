@@ -241,10 +241,47 @@ def _schema_instruction(output_schema: type) -> str:
     to the model; validation is enforced separately after the response arrives.
     """
     name = getattr(output_schema, "__name__", "the requested schema")
+    details = ""
+    try:
+        import pydantic
+
+        if isinstance(output_schema, type) and issubclass(output_schema, pydantic.BaseModel):
+            schema = output_schema.model_json_schema()
+            props = list((schema.get("properties") or {}).keys())
+            if props:
+                details = f" Use exactly these keys: {', '.join(props)}."
+            details += f" JSON Schema: {json.dumps(schema)}"
+    except Exception:
+        pass
     return (
         "Respond ONLY with a single JSON object that matches "
-        f"{name}. Do not include any prose, markdown, or code fences."
+        f"{name}.{details} Do not include any prose, markdown, or code fences."
     )
+
+
+def _strip_json_fences(text: str) -> str:
+    """Remove common markdown code fences around JSON payloads."""
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+    return cleaned
+
+
+def _extract_json_object(text: str) -> str:
+    """Return the first JSON object substring, or the original text."""
+    cleaned = _strip_json_fences(text)
+    if cleaned.startswith("{") and cleaned.endswith("}"):
+        return cleaned
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return cleaned[start : end + 1]
+    return cleaned
 
 
 def _validate_structured(text: str, output_schema: type) -> object:
@@ -255,6 +292,7 @@ def _validate_structured(text: str, output_schema: type) -> object:
     the failure (Req 13.3). ``pydantic`` is imported lazily so the module still
     imports when only dataclasses are used.
     """
+    text = _extract_json_object(text)
     # pydantic BaseModel: prefer its own JSON validation (handles parse + validate).
     try:  # lazy/defensive import — pydantic may be absent for dataclass-only users.
         import pydantic
@@ -1431,10 +1469,19 @@ class BuiltAgent:
             ))
 
             # Append assistant message with tool calls to the conversation.
-            assistant_tool_calls = [
-                {"id": tc.id, "tool_name": tc.tool_name, "args": tc.args}
-                for tc in response.tool_calls
-            ]
+            assistant_tool_calls = []
+            for tc in response.tool_calls:
+                entry: dict[str, Any] = {
+                    "id": tc.id,
+                    "tool_name": tc.tool_name,
+                    "args": tc.args,
+                }
+                if tc.metadata:
+                    entry["metadata"] = tc.metadata
+                    # Flatten Gemini thought signature for OpenAI-compat replay.
+                    if "extra_content" in tc.metadata:
+                        entry["extra_content"] = tc.metadata["extra_content"]
+                assistant_tool_calls.append(entry)
             request.messages.append({
                 "role": "assistant",
                 "content": [],

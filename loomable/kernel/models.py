@@ -114,6 +114,8 @@ class ToolCall:
     id: str
     tool_name: str
     args: dict[str, Any] = field(default_factory=dict)
+    # Provider-specific extras (e.g. Gemini ``extra_content`` / thought signatures).
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

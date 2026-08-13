@@ -1,8 +1,9 @@
 """Shared provider helper for simple use-case examples.
 
 Picks the first available backend from env:
-  1) Z.AI / OpenAI-compatible (ZAI_API_KEY or OPENAI_API_KEY + optional base URL)
-  2) Azure OpenAI (AZURE_OPENAI_*)
+  1) Gemini (GEMINI_API_KEY or GOOGLE_API_KEY)
+  2) Z.AI / OpenAI-compatible (ZAI_API_KEY or OPENAI_API_KEY + optional base URL)
+  3) Azure OpenAI (AZURE_OPENAI_*)
 """
 
 from __future__ import annotations
@@ -16,6 +17,16 @@ load_dotenv()
 
 def make_provider():
     """Return a configured model provider for demos."""
+    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if gemini_key:
+        from loomable.providers.gemini import GeminiProvider
+
+        return GeminiProvider(
+            model=os.environ.get("GEMINI_MODEL", "gemini-flash-latest"),
+            api_key=gemini_key,
+            timeout=120.0,
+        )
+
     zai_key = os.environ.get("ZAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
     if zai_key:
         from loomable.providers.openai import OpenAIProvider
