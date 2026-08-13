@@ -1,0 +1,43 @@
+{
+  "thread_id": "inc-88421-resume",
+  "step": 2,
+  "session_state": {
+    "shared_state": {
+      "gather": {
+        "__type__": "AgentOutput",
+        "parts": [
+          {
+            "__type__": "MediaPart",
+            "modality": "text",
+            "media_type": "text/plain",
+            "data_b64": "RVZJREVOQ0U6U0VWLTEgZW1haWw=",
+            "uri": null
+          }
+        ]
+      },
+      "scribe": {
+        "__type__": "AgentOutput",
+        "parts": [
+          {
+            "__type__": "MediaPart",
+            "modality": "text",
+            "media_type": "text/plain",
+            "data_b64": "UEFDS0VUOkVWSURFTkNFOlNFVi0xIGVtYWls",
+            "uri": null
+          }
+        ]
+      }
+    },
+    "completed_node_ids": [
+      "gather",
+      "scribe"
+    ]
+  },
+  "stream_text": "",
+  "usage": {},
+  "complete": false,
+  "pending": [],
+  "event_kind": "",
+  "lineage_id": "",
+  "timestamp": 1786659685.0524738
+}

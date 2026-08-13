@@ -15,7 +15,7 @@ from .tools import FunctionTool
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .builder import Agent
 
-__all__ = ["make_delegation_tools"]
+__all__ = ["make_delegation_tools", "format_member_roster", "spawn_specialist"]
 
 
 def _subagent_label(agent: "Agent", index: int) -> str:
@@ -73,26 +73,30 @@ def _build_description(agent: "Agent", role: str) -> str:
     return " ".join(parts)
 
 
-def make_delegation_tools(subagents: list["Agent"]) -> list[FunctionTool]:
+def make_delegation_tools(
+    subagents: list["Agent"],
+    *,
+    max_delegations: int | None = None,
+    max_depth: int = 4,
+    depth: int = 0,
+) -> list[FunctionTool]:
     """Create delegation tools for each subagent.
-
-    Each subagent becomes a :class:`FunctionTool` named ``delegate_to_<role_slug>``
-    (for example ``delegate_to_researcher``). The tool runs ``subagent.arun(task)``
-    and returns the subagent's text output. Nested subagents are supported because
-    each subagent retains its own ``subagents`` configuration.
 
     Parameters
     ----------
     subagents:
         Builder :class:`~loomable.agent.builder.Agent` instances to expose as tools.
-
-    Returns
-    -------
-    list[FunctionTool]
-        One delegation tool per subagent.
+    max_delegations:
+        Soft budget: after this many successful delegate calls in one parent run,
+        further calls return a budget error string (does not crash the parent).
+    max_depth:
+        Maximum nesting depth for nested subagents (default 4).
+    depth:
+        Current nesting depth (internal).
     """
     tools: list[FunctionTool] = []
     used_slugs: set[str] = set()
+    call_count = {"n": 0}
 
     for index, subagent in enumerate(subagents):
         role = _subagent_label(subagent, index)
@@ -107,8 +111,19 @@ def make_delegation_tools(subagents: list["Agent"]) -> list[FunctionTool]:
             _role: str = role,
         ) -> str:
             """Delegate a task to this subagent and return its text response."""
+            if depth >= max_depth:
+                return (
+                    f"Subagent '{_role}' skipped: max delegation depth "
+                    f"{max_depth} reached."
+                )
+            if max_delegations is not None and call_count["n"] >= max_delegations:
+                return (
+                    f"Subagent '{_role}' skipped: max_delegations="
+                    f"{max_delegations} budget exhausted."
+                )
             try:
                 result = await _subagent.arun(task)
+                call_count["n"] += 1
                 return result.output.text()
             except Exception as exc:  # noqa: BLE001 - isolate subagent failures
                 return f"Subagent '{_role}' failed: {exc}"
@@ -126,3 +141,39 @@ def make_delegation_tools(subagents: list["Agent"]) -> list[FunctionTool]:
         )
 
     return tools
+
+
+async def spawn_specialist(
+    *,
+    model: Any,
+    role: str,
+    task: str,
+    goal: str = "",
+    instructions: str | None = None,
+    tools: list[Any] | None = None,
+    modalities: str | None = None,
+) -> str:
+    """Create an ephemeral specialist Agent, run ``task``, and discard it.
+
+    Enterprise spawn pattern — no long-lived registration required::
+
+        text = await spawn_specialist(
+            model=provider,
+            role="Cert Auditor",
+            task="Review CHG-55219 for pool saturation risk",
+        )
+    """
+    from .builder import Agent
+
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "role": role,
+        "goal": goal or f"Complete tasks as {role}",
+        "instructions": instructions or f"You are {role}. Be concise and factual.",
+        "tools": tools or [],
+    }
+    if modalities is not None:
+        kwargs["modalities"] = modalities
+    agent = Agent(**kwargs)
+    result = await agent.arun(task)
+    return result.output.text()

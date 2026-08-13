@@ -12,6 +12,9 @@ STEPS = [
     "02_documents.py",
     "03_multimodal.py",
     "04_workflow.py",
+    "05_checkpoint_resume.py",
+    "06_memory_compaction.py",
+    "07_team_spawn.py",
 ]
 
 

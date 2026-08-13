@@ -20,7 +20,8 @@ from .builder import (
 )
 from .channels import Channel, ChannelMessage, InMemoryChannel
 from .context import RunContext, StopReason
-from .delegation import make_delegation_tools
+from .context_policy import CompactionResult, ContextPolicy
+from .delegation import make_delegation_tools, spawn_specialist
 from .errors import (
     AgentConfigError,
     HITLPause,
@@ -61,6 +62,8 @@ __all__ = [
     "RunChunk",
     "RunContext",
     "StopReason",
+    "ContextPolicy",
+    "CompactionResult",
     "AgentEvents",
     "Event",
     "NoOpEvents",
@@ -71,6 +74,7 @@ __all__ = [
     "Note",
     "make_memory_tool",
     "make_delegation_tools",
+    "spawn_specialist",
     "make_think_tool",
     "make_plan_tool",
     "LLMSummarizer",

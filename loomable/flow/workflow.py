@@ -321,22 +321,55 @@ class Workflow:
         input: Any = None,  # noqa: A002
         *,
         context: RunContext | None = None,
-        resume: bool = False,
+        resume: bool | None = None,
     ) -> RunResult:
         """Execute the workflow.
 
-        With a ``checkpointer`` + ``session_id``, a prior incomplete run is
-        restored automatically. Pass ``resume=True`` to make intent explicit
-        (same behavior when a checkpoint exists).
+        With a ``checkpointer`` + ``session_id``, incomplete runs resume
+        automatically. Pass ``resume=True`` to require a checkpoint, or
+        ``resume=False`` to start fresh.
         """
-        _ = resume  # restore is automatic when checkpointer+session_id are set
         flow = self._ensure_compiled()
-        result = await flow.arun(input, context=context)
+        result = await flow.arun(input, context=context, resume=resume)
         if context is not None and context.shared_state is not None:
             self._last_state = context.shared_state
         else:
             self._last_state = SharedState()
         return result
+
+    async def approve(
+        self,
+        node_id: str,
+        *,
+        status: str = "approved",
+    ) -> None:
+        """Approve or reject a HITL-paused node, then call ``arun(resume=True)``."""
+        if self._checkpointer is None or self._session_id is None:
+            raise RuntimeError("approve() requires checkpointer and session_id")
+        cp = await self._checkpointer.get(self._session_id)
+        if cp is None or not cp.pending:
+            raise RuntimeError(f"No pending HITL action for session {self._session_id!r}")
+        for pa in cp.pending:
+            if pa.tool_name == node_id or pa.args.get("node_id") == node_id:
+                pa.status = status
+        await self._checkpointer.put(cp)
+
+    async def clear_checkpoint(self) -> None:
+        """Mark any incomplete checkpoint complete so the next run starts fresh."""
+        if self._checkpointer is None or self._session_id is None:
+            return
+        cp = await self._checkpointer.get(self._session_id)
+        if cp is not None and not cp.complete:
+            from loomable.persist.checkpoint import Checkpoint
+
+            await self._checkpointer.put(
+                Checkpoint(
+                    thread_id=self._session_id,
+                    step=cp.step,
+                    session_state=dict(cp.session_state),
+                    complete=True,
+                )
+            )
 
     def run(self, input: Any = None) -> RunResult:  # noqa: A002
         """Synchronous convenience wrapper around ``arun``."""
