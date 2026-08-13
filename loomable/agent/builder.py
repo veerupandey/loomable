@@ -1339,6 +1339,7 @@ class BuiltAgent:
         # (4) Tool-use loop: invoke, dispatch, feed back, repeat.
         tool_activity: list[ToolOutcome] = []
         called_tool_names: set[str] = set()
+        write_json_payloads: list[str] = []
         tier_substitutions: list[TierSubstitution] = []
         iterations = 0
         stop_reason: StopReason | None = None
@@ -1547,6 +1548,22 @@ class BuiltAgent:
             tool_activity.extend(gated_result.outcomes)
             for tc in calls_to_dispatch:
                 called_tool_names.add(tc.tool_name)
+                if tc.tool_name == "write_json":
+                    outcome = next(
+                        (o for o in gated_result.outcomes if o.call_id == tc.id),
+                        None,
+                    )
+                    ok = (
+                        outcome is not None
+                        and outcome.result is not None
+                        and not outcome.result.is_error
+                    )
+                    raw = tc.args.get("content")
+                    if ok and raw is not None:
+                        if isinstance(raw, str):
+                            write_json_payloads.append(raw)
+                        else:
+                            write_json_payloads.append(json.dumps(raw))
 
             # Emit tool_call event (Req 11.3).
             tool_names = [tc.tool_name for tc in calls_to_dispatch]
@@ -1695,6 +1712,7 @@ class BuiltAgent:
         # re-prompt once without tools — but only on a normal/max-iter finish,
         # not after loop/budget/cancel stops.
         final_text_reprompted = False
+        structured_from_write_json = False
         stop_kind = stop_reason.kind if stop_reason is not None else StopReason.FINAL
         allow_empty_reprompt = stop_kind in (StopReason.FINAL, StopReason.MAX_ITERATIONS)
         needs_text = (
@@ -1728,9 +1746,39 @@ class BuiltAgent:
                 raise UnsupportedModalityError(modality.value, self._model_id)
 
         # (7) Structured output: parse/validate (Req 13.2/13.3).
+        # Prefer final text; if empty/invalid after tools, reuse a successful
+        # write_json payload (common when the model treats the tool as the answer).
         structured: object | None = None
         if output_schema is not None and response is not None:
-            structured = _validate_structured(output.text(), output_schema)
+            final_text = (output.text() or "").strip()
+            if final_text:
+                try:
+                    structured = _validate_structured(final_text, output_schema)
+                except StructuredOutputError:
+                    structured = None
+            if structured is None and write_json_payloads:
+                for payload in reversed(write_json_payloads):
+                    try:
+                        structured = _validate_structured(payload, output_schema)
+                    except StructuredOutputError:
+                        continue
+                    structured_from_write_json = True
+                    if not final_text:
+                        from loomable.content.parts import MediaPart as _MP
+
+                        output = AgentOutput(
+                            parts=[
+                                _MP(
+                                    modality=Modality.TEXT,
+                                    media_type="text/plain",
+                                    data=_extract_json_object(payload).encode("utf-8"),
+                                )
+                            ]
+                        )
+                    break
+            if structured is None:
+                # Preserve prior behavior: raise with schema error on final text.
+                structured = _validate_structured(output.text() or "", output_schema)
 
         # (8) Build metadata: record tier substitutions if any (Req 7.2/7.3)
         #     and stop reason (Req 3.4).
@@ -1743,6 +1791,8 @@ class BuiltAgent:
             metadata["final_text_reprompted"] = True
         if require_tools_nudged:
             metadata["require_tools_nudged"] = True
+        if structured_from_write_json:
+            metadata["structured_from_write_json"] = True
         still_missing = [
             name for name in self.require_tools if name not in called_tool_names
         ]
