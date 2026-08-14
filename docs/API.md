@@ -426,6 +426,17 @@ agent = create_deep_agent(
     # discovery_core="research" (default, correctness-first)
     # discovery_core="research-slim"  # smaller schema budget (≥50% target)
 )
+
+```python
+# Deep code — index a repo (default file-backed zvec) + coding skill + sandbox
+agent = create_deep_agent(
+    model,
+    profile="code",
+    repo="./my-app",
+    # or code_index=await CodeIndex.build("./my-app", embedder=OpenAIEmbedder())
+)
+```
+
 await agent.arun("Research any topic; write reports/brief.md")
 ```
 

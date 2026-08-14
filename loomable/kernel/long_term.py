@@ -10,6 +10,7 @@ An unavailable backend raises MemoryBackendError naming the backend.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Any
 
 from loomable.kernel.contracts import VectorBackend
@@ -22,20 +23,44 @@ from loomable.kernel.errors import MemoryBackendError
 
 
 class ZvecVectorBackend:
-    """A lightweight in-memory vector backend using cosine similarity.
+    """A lightweight vector backend using cosine similarity.
 
-    This serves as the default 'zvec' backend. It stores vectors in a simple
-    dictionary and computes cosine similarity for queries. Suitable for
-    development, testing, and low-volume usage.
+    In-memory by default. Pass ``path=`` to persist vectors as JSON on disk
+    (file-based zvec) — load on init, flush after index/delete.
+    Suitable for development, local code indexes, and low-volume usage.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, path: str | Path | None = None) -> None:
         # Stores {id: {"vector": [...], "metadata": {...}}}
         self._store: dict[str, dict[str, Any]] = {}
+        self._path = Path(path) if path else None
+        if self._path is not None:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._load()
+
+    def _load(self) -> None:
+        if self._path is None or not self._path.is_file():
+            return
+        try:
+            import json
+
+            data = json.loads(self._path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                self._store = data
+        except Exception:  # noqa: BLE001 — corrupt cache → start empty
+            self._store = {}
+
+    def _flush(self) -> None:
+        if self._path is None:
+            return
+        import json
+
+        self._path.write_text(json.dumps(self._store), encoding="utf-8")
 
     async def index(self, id: str, vector: list[float], metadata: dict[str, Any]) -> None:
         """Index a vector with associated metadata."""
         self._store[id] = {"vector": vector, "metadata": metadata}
+        self._flush()
 
     async def query(self, vector: list[float], k: int) -> list[dict[str, Any]]:
         """Query for top-k most similar vectors by cosine similarity.
@@ -64,6 +89,8 @@ class ZvecVectorBackend:
     async def delete(self, id: str) -> None:
         """Remove an indexed vector by id."""
         self._store.pop(id, None)
+        self._flush()
+
 
 
 # ---------------------------------------------------------------------------
@@ -90,8 +117,15 @@ class LongTermStore:
         self,
         backend: VectorBackend | None = None,
         backend_name: str = "zvec",
+        *,
+        path: str | Path | None = None,
     ) -> None:
-        self.backend: VectorBackend = backend or ZvecVectorBackend()
+        if backend is not None:
+            self.backend = backend
+        elif path is not None:
+            self.backend = ZvecVectorBackend(path=path)
+        else:
+            self.backend = ZvecVectorBackend()
         self.backend_name = backend_name
 
     async def index(self, id: str, vector: list[float], metadata: dict[str, Any]) -> None:
