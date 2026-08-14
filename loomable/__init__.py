@@ -24,6 +24,14 @@ from loomable.agent import (
     spawn_specialist,
     tool,
 )
+from loomable.memory import (
+    ConversationMemory,
+    KnowledgeMemory,
+    Memory,
+    UserMemory,
+    WorkingMemory,
+    open_session_store,
+)
 from loomable.case import (
     Board,
     Case,
@@ -72,6 +80,12 @@ __all__ = [
     "ContextPolicy",
     "spawn_specialist",
     "create_deep_agent",
+    "Memory",
+    "ConversationMemory",
+    "UserMemory",
+    "KnowledgeMemory",
+    "WorkingMemory",
+    "open_session_store",
     "FlowPaused",
     "build_case_workflow",
     "map_specialists",

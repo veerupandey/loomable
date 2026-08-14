@@ -1,28 +1,21 @@
-"""Pluggable Agent memory stores (L1/L2 session persistence).
+"""Pluggable + composable Agent memory.
 
-Use with::
+Composable (preferred)::
 
-    from loomable.memory import open_session_store
-    from loomable import Agent
-
-    store = open_session_store("sqlite", path="sessions.db")
-    # store = open_session_store("file", path="./.sessions")
-    # store = open_session_store("postgres", url=POSTGRES_URL, user_id="alice")
-    # store = open_session_store("memory")
-
-    agent = Agent(model=..., session_id="chat-1", session_store=store)
-    await agent.arun("hi")
-    # later process / new Agent:
-    agent2 = Agent(model=..., session_id="chat-1", session_store=store, resume=True)
-
-Or pass a :class:`~loomable.kernel.contracts.MemoryBackend` directly::
-
-    agent = Agent(
-        model=...,
-        session_id="chat-1",
-        memory_backend=PostgresMemoryBackend(DSN, user_id="alice"),
+    from loomable.memory import (
+        Memory, ConversationMemory, UserMemory, KnowledgeMemory, open_session_store,
     )
-    # later: same memory_backend + resume=True
+
+    memory = Memory.compose(
+        conversation=ConversationMemory(store=open_session_store("sqlite", path="s.db")),
+        user=UserMemory(note_store=notes, memory_tool=True, auto_extract=True),
+    )
+    agent = Agent(model=..., memory=memory, session_id="c1", user_id="alice")
+
+Legacy session store factory::
+
+    store = open_session_store("postgres", url=DSN, user_id="alice")
+    agent = Agent(model=..., session_id="chat-1", session_store=store)
 """
 
 from __future__ import annotations
@@ -38,6 +31,18 @@ from loomable.kernel.stores import (
     ShortTermStore,
     SQLiteMemoryBackend,
 )
+from loomable.memory.compose import (
+    ConversationMemory,
+    KnowledgeMemory,
+    Memory,
+    ScopedNoteStore,
+    UserMemory,
+    WorkingMemory,
+    auto_extract_into_notes,
+    extract_user_facts,
+    is_kernel_memory_manager,
+    is_memory_bundle,
+)
 
 StoreKind = Literal["sqlite", "file", "postgres", "memory"]
 
@@ -51,6 +56,16 @@ __all__ = [
     "ShortTermStore",
     "SQLiteMemoryBackend",
     "InMemoryMemoryBackend",
+    "Memory",
+    "ConversationMemory",
+    "UserMemory",
+    "KnowledgeMemory",
+    "WorkingMemory",
+    "ScopedNoteStore",
+    "extract_user_facts",
+    "auto_extract_into_notes",
+    "is_memory_bundle",
+    "is_kernel_memory_manager",
 ]
 
 

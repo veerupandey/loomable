@@ -572,6 +572,13 @@ class BuiltAgent:
     # Durable note store for the memory tool (Req 7 notes).
     note_store: "NoteStore | None" = None
 
+    # Composable Memory(auto_extract=...) — heuristic fact write after each turn.
+    memory_auto_extract: bool = False
+    # Inject recalled / cached user facts into the prompt prefix.
+    memory_auto_recall: bool = True
+    _cached_user_facts: list[str] = field(default_factory=list)
+    _memory_user_id: str | None = None
+
     # Loop-repeat threshold for no-progress detection (Req 3.1/3.2).
     loop_repeat_threshold: int = 3
 
@@ -680,6 +687,10 @@ class BuiltAgent:
             raise UnsupportedModalityError("audio", self._model_id)
 
         agent_input = self._coerce_input(input, images=images, videos=videos, audio=audio)
+
+        # Warm user long-term facts into the conversation prefix (Memory.compose).
+        if self.note_store is not None and self.memory_auto_recall:
+            await self._refresh_user_memory_context(_input_text(agent_input))
 
         # --- Build a RunContext per run (Req 4.5, 11.1) ---
         # When a context is supplied externally (flow-engine integration), use it
@@ -906,6 +917,21 @@ class BuiltAgent:
         for summary in self.session.l2:
             messages.append(
                 {"role": "system", "content": [{"type": "text", "text": summary.text}]}
+            )
+
+        # User-scoped long-term facts (from Memory.compose / NoteStore cache).
+        if self.memory_auto_recall and self._cached_user_facts:
+            blob = "\n".join(f"- {f}" for f in self._cached_user_facts[:12])
+            messages.append(
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"Known facts about this user:\n{blob}",
+                        }
+                    ],
+                }
             )
 
         # Append the retained recent raw turns from L1.
@@ -2032,6 +2058,38 @@ class BuiltAgent:
 
         self.session_store.save(self.session)
 
+        # Passive Always-mode lite: heuristic user-fact extraction into NoteStore.
+        if self.memory_auto_extract and self.note_store is not None and input_text:
+            try:
+                from loomable.kernel.stores import _run_sync
+                from loomable.memory.compose import auto_extract_into_notes
+
+                written = _run_sync(
+                    auto_extract_into_notes(
+                        self.note_store,
+                        input_text,
+                        user_id=self._memory_user_id,
+                    )
+                )
+                if written:
+                    merged = list(dict.fromkeys([*written, *self._cached_user_facts]))
+                    self._cached_user_facts = merged[:20]
+            except Exception:  # noqa: BLE001 — never break the run for memory hygiene
+                pass
+
+    async def _refresh_user_memory_context(self, query: str) -> None:
+        """Recall user notes into ``_cached_user_facts`` for the next prompt prefix."""
+        if not self.memory_auto_recall or self.note_store is None:
+            return
+        try:
+            hits = await self.note_store.recall(query or "user preferences identity", k=5)
+            if hits:
+                self._cached_user_facts = list(
+                    dict.fromkeys([*(h.text for h in hits), *self._cached_user_facts])
+                )[:20]
+        except Exception:  # noqa: BLE001
+            pass
+
     async def astream(
         self,
         input: AgentInput | str,  # noqa: A002
@@ -2522,7 +2580,8 @@ class Agent:
         fallback_tiers: dict[str, str] | None = None,
         # low-level overrides:
         context_manager: ContextManager | None = None,
-        memory: MemoryManager | None = None,
+        memory: Any = None,
+        kernel_memory: MemoryManager | None = None,
         tool_runtime: ToolRuntime | None = None,
         harness: GuardrailHarness | None = None,
         planner: Planner | None = None,
@@ -2633,7 +2692,45 @@ class Agent:
 
         # Low-level overrides.
         self._context_manager = context_manager
-        self._memory = memory
+        self._memory_bundle = None
+        self._memory_auto_extract = False
+        # ``memory=`` accepts composable Memory OR legacy MemoryManager.
+        from loomable.memory.compose import is_kernel_memory_manager, is_memory_bundle
+
+        if is_memory_bundle(memory):
+            bundle = memory.with_user_id(user_id)
+            self._memory_bundle = bundle
+            composed = bundle.to_agent_kwargs()
+            if session_store is None and "session_store" in composed:
+                session_store = composed["session_store"]
+            if memory_backend is None and "memory_backend" in composed:
+                memory_backend = composed["memory_backend"]
+            if note_store is None and "note_store" in composed:
+                note_store = composed["note_store"]
+            if not memory_tool and composed.get("memory_tool"):
+                memory_tool = True
+            if knowledge is None and "knowledge" in composed:
+                knowledge = composed["knowledge"]
+            if embedder is None and "embedder" in composed:
+                embedder = composed["embedder"]
+            if "knowledge_top_k" in composed and knowledge_top_k == 3:
+                knowledge_top_k = composed["knowledge_top_k"]
+            if "memory_window" in composed and memory_window == 8:
+                memory_window = composed["memory_window"]
+            if "compaction_threshold" in composed and compaction_threshold == 16:
+                compaction_threshold = composed["compaction_threshold"]
+            if composed.get("use_llm_summarizer"):
+                use_llm_summarizer = True
+            if composed.get("use_memory") is False:
+                use_memory = False
+            self._memory_auto_extract = bool(
+                bundle.user is not None and bundle.user.auto_extract
+            )
+            self._memory = kernel_memory
+        elif is_kernel_memory_manager(memory):
+            self._memory = memory
+        else:
+            self._memory = kernel_memory or memory
         self._tool_runtime = tool_runtime
         self._harness = harness
         self._planner = planner
@@ -2653,6 +2750,13 @@ class Agent:
         self._think_tool = think_tool
         self._plan_tool = plan_tool
         self._memory_tool = memory_tool
+        # Re-apply knobs that Memory.compose may have updated above
+        self._use_memory = use_memory
+        self._memory_window = memory_window
+        self._compaction_threshold = compaction_threshold
+        self._knowledge = knowledge
+        self._embedder = embedder
+        self._knowledge_top_k = knowledge_top_k
         self._mode = (mode or "").strip().lower() or None
         self._dispatch = dispatch if dispatch in ("reuse", "spawn") else "reuse"
         self._accept = accept
@@ -2832,6 +2936,9 @@ class Agent:
             events=events,
             complexity_router=self._complexity_router,
             note_store=self._note_store,
+            memory_auto_extract=self._memory_auto_extract,
+            memory_auto_recall=True,
+            _memory_user_id=self._user_id,
             loop_repeat_threshold=self._loop_repeat_threshold,
             resilience=self._resilience,
             verifier=self._verifier,

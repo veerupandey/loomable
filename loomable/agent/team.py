@@ -116,6 +116,8 @@ class Team:
         embedder: Any = None,
         knowledge_top_k: int = 3,
         user_id: str | None = None,
+        # Composable memory bundle (same as Agent(memory=...))
+        memory: Any | None = None,
     ) -> None:
         if not members:
             raise ValueError("Team requires at least one member")
@@ -140,6 +142,7 @@ class Team:
             "subagents": members,
             **filter_memory_kwargs(
                 {
+                    "memory": memory,
                     "session_id": session_id,
                     "user_id": user_id,
                     "resume": resume,
@@ -162,6 +165,8 @@ class Team:
             agent_kwargs["session_id"] = session_id
         if resume:
             agent_kwargs["resume"] = True
+        if memory is not None:
+            agent_kwargs["memory"] = memory
         self._agent = Agent(**agent_kwargs)
         # Stash budgets for build-time wiring (delegation tools rebuilt in arun soft path)
         self._agent._max_delegations = max_delegations  # type: ignore[attr-defined]
