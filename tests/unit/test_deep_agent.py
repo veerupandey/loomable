@@ -140,8 +140,11 @@ async def test_create_deep_agent_registers_core_tools(tmp_path) -> None:
         "glob",
         "grep",
         "task",
+        "task_batch",
         "think",
         "register_source",
+        "verify_source",
+        "register_claim",
         "list_sources",
         "format_bibliography",
     ):
@@ -149,6 +152,9 @@ async def test_create_deep_agent_registers_core_tools(tmp_path) -> None:
     assert built.max_tool_iterations == 40
     assert getattr(agent, "_token_budget", None) == 128_000
     assert getattr(agent, "_max_run_tokens", None) == 0
+    assert getattr(agent, "_tool_concurrency", None) == 4
+    assert getattr(agent, "_tool_timeout", None) == 60.0
+    assert getattr(agent, "_resilience", None) is not None
 
     # Multimodal research defaults register image tools
     vision = create_deep_agent(

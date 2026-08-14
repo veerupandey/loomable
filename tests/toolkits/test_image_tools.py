@@ -40,7 +40,7 @@ async def test_fetch_image_writes_workspace(tmp_path) -> None:
         out = json.loads(
             _content(
                 await by_name["fetch_image"].invoke(
-                    {"url": "https://cdn.example.com/cat.png"}
+                    {"url": "https://example.com/cat.png"}
                 )
             )
         )

@@ -154,8 +154,16 @@ async def spawn_specialist(
     modalities: str | None = None,
     note_store: Any | None = None,
     memory_tool: bool = False,
+    memory: Any | None = None,
     knowledge: list[str] | None = None,
     embedder: Any = None,
+    skills: list[Any] | None = None,
+    tool_hooks: list[Any] | None = None,
+    think_tool: bool = False,
+    require_tools: list[str] | None = None,
+    resilience: Any | None = None,
+    tool_timeout: float | None = None,
+    tool_concurrency: int | None = None,
     max_tool_iterations: int | None = None,
     token_budget: int | None = None,
     max_run_tokens: int | None = None,
@@ -170,8 +178,8 @@ async def spawn_specialist(
             task="Review CHG-55219 for pool saturation risk",
         )
 
-    Optional L3 kwargs (``note_store`` / knowledge) match Agent so Case spawn
-    dispatch shares long-term memory with the parent Case.
+    Optional kwargs (skills, tool_hooks/offload, memory, budgets) let deep agents
+    share research infrastructure with specialists.
     """
     from .builder import Agent
 
@@ -181,16 +189,31 @@ async def spawn_specialist(
         "goal": goal or f"Complete tasks as {role}",
         "instructions": instructions or f"You are {role}. Be concise and factual.",
         "tools": tools or [],
+        "think_tool": think_tool,
     }
     if modalities is not None:
         kwargs["modalities"] = modalities
     if note_store is not None:
         kwargs["note_store"] = note_store
         kwargs["memory_tool"] = memory_tool
+    if memory is not None:
+        kwargs["memory"] = memory
     if knowledge is not None:
         kwargs["knowledge"] = knowledge
     if embedder is not None:
         kwargs["embedder"] = embedder
+    if skills is not None:
+        kwargs["skills"] = skills
+    if tool_hooks is not None:
+        kwargs["tool_hooks"] = tool_hooks
+    if require_tools is not None:
+        kwargs["require_tools"] = require_tools
+    if resilience is not None:
+        kwargs["resilience"] = resilience
+    if tool_timeout is not None:
+        kwargs["tool_timeout"] = tool_timeout
+    if tool_concurrency is not None:
+        kwargs["tool_concurrency"] = tool_concurrency
     if max_tool_iterations is not None:
         kwargs["max_tool_iterations"] = max_tool_iterations
     if token_budget is not None:

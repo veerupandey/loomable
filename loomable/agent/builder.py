@@ -307,19 +307,35 @@ def _strip_json_fences(text: str) -> str:
 def _path_constraint_met(path_arg: str, required: str) -> bool:
     """Return True when ``path_arg`` satisfies a require_tools path constraint.
 
-    Matches exact path or a path that ends with ``/<required>`` after normalizing
-    separators. Substring matches (e.g. ``myoutput/brief.md`` for ``output/brief.md``)
+    Matches:
+    - exact path
+    - path ending with ``/<required>``
+    - directory / prefix constraints when *required* ends with ``/``
+      (``reports/`` matches ``reports/brief.md``)
+    - bare directory name without slash (``reports`` matches ``reports/x.md``)
+
+    Substring matches (e.g. ``myoutput/brief.md`` for ``output/brief.md``)
     do **not** count.
     """
     from pathlib import Path
 
     a = Path(str(path_arg).replace("\\", "/")).as_posix().lstrip("./")
-    r = Path(str(required).replace("\\", "/")).as_posix().lstrip("./")
+    r = str(required).replace("\\", "/").lstrip("./")
     if not r:
         return True
-    if a == r:
+    # Directory prefix: "reports/" → reports/brief.md
+    if r.endswith("/"):
+        prefix = r.rstrip("/")
+        return a == prefix or a.startswith(prefix + "/")
+    r_norm = Path(r).as_posix().lstrip("./")
+    if a == r_norm:
         return True
-    return a.endswith("/" + r)
+    if a.endswith("/" + r_norm):
+        return True
+    # Bare directory name: "reports" → reports/x.md
+    if "/" not in r_norm and a.startswith(r_norm + "/"):
+        return True
+    return False
 
 
 def _parse_require_tool_specs(specs: list[str]) -> list[tuple[str, str | None]]:
@@ -2760,6 +2776,8 @@ class Agent:
         max_tool_iterations: int | None = None,
         require_final_text: bool = True,
         require_tools: list[str] | None = None,
+        max_delegations: int | None = None,
+        max_depth: int = 4,
         # Tiered model routing:
         tiers: dict[str, Any] | None = None,
         tier_policy: dict[str, Any] | None = None,
@@ -2873,6 +2891,8 @@ class Agent:
         self._max_tool_iterations = max_tool_iterations
         self._require_final_text = require_final_text
         self._require_tools = list(require_tools) if require_tools else []
+        self._max_delegations = max_delegations
+        self._max_depth = max_depth
 
         # Tiered model routing.
         self._tiers = tiers
@@ -3072,7 +3092,11 @@ class Agent:
         if self._subagents:
             from .delegation import make_delegation_tools
 
-            delegation_tools = make_delegation_tools(self._subagents)
+            delegation_tools = make_delegation_tools(
+                self._subagents,
+                max_delegations=self._max_delegations,
+                max_depth=self._max_depth,
+            )
             for dt in delegation_tools:
                 tool_registry[dt.name] = dt
             if self._tool_runtime is None:

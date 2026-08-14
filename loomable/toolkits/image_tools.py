@@ -15,10 +15,13 @@ from urllib.parse import urlparse
 
 from loomable.agent.tools import FunctionTool
 from loomable.toolkits._base import Toolkit
+from loomable.toolkits.net_safety import validate_http_url, validate_redirect_target
 
 __all__ = ["ImageTools"]
 
 _SAFE_NAME = re.compile(r"[^a-zA-Z0-9._-]+")
+_MAX_REDIRECTS = 8
+_DEFAULT_MAX_BYTES = 8_000_000
 
 
 def _guess_ext(url: str, content_type: str | None) -> str:
@@ -59,6 +62,8 @@ class ImageTools(Toolkit):
         model: Any = None,
         timeout: int = 30,
         images_dir: str = "images",
+        max_bytes: int = _DEFAULT_MAX_BYTES,
+        block_private_hosts: bool = True,
         include_tools: list[str] | None = None,
         exclude_tools: list[str] | None = None,
     ) -> None:
@@ -75,6 +80,8 @@ class ImageTools(Toolkit):
         self._images.mkdir(parents=True, exist_ok=True)
         self._model = model
         self._timeout = timeout
+        self._max_bytes = max(1024, int(max_bytes))
+        self._block_private_hosts = block_private_hosts
 
     def _register_tools(self) -> list[FunctionTool]:
         return [
@@ -96,28 +103,78 @@ class ImageTools(Toolkit):
             return None
         return candidate
 
-    async def _fetch_image(self, url: str, path: str = "") -> str:
-        """Download an image URL into the workspace and return its path + metadata."""
+    async def _http_get_bytes(self, url: str) -> tuple[str | None, bytes | None, str]:
+        """GET bytes with hop-by-hop SSRF checks. Returns (error, data, content_type)."""
         import httpx
 
+        err = validate_http_url(url, block_private_hosts=self._block_private_hosts)
+        if err:
+            return err, None, ""
+        current = url
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._timeout, follow_redirects=False
+            ) as client:
+                for _ in range(_MAX_REDIRECTS):
+                    err = validate_http_url(
+                        current, block_private_hosts=self._block_private_hosts
+                    )
+                    if err:
+                        return err, None, ""
+                    response = await client.get(current)
+                    if response.status_code in {301, 302, 303, 307, 308}:
+                        loc = (response.headers or {}).get("location", "")
+                        if not loc:
+                            return (
+                                f"Error: HTTP {response.status_code} for URL: {url}",
+                                None,
+                                "",
+                            )
+                        hop_err, next_url = validate_redirect_target(
+                            current,
+                            loc,
+                            block_private_hosts=self._block_private_hosts,
+                        )
+                        if hop_err:
+                            return hop_err, None, ""
+                        current = next_url or current
+                        continue
+                    if response.status_code < 200 or response.status_code >= 300:
+                        return (
+                            f"Error: HTTP {response.status_code} for URL: {url}",
+                            None,
+                            "",
+                        )
+                    data = response.content
+                    if len(data) > self._max_bytes:
+                        return (
+                            f"Error: image exceeds max_bytes={self._max_bytes}",
+                            None,
+                            "",
+                        )
+                    content_type = response.headers.get("content-type", "")
+                    return None, data, content_type
+                return "Error: too many redirects", None, ""
+        except httpx.TimeoutException:
+            return (
+                f"Error: Request timed out after {self._timeout} seconds: {url}",
+                None,
+                "",
+            )
+        except httpx.HTTPError as exc:
+            return f"Error: Request failed: {exc}", None, ""
+        except Exception as exc:  # noqa: BLE001
+            return f"Error: Failed to fetch image: {exc}", None, ""
+
+    async def _fetch_image(self, url: str, path: str = "") -> str:
+        """Download an image URL into the workspace and return its path + metadata."""
         url = (url or "").strip()
         if not url:
             return "Error: url is required"
-        try:
-            async with httpx.AsyncClient(
-                timeout=self._timeout, follow_redirects=True
-            ) as client:
-                response = await client.get(url)
-                if response.status_code < 200 or response.status_code >= 300:
-                    return f"Error: HTTP {response.status_code} for URL: {url}"
-                content_type = response.headers.get("content-type", "")
-                data = response.content
-        except httpx.TimeoutException:
-            return f"Error: Request timed out after {self._timeout} seconds: {url}"
-        except httpx.HTTPError as exc:
-            return f"Error: Request failed: {exc}"
-        except Exception as exc:  # noqa: BLE001
-            return f"Error: Failed to fetch image: {exc}"
+        err, data, content_type = await self._http_get_bytes(url)
+        if err:
+            return err
+        assert data is not None
 
         if path.strip():
             dest = self._resolve_path(path.strip())
@@ -216,21 +273,22 @@ class ImageTools(Toolkit):
 
     async def _discover_images(self, url: str, limit: int = 8) -> str:
         """Fetch a page and return candidate image URLs (for fetch_image follow-up)."""
-        import httpx
         from urllib.parse import urljoin
 
         url = (url or "").strip()
         if not url:
             return "Error: url is required"
+        err = validate_http_url(url, block_private_hosts=self._block_private_hosts)
+        if err:
+            return err
         limit = max(1, min(int(limit) or 8, 20))
+        # Reuse SSRF-safe GET; decode as text for scraping.
+        get_err, data, _ctype = await self._http_get_bytes(url)
+        if get_err:
+            return f"Error: Failed to discover images: {get_err}"
+        assert data is not None
         try:
-            async with httpx.AsyncClient(
-                timeout=self._timeout, follow_redirects=True
-            ) as client:
-                response = await client.get(url)
-                if response.status_code < 200 or response.status_code >= 300:
-                    return f"Error: HTTP {response.status_code} for URL: {url}"
-                html = response.text
+            html = data.decode("utf-8", errors="replace")
         except Exception as exc:  # noqa: BLE001
             return f"Error: Failed to discover images: {exc}"
 

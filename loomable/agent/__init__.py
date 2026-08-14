@@ -42,9 +42,12 @@ from .team import Team
 from .tools import FunctionTool, MCPTool, tool
 from .deep import (
     DEEP_AGENT_INSTRUCTIONS,
+    SpecialistSpec,
     create_deep_agent,
     create_research_agent,
+    make_research_accept,
     make_task_tool,
+    make_task_tools,
 )
 
 __all__ = [
@@ -86,6 +89,9 @@ __all__ = [
     "create_deep_agent",
     "create_research_agent",
     "make_task_tool",
+    "make_task_tools",
+    "make_research_accept",
+    "SpecialistSpec",
     "DEEP_AGENT_INSTRUCTIONS",
     "LLMSummarizer",
     "image",
