@@ -435,7 +435,8 @@ def create_deep_agent(
     memory: Any = None,
     knowledge: list[str] | None = None,
     embedder: Any = None,
-    skills: list[Path] | None = None,
+    skills: Sequence[str | Path] | None = None,
+    profile: str = "general",
     user_id: str | None = None,
     scopes: dict[str, str] | None = None,
     require_confirmation: list[str] | None = None,
@@ -483,10 +484,44 @@ def create_deep_agent(
     debug: bool = False,
     **agent_kwargs: Any,
 ) -> Agent:
-    """Build a deep agent harness on top of :class:`~loomable.agent.builder.Agent`."""
+    """Build a deep agent harness on top of :class:`~loomable.agent.builder.Agent`.
+
+    ``profile="research"`` loads the bundled research skill (any topic) and
+    turns on research kits + deliverable gates. Prefer that over a second
+    factory — research is a skill, not a separate agent type.
+    """
+    from loomable.skills import resolve_skills
     from loomable.toolkits.citation_tools import CitationTools
     from loomable.toolkits.todo_tools import TodoTools
     from loomable.toolkits.workspace_tools import WorkspaceTools
+
+    profile_key = (profile or "general").strip().lower()
+    if profile_key not in {"general", "research"}:
+        raise ValueError(f"profile must be 'general' or 'research', got {profile!r}")
+
+    skill_list = list(skills or [])
+    if profile_key == "research" and "research" not in {
+        str(s).strip().lower() if not isinstance(s, Path) else s.name.lower()
+        for s in skill_list
+    }:
+        skill_list.append("research")
+    resolved_skills = resolve_skills(skill_list) or None
+
+    # Research profile defaults (caller kwargs still win via explicit args below).
+    if profile_key == "research":
+        if require_tools is None:
+            require_tools = ["write_file:reports/", "register_source"]
+        if accept is None:
+            accept = make_research_accept(workspace, min_sources=1)
+        agent_kwargs.setdefault("retry_on_failure", True)
+        agent_kwargs.setdefault("max_verify_retries", 1)
+        if name == "deep-agent":
+            name = "research-agent"
+        if goal == "Complete hard, long-horizon tasks with planning and delegation":
+            goal = (
+                "Research any topic thoroughly: search, fetch, cite, "
+                "analyze images, deliver briefs under reports/"
+            )
 
     root = Path(workspace)
     root.mkdir(parents=True, exist_ok=True)
@@ -610,7 +645,7 @@ def create_deep_agent(
                 token_budget=min(token_budget, 64_000),
                 max_run_tokens=max_run_tokens,
                 specialists=specialist_registry or None,
-                skills=list(skills) if skills else None,
+                skills=list(resolved_skills) if resolved_skills else None,
                 tool_hooks=list(existing_hooks) if existing_hooks else None,
                 memory=memory,
                 note_store=note_store,
@@ -656,7 +691,7 @@ def create_deep_agent(
         instructions=prompt,
         tools=bundled,
         subagents=subagents,
-        skills=skills,
+        skills=resolved_skills,
         session_id=session_id,
         session_store=session_store,
         memory_backend=memory_backend,
@@ -705,42 +740,29 @@ def create_research_agent(
     workspace: str | Path = "./.deep_workspace",
     session_id: str | None = "research",
     memory: Any = None,
-    skills: list[Path] | None = None,
+    skills: Sequence[str | Path] | None = None,
     **kwargs: Any,
 ) -> Agent:
-    """Opinionated research deep agent — search, fetch, cite, vision, memory.
+    """Convenience alias for ``create_deep_agent(..., profile=\"research\")``.
 
-    Thin wrapper around :func:`create_deep_agent` with research-ready defaults.
+    Prefer :func:`create_deep_agent` with ``profile=\"research\"`` or
+    ``skills=[\"research\"]``. Research is a **skill** (any topic), not a
+    separate agent type — this wrapper stays for back-compat.
     """
-    require_tools = kwargs.pop("require_tools", None)
-    if require_tools is None:
-        require_tools = ["write_file:reports/", "register_source"]
-    accept = kwargs.pop("accept", ...)
-    if accept is ...:
-        accept = make_research_accept(workspace, min_sources=1)
-    retry_on_failure = kwargs.pop("retry_on_failure", True)
-    max_verify_retries = kwargs.pop("max_verify_retries", 1)
+    kwargs.pop("profile", None)
     return create_deep_agent(
         model,
         workspace=workspace,
         session_id=session_id,
         memory=memory,
         skills=skills,
+        profile="research",
         web_search=kwargs.pop("web_search", True),
         url_fetch=kwargs.pop("url_fetch", True),
         citations=kwargs.pop("citations", True),
         images=kwargs.pop("images", True),
         modalities=kwargs.pop("modalities", "text+image"),
         use_llm_summarizer=kwargs.pop("use_llm_summarizer", True),
-        name=kwargs.pop("name", "research-agent"),
-        goal=kwargs.pop(
-            "goal",
-            "Research topics thoroughly: search, fetch, cite, analyze images, deliver briefs",
-        ),
-        require_tools=require_tools,
-        accept=accept,
-        retry_on_failure=retry_on_failure,
-        max_verify_retries=max_verify_retries,
         max_run_tokens=kwargs.pop("max_run_tokens", 0),
         **kwargs,
     )

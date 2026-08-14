@@ -207,7 +207,28 @@ class SkillLoader:
         for root in roots:
             if not root.is_dir():
                 continue
-            # Each subdirectory of root that contains SKILL.md is a Skill
+            # Direct skill folder: <root>/SKILL.md
+            direct_md = root / self.SKILL_FILENAME
+            if direct_md.is_file():
+                try:
+                    content = direct_md.read_text(encoding="utf-8")
+                    frontmatter, _ = _parse_frontmatter(content)
+                    name = frontmatter.get("name", root.name)
+                    description = frontmatter.get("description", "")
+                    script_tool_specs = self._discover_scripts(root)
+                    manifests.append(
+                        SkillManifest(
+                            name=name,
+                            description=description,
+                            body_path=direct_md,
+                            script_tools=script_tool_specs,
+                        )
+                    )
+                except Exception:
+                    pass
+                continue
+
+            # Catalog folder: <root>/<skill>/SKILL.md
             for skill_dir in root.iterdir():
                 if not skill_dir.is_dir():
                     continue

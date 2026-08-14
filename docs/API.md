@@ -413,46 +413,31 @@ result.trace               # list of Event objects (when debug=True)
 
 ## Deep Agent
 
-Loomable-native long-horizon harness (`create_deep_agent` / `create_research_agent`)
-built **solely on loomable** — designed to **beat other deep agents** (LangGraph
-deepagents, Agno teams, CrewAI crews) on research and hard delivery:
-
-1. **Planning** — `TodoTools` (`write_todos` / `read_todos` / `update_todo`)
-2. **Workspace FS** — `WorkspaceTools` with sliced reads + **token-aware offload** to `.offload/`
-3. **Subagents** — `task` / `task_batch` + named `specialists=` + shared workspace (plus `mode="case"`)
-4. **Context** — `compact_conversation`, think/plan, `Memory.compose`, LLM summarizer, `memory_files=` (AGENTS.md)
-5. **Research defaults** — search, URL fetch (SSRF + redirect-safe), images, citations (`verify_source` / `register_claim`)
-6. **Gates / HITL** — `require_tools=["write_file:reports/", "register_source"]`, research accept verifier, `require_confirmation=`, `code_exec=`
+Loomable-native long-horizon harness. **One API:** `create_deep_agent`.
+Specialize with skills — research any topic via the bundled `research` skill:
 
 ```python
-from pathlib import Path
-from loomable import create_research_agent, Memory, ConversationMemory, UserMemory
-from loomable.agent.deep import SpecialistSpec
+from loomable import create_deep_agent
 
-agent = create_research_agent(
+agent = create_deep_agent(
     model="openai:gpt-4o-mini",
+    profile="research",  # = skills=["research"] + report/citation gates
     workspace="./.deep_workspace",
-    memory=Memory.compose(
-        conversation=ConversationMemory(),
-        user=UserMemory(auto_extract=True),
-    ),
-    skills=[Path("examples/deep_agent/skills/research")],
-    specialists={
-        "web-researcher": SpecialistSpec(
-            name="web-researcher",
-            description="Finds primary sources",
-        ),
-    },
 )
-await agent.arun("Research X and write reports/x.md with citations")
+await agent.arun("Research any topic; write reports/brief.md")
 ```
 
-Industry defaults: `modalities="text+image"`, `use_llm_summarizer=True`,
-`max_tool_iterations=40`, `token_budget=128000`, `max_run_tokens=0`,
-`tool_concurrency=4`, `tool_timeout=60`, `offload_threshold_tokens=3000`,
-`url_max_length=8000`, research accept gate on `reports/` + sources.
+`create_research_agent(...)` is a back-compat alias for `profile="research"`.
 
-See `examples/deep_agent/` (including `03_live_multimodal_research.py`).
+Pillars:
+
+1. **Planning** — `TodoTools`
+2. **Workspace FS** — sliced reads, `delete_file`, token-aware offload
+3. **Subagents** — `task` / `task_batch` + named `specialists=`
+4. **Skills** — `skills=["research"]` or any catalog / skill dir (SkillLoader accepts both)
+5. **Gates** — research profile requires `reports/` + `register_source` + accept verifier
+
+See `examples/deep_agent/` and `loomable/skills/research/SKILL.md`.
 
 ---
 

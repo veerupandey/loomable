@@ -166,9 +166,41 @@ class WorkspaceStore:
                 names.add(first)
         return sorted(names)
 
+    def ls_detailed(self, path: str = "") -> list[dict[str, Any]]:
+        """Like :meth:`ls` but with size / kind metadata."""
+        names = self.ls(path)
+        prefix = self._norm(path) or ""
+        if prefix and not prefix.endswith("/"):
+            prefix = prefix + "/"
+        items: list[dict[str, Any]] = []
+        for name in names:
+            is_dir = name.endswith("/")
+            rel = f"{prefix}{name.rstrip('/')}" if not is_dir else f"{prefix}{name}"
+            if is_dir:
+                items.append(
+                    {
+                        "name": name,
+                        "path": rel.rstrip("/") + "/",
+                        "kind": "dir",
+                        "bytes": None,
+                    }
+                )
+                continue
+            body = self._files.get(rel)
+            items.append(
+                {
+                    "name": name,
+                    "path": rel,
+                    "kind": "file",
+                    "bytes": len(body.encode("utf-8")) if body is not None else 0,
+                }
+            )
+        return items
+
 
 class WorkspaceTools(Toolkit):
-    """Virtual FS tools: ``ls``, ``read_file``, ``write_file``, ``edit_file``, ``glob``, ``grep``.
+    """Virtual FS tools: ``ls``, ``read_file``, ``write_file``, ``edit_file``,
+    ``delete_file``, ``glob``, ``grep``.
 
     These intentionally reuse familiar names where possible so prompts transfer
     from LangGraph deep agents. Prefer this over :class:`FileTools` when the
@@ -196,13 +228,21 @@ class WorkspaceTools(Toolkit):
             FunctionTool(self._read_file, name="read_file"),
             FunctionTool(self._write_file, name="write_file", idempotent=False),
             FunctionTool(self._edit_file, name="edit_file", idempotent=False),
+            FunctionTool(self._delete_file, name="delete_file", idempotent=False),
             FunctionTool(self._glob, name="glob"),
             FunctionTool(self._grep, name="grep"),
         ]
 
     async def _ls(self, path: str = "") -> str:
         """List files and directories in the workspace (virtual filesystem)."""
-        return json.dumps({"path": path or "/", "entries": self._store.ls(path)}, indent=2)
+        return json.dumps(
+            {
+                "path": path or "/",
+                "entries": self._store.ls(path),
+                "items": self._store.ls_detailed(path),
+            },
+            indent=2,
+        )
 
     async def _read_file(
         self,
@@ -250,6 +290,13 @@ class WorkspaceTools(Toolkit):
         if key is None:
             return f"Error: {msg}"
         return json.dumps({"ok": True, "path": key, "detail": msg})
+
+    async def _delete_file(self, path: str) -> str:
+        """Delete a workspace file (must stay inside the workspace root)."""
+        ok = self._store.delete(path)
+        if not ok:
+            return f"Error: File not found or invalid path: {path}"
+        return json.dumps({"ok": True, "path": path, "deleted": True})
 
     async def _glob(self, pattern: str = "**/*") -> str:
         """Find workspace paths matching a glob pattern."""
