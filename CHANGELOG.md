@@ -32,7 +32,7 @@
 - `create_research_agent` emits `DeprecationWarning` (alias retained)
 - CI installs `.[dev,toolkits]`; README badge pins `main`
 - Default zvec L3 store reuses an in-process collection handle (no exclusive-lock deadlock across `Agent()` builds)
-
+- Examples audited for 0.2.0 APIs: unique numbering, offline `knowledge_base` / Team inherit demos, retrieval demos use in-memory stores
 ### Limits (documented)
 
 - Local workspace FS only

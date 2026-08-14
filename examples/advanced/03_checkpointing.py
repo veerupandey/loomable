@@ -1,50 +1,65 @@
-"""Checkpointing — Durable state and HITL resume.
+"""Checkpointing — Durable Workflow state and resume.
 
 USE WHEN: Your workflow is long-running and you need to pause/resume
 it across process restarts, or you have human-in-the-loop approval
 gates that may take hours.
 
-Checkpoints persist flow state so execution can resume exactly
-where it left off.
+Prefer ``Workflow(..., checkpointer=...)`` (or ``sequential(..., checkpointer=...)``).
+For a fuller kill/resume exam, see ``escalation_war_room/05_checkpoint_resume.py``.
+
+This demo is offline (scripted steps) and writes a complete checkpoint.
 """
 
+from __future__ import annotations
+
 import asyncio
-from dotenv import load_dotenv
+import shutil
+from pathlib import Path
 
-load_dotenv()
+from loomable import Workflow
+from loomable.agent.run import RunResult
+from loomable.content import AgentOutput, Text
+from loomable.persist import JsonFileCheckpointer
 
-from loomable.agent import Agent
-from loomable.flow.helpers import sequential
-from loomable.persist.checkpoint import JsonFileCheckpointer
-from loomable.providers.openai import AzureOpenAIProvider
+ROOT = Path(__file__).resolve().parent / ".checkpoint_demo"
+SESSION = "checkpoint-demo"
 
-provider = AzureOpenAIProvider()
 
-# Steps in a durable pipeline
-draft_agent = Agent(
-    model=provider,
-    role="Drafter",
-    goal="Write an initial draft",
-    instructions="Write a short draft (2-3 sentences) on the topic.",
-)
+async def draft(inp, *, context=None):
+    return RunResult(
+        output=AgentOutput(parts=[Text(f"DRAFT: Testing matters because {inp}.")]),
+        session_id=SESSION,
+    )
 
-review_agent = Agent(
-    model=provider,
-    role="Reviewer",
-    goal="Review and approve or request changes",
-    instructions="Review the draft. Approve if good, suggest changes if not.",
-)
 
-pipeline = sequential(
-    draft_agent,
-    review_agent,
-    session_id="checkpoint-demo",
-)
+async def review(inp, *, context=None):
+    text = inp.text() if hasattr(inp, "text") and callable(inp.text) else str(inp)
+    return RunResult(
+        output=AgentOutput(parts=[Text(f"APPROVED: {text}")]),
+        session_id=SESSION,
+        structured={"ok": True},
+    )
 
-# In production, you'd configure a persistent checkpoint store:
-# checkpointer = JsonFileCheckpointer(".checkpoints")
-# Then pass: sequential(..., checkpointer=checkpointer)
 
-result = asyncio.run(pipeline.arun("Explain why testing is important."))
-print(result.output.text())
-print("\nNote: In production, checkpoints allow resume after process restart.")
+async def main() -> None:
+    if ROOT.exists():
+        shutil.rmtree(ROOT)
+    ROOT.mkdir(parents=True)
+
+    # File-backed checkpointer (InMemoryCheckpointer() also works for tests)
+    cp = JsonFileCheckpointer(str(ROOT / "checkpoints"))
+    wf = (
+        Workflow("checkpoint-demo", session_id=SESSION, checkpointer=cp)
+        .step("draft", draft)
+        .step("review", review)
+    )
+    result = await wf.arun("flaky deployments hurt users")
+    print(result.output.text())
+
+    saved = await cp.get(SESSION)
+    assert saved is not None and saved.complete is True
+    print(f"checkpoint complete={saved.complete} step={saved.step}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

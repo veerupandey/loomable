@@ -1,12 +1,15 @@
-"""Pluggable agentic retriever: ingest → hybrid → auto-route → agent tool.
+"""Build pluggable retrievers for docs / markdown / code and attach to Agent.
 
-Prefer ``Agent(knowledge_base=store_or_sources)`` when you only need a
-vector-DB search tool. Use this example when you want to tune rewrite /
-rerank / mode routing before shipping ``retrievers=[...]``.
+``Agent(knowledge_base=sources)`` is the usual path. Use ``build_retriever``
+when you need an explicit hybrid/lexical/vector tool to pass as ``retrievers=``.
+
+This demo uses an in-memory vector store so it runs offline without optional
+backends. Swap ``engine="memory"`` for ``"zvec"`` / ``"faiss"`` / ``"chroma"``
+/ ``"milvus"`` / ``"postgres"`` when those extras are installed.
 
 Run::
 
-    python examples/advanced/03_agentic_retriever.py
+    python examples/advanced/05_build_retriever.py
 """
 
 from __future__ import annotations
@@ -15,11 +18,11 @@ import asyncio
 from pathlib import Path
 
 from loomable.agent import Agent, ModelSpec
-from loomable.providers.vector_store import open_vector_store
 from loomable.kernel.models import ModelRequest, ModelResponse, ToolCall
-from loomable.retrieval import build_agentic_retriever, ingest
+from loomable.providers.vector_store import open_vector_store
+from loomable.retrieval import build_retriever, list_strategies
 
-ROOT = Path(__file__).resolve().parent / ".agentic_demo"
+ROOT = Path(__file__).resolve().parent / ".retrieval_demo"
 ROOT.mkdir(parents=True, exist_ok=True)
 
 
@@ -54,27 +57,19 @@ class _Scripted:
                     )
                 ],
             )
-        return ModelResponse(content="Agentic retrieve complete.")
+        return ModelResponse(content="Retriever demo complete.")
 
 
 async def main() -> None:
     docs = _seed()
-    corpus = await ingest(
-        [docs],
-        name="docs",
-        description="Product docs: auth and pricing",
-        store=open_vector_store(engine="memory"),
-        strategy="auto",
-        base_mode="hybrid",
-    )
-    # Tool name becomes search_docs (agent-facing). Corpus id stays "docs".
-    retriever = await build_agentic_retriever(
-        corpus,
+    print("strategies", list_strategies())
+    store = open_vector_store(engine="memory")
+    retriever = await build_retriever(
+        [docs, {"id": "tip", "text": "Prefer hybrid mode for mixed corpora."}],
         name="search_docs",
-        mode="auto",
-        rewrite="off",
-        rerank="mmr",
-        compress="off",
+        mode="hybrid",
+        strategy="auto",
+        store=store,
     )
     agent = Agent(
         model=ModelSpec(provider="scripted", provider_impl=_Scripted()),

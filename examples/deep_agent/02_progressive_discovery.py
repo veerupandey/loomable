@@ -13,7 +13,7 @@ loomable's ``discovery=True`` wires into every :func:`create_deep_agent`:
 
 Everything below is scripted (no network / API key required) so it runs in
 CI. See ``01_research_brief.py`` for the general deep-agent loop and
-``03_live_multimodal_research.py`` for a live-model run.
+``04_live_multimodal_research.py`` for a live-model run.
 
 Run::
 

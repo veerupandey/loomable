@@ -13,6 +13,14 @@ agent = create_deep_agent(model, profile="research", workspace="./.deep_workspac
 
 `create_research_agent` remains a thin alias for `profile="research"`.
 
+`create_deep_agent` is Agent, so the same RAG kwargs work:
+
+```python
+create_deep_agent(model, knowledge_base=store_or_sources, retrievers=[custom])
+```
+
+See ``examples/agents/07_knowledge_base.py`` for an offline demo.
+
 | Pillar | Loomable |
 |--------|----------|
 | Planning | `TodoTools` |
@@ -62,13 +70,15 @@ agent = create_deep_agent(model, workspace="./.deep_workspace", profile="general
 | File | What it shows |
 |------|----------------|
 | `01_research_brief.py` | Scripted / live `create_deep_agent` |
-| `02_progressive_discovery.py` | `search_skills` / `load_skill` / `search_tools` / `activate_tool` progressive disclosure |
-| `02_case_deep_hard.py` | Deep + Case accept |
-| `03_live_multimodal_research.py` | `profile="research"` live loop |
-| `04_live_gemini_gate.py` | Live Gemini correctness + schema-budget gate |
+| `02_progressive_discovery.py` | `search_skills` / `load_skill` / `search_tools` / `activate_tool` |
+| `03_case_deep_hard.py` | Deep + Case accept |
+| `04_live_multimodal_research.py` | `profile="research"` live loop |
+| `05_live_gemini_gate.py` | Live Gemini correctness + schema-budget gate |
+| `06_sandbox_browser.py` | Soft sandbox + bundled `browser` skill |
+| `07_deep_code.py` | `profile="code"` + `CodeIndex` |
 
 ```bash
 python examples/deep_agent/01_research_brief.py
 DEEP_AGENT_LIVE=1 GEMINI_API_KEY=... \
-  python examples/deep_agent/04_live_gemini_gate.py
+  python examples/deep_agent/05_live_gemini_gate.py
 ```

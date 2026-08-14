@@ -2,7 +2,7 @@
 
 Measures schema budget, runs a bounded research brief, and checks accept.
 
-    DEEP_AGENT_LIVE=1 python examples/deep_agent/04_live_gemini_gate.py
+    DEEP_AGENT_LIVE=1 python examples/deep_agent/05_live_gemini_gate.py
 """
 
 from __future__ import annotations
