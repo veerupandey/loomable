@@ -11,9 +11,12 @@ Examples use a real LLM — not a scripted mock.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
+# Repo-root .env even when the script cwd is examples/<subdir>
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 load_dotenv()
 
 

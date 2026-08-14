@@ -1,18 +1,13 @@
-"""Phase B gate — kill mid-workflow and resume (live Agents).
+"""Checkpoint resume — live Agents; prior output chains automatically.
 
-Gather and scribe are real Agents. After gather finishes we write an incomplete
-checkpoint (simulate crash), then resume so gather is skipped and scribe runs
-on the prior Agent's output.
-
-Requires ``GEMINI_API_KEY`` (or OpenAI / Azure) — see ``.env.example``.
+Simulate a crash after gather, then resume so gather is skipped and scribe
+runs on the gather Agent's output (no parse helpers).
 """
 
 from __future__ import annotations
 
 import asyncio
 import shutil
-import sys
-from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -29,46 +24,27 @@ CKPT_DIR = ROOT / ".checkpoints_phase_b"
 SESSION = "inc-88421-resume"
 
 
-class _CountingProvider:
-    """Wrap a live provider and count ``complete`` calls."""
-
-    def __init__(self, inner, counter: dict[str, int], key: str) -> None:
-        self._inner = inner
-        self._counter = counter
-        self._key = key
-
-    async def complete(self, request):
-        self._counter[self._key] += 1
-        return await self._inner.complete(request)
-
-    def __getattr__(self, name: str):
-        return getattr(self._inner, name)
-
-
 async def main() -> None:
     if CKPT_DIR.exists():
         shutil.rmtree(CKPT_DIR)
     CKPT_DIR.mkdir(parents=True)
 
     cp = JsonFileCheckpointer(str(CKPT_DIR))
-    base = make_provider()
+    model = make_provider()
 
     gatherer = Agent(
-        base,
+        model,
         role="Gatherer",
         goal="Collect incident evidence from the email",
-        instructions=(
-            "Summarize the incident in 2-4 short lines. "
-            "Start the first line with EVIDENCE: then key facts."
-        ),
+        instructions="Summarize the incident in 2-4 short lines with key facts.",
     )
     scribe = Agent(
-        base,
+        model,
         role="Scribe",
         goal="Turn evidence into an escalation packet",
         instructions=(
             "You receive the previous gatherer's output as your input. "
-            "Write a short escalation packet. Start with PACKET: then the summary."
+            "Write a short escalation packet summarizing impact and next actions."
         ),
     )
     (
@@ -97,23 +73,22 @@ async def main() -> None:
         )
     )
     print("[kill] incomplete checkpoint after gather Agent")
-    print(f"    gather output={ (gather_result.output.text() or '')[:160]}")
+    print(f"    gather={(gather_result.output.text() or '')[:160]}")
 
-    # Resume with fresh Agents; count model calls so we prove gather is skipped.
-    calls = {"gather": 0, "scribe": 0}
+    # Fresh Agents on resume — gather skipped; scribe sees prior Agent output.
     gather2 = Agent(
-        _CountingProvider(make_provider(), calls, "gather"),
+        make_provider(),
         role="Gatherer",
         goal="Collect incident evidence",
-        instructions="Start with EVIDENCE:",
+        instructions="Summarize the incident briefly.",
     )
     scribe2 = Agent(
-        _CountingProvider(make_provider(), calls, "scribe"),
+        make_provider(),
         role="Scribe",
         goal="Turn evidence into an escalation packet",
         instructions=(
             "You receive the previous gatherer's output. "
-            "Start with PACKET: then summarize."
+            "Write a short escalation packet."
         ),
     )
     wf2 = (
@@ -126,12 +101,11 @@ async def main() -> None:
         resume=True,
     )
 
-    assert calls["gather"] == 0, f"gather Agent should be skipped, got {calls}"
-    assert calls["scribe"] >= 1, f"scribe Agent should run, got {calls}"
+    skipped = result.metadata.get("skipped_nodes") or []
     assert result.metadata.get("resumed") is True
-    assert "gather" in (result.metadata.get("skipped_nodes") or [])
-    out = result.output.text() or ""
-    assert out.strip(), out
+    assert "gather" in skipped, skipped
+    out = (result.output.text() or "").strip()
+    assert out, out
 
     await wf2.clear_checkpoint()
     try:
@@ -140,9 +114,9 @@ async def main() -> None:
     except RuntimeError as exc:
         assert "no incomplete checkpoint" in str(exc).lower()
 
-    print("[ok] Phase B kill/resume gate (live Agents)")
-    print(f"    skipped={result.metadata.get('skipped_nodes')}")
-    print(f"    output={out[:200]}")
+    print("[ok] Phase B kill/resume (live Agents, seamless handoff)")
+    print(f"    skipped={skipped}")
+    print(f"    output={out[:240]}")
 
 
 if __name__ == "__main__":

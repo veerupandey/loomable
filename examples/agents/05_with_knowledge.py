@@ -13,12 +13,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from loomable.agent import Agent
-from loomable.providers.openai import AzureOpenAIProvider
-from loomable.providers import AzureOpenAIEmbedder
+import sys
+from pathlib import Path
 
-provider = AzureOpenAIProvider()
-embedder = AzureOpenAIEmbedder()
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _provider import require_provider  # noqa: E402
+
+from loomable.agent import Agent
+from loomable.providers import GeminiEmbedder
+
+provider = require_provider()
+embedder = GeminiEmbedder()
 
 # Passive snippets — embedded at build, recalled into context (no search tool)
 knowledge_docs = [

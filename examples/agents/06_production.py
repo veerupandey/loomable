@@ -11,8 +11,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _provider import require_provider  # noqa: E402
+
 from loomable.agent import Agent, tool, AgentEvents, JSONTracer
-from loomable.providers import AzureOpenAIProvider, RetryPolicy
+from loomable.providers import RetryPolicy
 
 # --- Tools ---
 
@@ -34,7 +40,7 @@ def approval_gate(tool_call) -> bool:
 
 # --- Build production agent ---
 
-provider = AzureOpenAIProvider()
+provider = require_provider()
 
 agent = Agent(
     model=provider,
