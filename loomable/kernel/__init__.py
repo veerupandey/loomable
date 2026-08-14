@@ -27,6 +27,7 @@ from loomable.kernel.errors import (
     UnsupportedExtensionError,
 )
 from loomable.kernel.long_term import (
+    DEFAULT_ZVEC_PATH,
     InMemoryVectorBackend,
     LongTermStore,
     ZvecVectorBackend,
@@ -85,6 +86,7 @@ __all__ = [
     "ZvecVectorBackend",
     "InMemoryVectorBackend",
     "open_vector_store",
+    "DEFAULT_ZVEC_PATH",
     # Memory Manager
     "MemoryManager",
     # Summarizer

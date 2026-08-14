@@ -42,7 +42,7 @@ GateSpec = dict[str, Any]
 
 # Default backend specs
 SQLITE_DEFAULT: BackendSpec = {"type": "sqlite", "path": ":memory:"}
-ZVEC_DEFAULT: BackendSpec = {"type": "zvec"}
+ZVEC_DEFAULT: BackendSpec = {"type": "zvec", "path": ".loomable/memory_zvec"}
 
 
 # ---------------------------------------------------------------------------

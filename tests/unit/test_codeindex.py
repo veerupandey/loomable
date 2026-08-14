@@ -8,7 +8,7 @@ import pytest
 
 from loomable.agent import ModelSpec, create_deep_agent
 from loomable.codeindex import CodeIndex, HashingEmbedder
-from loomable.kernel.long_term import InMemoryVectorBackend, LongTermStore
+from loomable.kernel.long_term import InMemoryVectorBackend, open_vector_store, LongTermStore
 from loomable.kernel.models import ModelRequest, ModelResponse
 from loomable.skills import list_bundled_skills
 from loomable.toolkits import CodeTools
@@ -61,7 +61,7 @@ async def test_codeindex_build_search_and_map(tmp_path: Path) -> None:
     _write_mini_repo(repo)
     index = await CodeIndex.build(
         repo,
-        store=LongTermStore(),  # in-memory (no zvec required)
+        store=open_vector_store(engine="memory"),  # in-memory (no zvec required)
         embedder=HashingEmbedder(),
     )
     assert index.size >= 2
@@ -78,7 +78,7 @@ async def test_codeindex_build_search_and_map(tmp_path: Path) -> None:
 async def test_code_tools(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_mini_repo(repo)
-    index = await CodeIndex.build(repo, store=LongTermStore(), embedder=HashingEmbedder())
+    index = await CodeIndex.build(repo, store=open_vector_store(engine="memory"), embedder=HashingEmbedder())
     tools = {t.name: t for t in CodeTools(index).tools()}
     mapped = await tools["repo_map"].invoke({"max_entries": 20})
     assert "auth.py" in str(mapped.content)
@@ -110,7 +110,7 @@ async def test_create_deep_agent_profile_code(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_mini_repo(repo)
     # Avoid requiring zvec for this wiring test: prebuild with in-memory store.
-    index = await CodeIndex.build(repo, store=LongTermStore(), embedder=HashingEmbedder())
+    index = await CodeIndex.build(repo, store=open_vector_store(engine="memory"), embedder=HashingEmbedder())
     agent = create_deep_agent(
         ModelSpec(provider="scripted", provider_impl=_Noop()),
         workspace=tmp_path / "ws",

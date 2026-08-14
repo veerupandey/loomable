@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from loomable.agent import Agent, ModelSpec, NoteStore
-from loomable.kernel.long_term import LongTermStore
+from loomable.kernel.long_term import LongTermStore, open_vector_store
 from loomable.kernel.models import ModelRequest, ModelResponse
 from loomable.memory import (
     ConversationMemory,
@@ -45,7 +45,7 @@ def test_extract_user_facts() -> None:
 
 @pytest.mark.asyncio
 async def test_scoped_note_store_isolates_users() -> None:
-    base = NoteStore(long_term=LongTermStore(), embedder=_Emb())
+    base = NoteStore(long_term=open_vector_store(engine="memory"), embedder=_Emb())
     alice = ScopedNoteStore(base, user_id="alice")
     bob = ScopedNoteStore(base, user_id="bob")
     await alice.write("prefs", "Alice likes teal")
@@ -62,7 +62,7 @@ async def test_memory_scope_claim_id_isolation() -> None:
     """Insurance-style scopes: same user, different claim_id must not leak."""
     from loomable.memory import MemoryScope
 
-    base = NoteStore(long_term=LongTermStore(), embedder=_Emb())
+    base = NoteStore(long_term=open_vector_store(engine="memory"), embedder=_Emb())
     c1 = ScopedNoteStore(
         base, scope=MemoryScope.of(user_id="alice", claim_id="CLM-1")
     )
@@ -100,7 +100,7 @@ async def test_memory_scope_claim_id_isolation() -> None:
 @pytest.mark.asyncio
 async def test_memory_compose_conversation_and_user_auto_extract() -> None:
     store = open_session_store("memory")
-    notes = NoteStore(long_term=LongTermStore(), embedder=_Emb())
+    notes = NoteStore(long_term=open_vector_store(engine="memory"), embedder=_Emb())
     memory = Memory.compose(
         conversation=ConversationMemory(store=store, window=6),
         user=UserMemory(note_store=notes, memory_tool=True, auto_extract=True),
@@ -155,7 +155,7 @@ async def test_memory_compose_legacy_kwargs_override() -> None:
 @pytest.mark.asyncio
 async def test_memory_compose_short_long_aliases() -> None:
     store = open_session_store("memory")
-    notes = NoteStore(long_term=LongTermStore(), embedder=_Emb())
+    notes = NoteStore(long_term=open_vector_store(engine="memory"), embedder=_Emb())
     memory = Memory.compose(
         short=ConversationMemory(store=store),
         long=UserMemory(note_store=notes, memory_tool=False),

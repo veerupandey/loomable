@@ -58,12 +58,12 @@ def dsn() -> str:
 @pytest.mark.asyncio
 async def test_e2e_agent_postgres_l1_plus_zvec_l3(dsn: str) -> None:
     from loomable.agent import Agent, NoteStore
-    from loomable.kernel.long_term import LongTermStore
+    from loomable.kernel.long_term import LongTermStore, open_vector_store
     from loomable.memory import open_session_store
 
     sid = f"e2e-agent-{uuid.uuid4().hex[:8]}"
     store = open_session_store("postgres", url=dsn, user_id="e2e-alice")
-    notes = NoteStore(long_term=LongTermStore(), embedder=_Emb())
+    notes = NoteStore(long_term=open_vector_store(engine="memory"), embedder=_Emb())
 
     a1 = Agent(
         model=_model(),
@@ -147,7 +147,7 @@ async def test_e2e_case_copies_memory_and_checkpointer(dsn: str) -> None:
     from loomable.agent import Agent, NoteStore
     from loomable.case import Case
     from loomable.flow.loop import VerdictResult
-    from loomable.kernel.long_term import LongTermStore
+    from loomable.kernel.long_term import LongTermStore, open_vector_store
     from loomable.kernel.models import ModelRequest, ModelResponse
     from loomable.memory import open_session_store
     from loomable.persist.postgres import PostgresCheckpointer
@@ -172,7 +172,7 @@ async def test_e2e_case_copies_memory_and_checkpointer(dsn: str) -> None:
     from loomable.agent import ModelSpec
 
     store = open_session_store("postgres", url=dsn, user_id="e2e-case")
-    notes = NoteStore(long_term=LongTermStore(), embedder=_Emb())
+    notes = NoteStore(long_term=open_vector_store(engine="memory"), embedder=_Emb())
     cp = PostgresCheckpointer(dsn, table="loomable_case_mem_ckpts_e2e")
     await cp.setup()
     sid = f"e2e-case-{uuid.uuid4().hex[:8]}"
