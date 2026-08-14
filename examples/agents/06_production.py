@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _provider import require_provider  # noqa: E402
 
-from loomable.agent import Agent, tool, AgentEvents, JSONTracer
+from loomable.agent import Agent, tool, JSONTracer
 from loomable.providers import RetryPolicy
 
 # --- Tools ---

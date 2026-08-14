@@ -56,7 +56,7 @@ async def main() -> None:
         ),
         max_tool_iterations=8,
     )
-    print("tools:", sorted(agent.build().tool_runtime._tools))
+    print("tools:", ", ".join(agent.build().tool_runtime.names))
     print()
 
     for question in QUESTIONS:

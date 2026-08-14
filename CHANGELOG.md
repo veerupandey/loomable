@@ -33,7 +33,7 @@
 - Default zvec L3 store reuses an in-process collection handle (no exclusive-lock deadlock across `Agent()` builds)
 - Examples audited for 0.2.0 APIs: unique numbering, live `knowledge_base` / Team inherit demos, retrieval demos use live providers
 - Pattern examples teach `Workflow` / `Team` (not `sequential`/`parallel`/`route` helpers)
-- Docs Level 5–7 teach `Workflow` parallel/branch/HITL; Flow demoted to escape hatch
+- Docs Level 4–6 teach `Workflow` parallel/branch/HITL; Flow demoted to escape hatch
 - Root README teaches `Memory.compose` + `create_deep_agent(profile=...)`
 - Memory compose example uses `Memory.compose` (not flat `session_store=` / `note_store=`)
 - Shared provider helper adds `make_embedder()` aligned with chat credentials
@@ -55,6 +55,8 @@
 - `confirm=True` without `checkpointer=` + `session_id=` raises; HITL is rejected inside `.parallel()` / `.branch()` / `.loop()`
 - `Memory.to_agent_kwargs()` forwards `UserMemory(auto_extract=True)` as `memory_auto_extract`
 - Custom Flow engines with a checkpointer fail loud instead of silently dropping HITL/checkpoint kwargs
+- Soft `except: pass` on serve cancel / bind_session and discovery activation → logged
+- Docs: NDJSON demoted; Flow Engine Workflow-first; KnowledgeMemory in compose example
 
 ### Removed (greenfield clean — no compatibility shims)
 
@@ -71,10 +73,7 @@
 - `Map` / `Router` aliases — use `MapNode` / `RouterNode`
 - `rank_match` discovery helper — use `rank_bm25`
 - Passing kernel `MemoryManager` as `Agent(memory=...)` — use `Memory.compose`
-
-- Soft `except: pass` on serve cancel / bind_session and discovery activation → logged
 - `ExtensionRegistry` removed from `loomable.kernel.__all__` (import `loomable.kernel.registry`)
-- Docs: NDJSON demoted; Flow Engine Workflow-first; KnowledgeMemory in compose example
 
 ### Limits (documented)
 

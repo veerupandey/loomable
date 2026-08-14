@@ -20,7 +20,7 @@ Real-world SEV exam for Loomable: AcmePay settlement failure with partner bank
 | 11 | `11_case_sse.py` | Case AG-UI SSE + WorkItems `STATE_*` |
 | 12 | `12_agent_agui_sse.py` | Agent FastAPI `text/event-stream` |
 
-Engineering notes: `CHALLENGES.md` · `ISSUES.md`
+Engineering notes: `CHALLENGES.md`
 
 ## Setup
 

@@ -7,7 +7,6 @@ accept verifier run through the Case plan→dispatch→synthesize loop.
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 
 from loomable.agent import ModelSpec, create_deep_agent

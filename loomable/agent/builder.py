@@ -44,7 +44,7 @@ from loomable.kernel.contracts import ModelProvider, Retriever, Tool
 from loomable.kernel.errors import GuardrailViolation, MCPConnectionError, SkillLoadError
 from loomable.kernel.guardrails import GuardrailHarness
 from loomable.kernel.long_term import LongTermStore
-from loomable.kernel.mcp_client import MCPClient, MCPSession
+from loomable.kernel.mcp_client import MCPClient
 from loomable.kernel.memory import MemoryManager
 from loomable.kernel.model_interface import ModelInterface
 from loomable.kernel.model_router import ModelRouter, TierSubstitution
@@ -52,7 +52,6 @@ from loomable.kernel.models import (
     AgentConfig,
     ContextItem,
     Session,
-    TierPolicy,
     ToolCall,
     ToolError,
     ToolOutcome,
@@ -873,7 +872,7 @@ class BuiltAgent:
         # the verifier reports failure, re-run with the failure detail appended to
         # context up to max_verify_retries times.
         if self.verifier is not None:
-            from loomable.flow.loop import CallableVerifier, Verifier, VerdictResult
+            from loomable.flow.loop import CallableVerifier, Verifier
 
             # Resolve the verifier: callable → CallableVerifier adapter
             resolved_verifier: Verifier
@@ -2504,7 +2503,6 @@ class BuiltAgent:
             TEXT_MESSAGE_START,
             AsyncStreamBus,
             StreamBridge,
-            StreamEvent,
         )
 
         run_id = uuid.uuid4().hex
@@ -3242,8 +3240,7 @@ class Agent:
             checkpoint_interval=self._checkpoint_interval,
         )
 
-        # --- Construct or reuse subsystems (Req 1.2 defaults, 2.2/2.3 overrides) ---
-        context_manager = self._context_manager or ContextManager(self._token_budget)
+        # --- Construct or reuse subsystems ---
         memory = self._memory or MemoryManager()
         self._materialize_knowledge_base()
         tool_registry, skill_errors = self._build_tool_registry()

@@ -2,8 +2,8 @@
 
 Zero FastAPI dependency. Transport adapters (SSE) live in ``loomable.serve``.
 
-Enterprise UIs (CopilotKit / AG-UI clients) consume these event types over
-``text/event-stream`` without a Loomable-specific client.
+AG-UI clients consume these event types over ``text/event-stream`` without a
+Loomable-specific client.
 """
 
 from __future__ import annotations

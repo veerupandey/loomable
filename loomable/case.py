@@ -34,7 +34,7 @@ import asyncio
 import json
 import re
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any, AsyncIterator, Callable, Literal, Sequence
 
 from loomable.agent.context import RunContext

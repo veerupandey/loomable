@@ -26,7 +26,6 @@ from __future__ import annotations
 __all__ = ["Workflow"]
 
 import asyncio
-import uuid
 from typing import Any, AsyncIterator, Callable, TYPE_CHECKING
 
 from loomable.agent.context import RunContext
@@ -42,8 +41,6 @@ if TYPE_CHECKING:
 
 def _as_steps(value: Any) -> list[Any]:
     """Normalize a branch / parallel argument into a list of composable elements."""
-    from loomable.flow.step import Step
-
     if value is None:
         return []
     if isinstance(value, list):
@@ -137,7 +134,7 @@ class Workflow:
         Optional initial list of steps (declarative style). Prefer fluent
         ``.step()`` / ``.parallel()`` / ``.branch()`` / ``.loop()``.
     session_id:
-        Scopes memory and checkpoints (LangGraph-style thread id).
+        Scopes memory and checkpoints (thread id).
     checkpointer:
         Durable resume backend (JsonFile / SQLite / InMemory).
     memory:

@@ -58,7 +58,7 @@ async def main() -> None:
         mode="sequential",
         knowledge_base=KnowledgeBase(sources=[docs], name="knowledge"),
     )
-    assert "search_knowledge" in researcher.build().tool_runtime._tools
+    assert "search_knowledge" in researcher.build().tool_runtime
 
     result = await team.arun("Can we ship tonight without a review?")
     print((result.output.text() or "").strip())
