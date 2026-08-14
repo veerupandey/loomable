@@ -20,6 +20,7 @@ from loomable.agent import (
     ContextPolicy,
     RunResult,
     Team,
+    create_deep_agent,
     spawn_specialist,
     tool,
 )
@@ -70,6 +71,7 @@ __all__ = [
     "RunResult",
     "ContextPolicy",
     "spawn_specialist",
+    "create_deep_agent",
     "FlowPaused",
     "build_case_workflow",
     "map_specialists",

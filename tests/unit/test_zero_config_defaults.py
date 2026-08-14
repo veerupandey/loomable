@@ -16,10 +16,18 @@ class TestZeroConfigDefaults:
     def test_file_tools_defaults_to_cwd(self):
         tools = FileTools()
         assert tools._base_dir == Path.cwd().resolve()
-        # Should have 4 tools
-        assert len(tools.tools()) == 4
+        # Should have 7 tools (edit/glob/grep added for deep-agent parity)
+        assert len(tools.tools()) == 7
         names = {t.name for t in tools.tools()}
-        assert names == {"read_file", "write_file", "write_json", "list_directory"}
+        assert names == {
+            "read_file",
+            "write_file",
+            "write_json",
+            "list_directory",
+            "edit_file",
+            "glob_files",
+            "grep_files",
+        }
 
     def test_python_tools_default_timeout(self):
         tools = PythonTools()

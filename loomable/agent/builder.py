@@ -3199,8 +3199,24 @@ class Agent:
             for item in self._tools:
                 if isinstance(item, Toolkit):
                     for ft in item.tools():
+                        if ft.name in registry:
+                            import warnings
+
+                            warnings.warn(
+                                f"Tool name {ft.name!r} already registered; "
+                                "later registration wins (check toolkit collisions).",
+                                stacklevel=2,
+                            )
                         registry[ft.name] = ft
                 else:
+                    if item.name in registry:
+                        import warnings
+
+                        warnings.warn(
+                            f"Tool name {item.name!r} already registered; "
+                            "later registration wins (check toolkit collisions).",
+                            stacklevel=2,
+                        )
                     registry[item.name] = item
 
         # --- Skills: discover + load via the kernel SkillLoader (Req 4.1–4.4) ---
