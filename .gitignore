@@ -56,5 +56,6 @@ examples/deep_agent/.workspace_*/
 **/.deep_workspace/
 
 examples/advanced/.retrieval_demo/
+examples/advanced/.agentic_demo/
 examples/deep_agent/.workspace_*/
 **/.loomable/
