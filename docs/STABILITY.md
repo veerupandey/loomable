@@ -34,7 +34,7 @@ API. Prefer the high-level path; treat advanced Flow types as an escape hatch.
 | Surface | Notes |
 |---------|--------|
 | `FlowClass` / `start` / `listen` / `router` | Decorator DSL; prefer `Workflow` — no examples yet |
-| `loomable.kernel.registry.ExtensionRegistry` | Not wired into Agent discovery |
+| `loomable.kernel.registry.ExtensionRegistry` | Not in `kernel.__all__`; import from `loomable.kernel.registry` — not wired into Agent discovery |
 | `discovery_core="research-slim"` | Schema-budget profile; defaults may shift |
 | `loomable.sandbox` / `ShellTools` / Docker sandbox | Soft isolation; Docker experimental |
 | Bundled `browser` skill | Assumes Lightpanda (or compatible) MCP |

@@ -945,7 +945,7 @@ def create_deep_agent(
         discovery=discovery,
         discovery_core_tools=_resolve_discovery_core(discovery_core),
         # Progressive skills: metadata in prompt; load_skill for full body.
-        # Callers can pass eager_skills=True via agent_kwargs for legacy behavior.
+        # Pass eager_skills=True via agent_kwargs to inject full skill bodies up front.
         eager_skills=agent_kwargs.pop("eager_skills", None),
         # Lazy MCP / activation policy: Agent already defaults lazy_mcp=True
         # when discovery is on; these just let callers override explicitly.

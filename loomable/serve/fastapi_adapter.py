@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -228,8 +229,10 @@ def _register_agent_routes(
             if callable(cancel):
                 try:
                     cancel()
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logging.getLogger("loomable.serve").debug(
+                        "cancel() failed on %s: %s", type(target).__name__, exc
+                    )
 
     def _apply_session(body: RunRequestModel) -> None:
         sid = body.session_id
@@ -240,18 +243,26 @@ def _register_agent_routes(
             try:
                 agent.bind_session(sid)
                 return
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger("loomable.serve").warning(
+                    "bind_session(%r) failed; falling back to session_id assign: %s",
+                    sid,
+                    exc,
+                )
         if hasattr(agent, "session_id"):
             try:
                 agent.session_id = sid  # type: ignore[attr-defined]
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger("loomable.serve").debug(
+                    "session_id assign failed: %s", exc
+                )
         if hasattr(agent, "_session_id"):
             try:
                 agent._session_id = sid  # type: ignore[attr-defined]
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger("loomable.serve").debug(
+                    "_session_id assign failed: %s", exc
+                )
         # Case (direct or cached under Agent mode=case) must bind checkpoint thread.
         case = agent if type(agent).__name__ == "Case" else getattr(agent, "_case", None)
         if case is not None and hasattr(case, "bind_session"):
