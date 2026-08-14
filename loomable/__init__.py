@@ -34,6 +34,7 @@ from loomable.memory import (
     WorkingMemory,
     open_session_store,
 )
+from loomable.providers.vector_store import open_vector_store
 from loomable.skills import list_bundled_skills, resolve_skills
 from loomable.case import (
     Board,
@@ -93,6 +94,7 @@ __all__ = [
     "KnowledgeMemory",
     "WorkingMemory",
     "open_session_store",
+    "open_vector_store",
     "FlowPaused",
     "build_case_workflow",
     "map_specialists",

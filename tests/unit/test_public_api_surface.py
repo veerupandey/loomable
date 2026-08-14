@@ -34,6 +34,7 @@ _EXPECTED = {
     "KnowledgeMemory",
     "WorkingMemory",
     "open_session_store",
+    "open_vector_store",
     "FlowPaused",
     "build_case_workflow",
     "map_specialists",

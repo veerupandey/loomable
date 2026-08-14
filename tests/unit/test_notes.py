@@ -7,7 +7,8 @@ import json
 import pytest
 
 from loomable.agent.notes import Note, NoteStore, make_memory_tool
-from loomable.kernel.long_term import LongTermStore, open_vector_store
+from loomable.kernel.long_term import LongTermStore
+from loomable.providers.vector_store import open_vector_store
 
 
 # ---------------------------------------------------------------------------

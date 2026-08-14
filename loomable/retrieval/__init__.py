@@ -3,7 +3,7 @@
 High-level::
 
     from loomable.retrieval import ingest, build_agentic_retriever
-    from loomable.kernel.long_term import open_vector_store
+    from loomable.providers.vector_store import open_vector_store
 
     corpus = await ingest(
         ["./docs", "./README.md"],
@@ -75,6 +75,7 @@ from loomable.retrieval.route import (
     LLMModeRouter,
 )
 from loomable.retrieval.types import Chunk, Document
+from loomable.providers.vector_store import open_vector_store
 
 __all__ = [
     # Core types
@@ -82,6 +83,7 @@ __all__ = [
     "ChunkStrategy",
     "Document",
     "Corpus",
+    "open_vector_store",
     # Ingest / build
     "ingest",
     "build_corpus",

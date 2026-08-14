@@ -31,7 +31,6 @@ from loomable.kernel.long_term import (
     InMemoryVectorBackend,
     LongTermStore,
     ZvecVectorBackend,
-    open_vector_store,
 )
 from loomable.kernel.memory import MemoryManager
 from loomable.kernel.summarizer import Summarizer
@@ -85,7 +84,6 @@ __all__ = [
     "LongTermStore",
     "ZvecVectorBackend",
     "InMemoryVectorBackend",
-    "open_vector_store",
     "DEFAULT_ZVEC_PATH",
     # Memory Manager
     "MemoryManager",

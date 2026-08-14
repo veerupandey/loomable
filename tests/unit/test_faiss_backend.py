@@ -8,7 +8,7 @@ import pytest
 
 pytest.importorskip("faiss")
 
-from loomable.kernel.long_term import open_vector_store
+from loomable.providers.vector_store import open_vector_store
 from loomable.providers.backends.faiss import FaissVectorBackend
 
 

@@ -32,6 +32,7 @@ from .groq import GroqProvider
 from .ollama import OllamaProvider
 from .openai import AzureOpenAIProvider, OpenAIProvider
 from .resilient import ResilientModel, RetryPolicy
+from .vector_store import open_vector_store
 
 __all__ = [
     "OpenAIProvider",
@@ -47,4 +48,5 @@ __all__ = [
     "PermanentProviderError",
     "ResilientModel",
     "RetryPolicy",
+    "open_vector_store",
 ]

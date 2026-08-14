@@ -782,7 +782,8 @@ Pass FAISS, Postgres, or `engine="memory"` when you want something else.
 
 ```python
 from loomable.agent import NoteStore
-from loomable.kernel.long_term import LongTermStore, open_vector_store
+from loomable.kernel.long_term import LongTermStore
+from loomable.providers.vector_store import open_vector_store
 from loomable.providers import OpenAIEmbedder
 
 embedder = OpenAIEmbedder()
@@ -1420,7 +1421,7 @@ Ingest → chunk → pluggable base retrieve → **agentic** rewrite / route / r
 
 ```python
 from loomable import Agent
-from loomable.kernel.long_term import open_vector_store
+from loomable.providers.vector_store import open_vector_store
 from loomable.retrieval import ingest, build_agentic_retriever
 
 corpus = await ingest(
