@@ -1,58 +1,55 @@
-"""Postgres KV + vector memory demo.
+"""Pass Agent memory via sqlite / file / postgres.
 
-Requires: pip install 'loomable[postgres]' && docker compose up -d
-Env: POSTGRES_URL=postgresql://loomable:loomable@127.0.0.1:5432/loomable
+Requires for postgres: pip install 'loomable[postgres]' && docker compose up -d
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from loomable.agent import Agent
-from loomable.kernel.long_term import LongTermStore
-from loomable.kernel.stores import ShortTermStore
+from loomable.memory import open_session_store
 from loomable.providers.openai import AzureOpenAIProvider
 
-DSN = os.environ.get("POSTGRES_URL") or os.environ.get("DATABASE_URL")
 provider = AzureOpenAIProvider()
+DSN = os.environ.get("POSTGRES_URL") or os.environ.get("DATABASE_URL")
+ROOT = Path(__file__).resolve().parent / ".sessions_demo"
+ROOT.mkdir(exist_ok=True)
 
+# Pick one:
 if DSN:
-    from loomable.providers.backends.postgres import PgVectorBackend, PostgresMemoryBackend
-
-    kv = PostgresMemoryBackend(DSN, user_id="alice")
-    short_term = ShortTermStore(backend=kv)
-    vectors = PgVectorBackend(DSN, dimensions=1536, user_id="alice")
-    long_term = LongTermStore(backend=vectors, backend_name="postgres")
+    store = open_session_store("postgres", url=DSN, user_id="alice")
+    label = "postgres"
 else:
-    kv = vectors = None
-    short_term = ShortTermStore()
-    long_term = LongTermStore()
-    print("POSTGRES_URL unset — using in-memory stores")
-
-agent = Agent(
-    model=provider,
-    role="Personal Assistant",
-    instructions="Remember user preferences.",
-    session_id="demo-session",
-    user_id="alice",
-)
+    store = open_session_store("file", path=str(ROOT))
+    label = f"file:{ROOT}"
 
 
 async def main() -> None:
-    r1 = await agent.arun("I prefer dark mode and Python.")
-    print("Session 1:", r1.output.text())
-    r2 = await agent.arun("What are my preferences?")
-    print("Session 2:", r2.output.text())
-    if kv is not None:
-        await short_term.write("prefs", {"theme": "dark", "lang": "python"})
-        print("KV:", await short_term.read("prefs"))
-        await kv.aclose()
-        await vectors.aclose()
+    print(f"Using session store: {label}")
+    a1 = Agent(
+        model=provider,
+        session_id="demo-session",
+        session_store=store,
+        instructions="Remember user preferences.",
+    )
+    print((await a1.arun("I prefer dark mode and Python.")).output.text())
+
+    # New Agent instance — same store + resume=True restores L1/L2
+    a2 = Agent(
+        model=provider,
+        session_id="demo-session",
+        session_store=store,
+        resume=True,
+        instructions="Remember user preferences.",
+    )
+    print((await a2.arun("What are my preferences?")).output.text())
 
 
 asyncio.run(main())

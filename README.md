@@ -232,7 +232,7 @@ loomable/
 pip install -e ".[dev]"
 python -m pytest tests/unit -q
 
-# Postgres live E2E
+# Postgres live E2E (Agent memory + checkpointers)
 pip install -e ".[postgres]"
 docker compose up -d
 POSTGRES_URL=postgresql://loomable:loomable@127.0.0.1:5432/loomable \
