@@ -82,21 +82,11 @@ class Step:
         used to avoid mutating a shared context object.
         """
         if self._deps is not None:
-            # Inject step-level deps by creating/updating the context.
+            # Inject step-level deps without dropping the parent's cancel flag.
             if context is None:
                 context = RunContext(deps=self._deps)
             else:
-                # Clone-ish: create a new RunContext preserving other fields
-                # but overriding deps for this step only.
-                context = RunContext(
-                    events=context.events,
-                    max_steps=context.max_steps,
-                    token_budget=context.token_budget,
-                    loop_repeat_threshold=context.loop_repeat_threshold,
-                    deps=self._deps,
-                    shared_state=context.shared_state,
-                    memory=context.memory,
-                )
+                context = context.fork(deps=self._deps)
 
         return await self._agent.arun(input, context=context)
 

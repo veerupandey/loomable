@@ -174,6 +174,7 @@ class Flow:
                 retrievers=retrievers,
                 embedder=embedder,
             )
+        self._active_ctx: Any | None = None
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -423,6 +424,7 @@ class Flow:
             engine_kwargs["pending_decisions"] = pending_decisions
 
         try:
+            self._active_ctx = ctx
             result = await engine.run(
                 optimized_flow,
                 input,
@@ -433,9 +435,13 @@ class Flow:
         except TypeError:
             # Custom engine doesn't accept checkpoint kwargs — run without them
             result = await engine.run(optimized_flow, input, state, ctx)
+        finally:
+            if self._active_ctx is ctx:
+                self._active_ctx = None
 
         # 7. Write a final (complete) checkpoint if checkpointer is configured
-        if self._checkpointer is not None:
+        #    Skip when cancelled so resume can continue from the last node.
+        if self._checkpointer is not None and not ctx.cancelled:
             from loomable.persist.checkpoint import Checkpoint
 
             final_cp = Checkpoint(
@@ -457,6 +463,14 @@ class Flow:
             result.metadata["skipped_nodes"] = sorted(completed_node_ids)
 
         return result
+
+    def cancel(self) -> bool:
+        """Request cooperative cancellation of the in-flight flow run."""
+        ctx = self._active_ctx
+        if ctx is None:
+            return False
+        ctx.cancel()
+        return True
 
     async def astream_events(
         self,

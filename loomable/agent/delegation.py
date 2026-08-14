@@ -15,7 +15,12 @@ from .tools import FunctionTool
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .builder import Agent
 
-__all__ = ["make_delegation_tools", "format_member_roster", "spawn_specialist"]
+__all__ = [
+    "make_delegation_tools",
+    "format_member_roster",
+    "delegation_tool_names",
+    "spawn_specialist",
+]
 
 
 def _subagent_label(agent: "Agent", index: int) -> str:
@@ -61,6 +66,17 @@ def format_member_roster(subagents: list["Agent"]) -> str:
             line += f" — {goal}"
         lines.append(line)
     return "\n".join(lines)
+
+
+def delegation_tool_names(subagents: list["Agent"]) -> list[tuple["Agent", str]]:
+    """Return ``(member, delegate_to_<slug>)`` pairs matching :func:`make_delegation_tools`."""
+    pairs: list[tuple["Agent", str]] = []
+    used_slugs: set[str] = set()
+    for index, subagent in enumerate(subagents):
+        label = _subagent_label(subagent, index)
+        slug = _unique_slug(label, used_slugs)
+        pairs.append((subagent, f"delegate_to_{slug}"))
+    return pairs
 
 
 def _build_description(agent: "Agent", role: str) -> str:

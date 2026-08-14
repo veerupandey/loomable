@@ -234,6 +234,8 @@ class Loop:
                     }
 
             # Run the body
+            if ctx.cancelled:
+                break
             last_result = await self._body.arun(body_input, context=ctx)
 
             # Verify the output
@@ -248,9 +250,18 @@ class Loop:
             # Failure — capture detail for next iteration (Req 5.5)
             failure_detail = verdict.detail
 
-        # Iteration cap reached without success (Req 5.3)
-        assert last_result is not None  # At least one iteration ran
-        last_result.metadata["loop_stop"] = "max_iterations"
-        last_result.metadata["loop_iterations"] = self._max_iterations
+        # Iteration cap reached without success (Req 5.3), or cancelled.
+        if last_result is None:
+            from loomable.content import AgentOutput, Text
+
+            last_result = RunResult(
+                output=AgentOutput(parts=[Text("")]), session_id=""
+            )
+        if ctx.cancelled:
+            last_result.metadata["loop_stop"] = "cancelled"
+            last_result.metadata["stop_reason"] = "cancelled"
+        else:
+            last_result.metadata["loop_stop"] = "max_iterations"
+            last_result.metadata["loop_iterations"] = self._max_iterations
         last_result.metadata["loop_verified"] = False
         return last_result
