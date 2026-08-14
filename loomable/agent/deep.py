@@ -44,17 +44,21 @@ Operating rules:
 2. Prefer writing intermediate notes, research dumps, and drafts to workspace
    files (write_file / edit_file). Do not paste huge blobs into chat.
 3. Use read_file / grep / glob to pull back only the slices you need.
-4. Use web_search to find sources, then fetch_url / extract_text for full pages.
-   Large tool results may be offloaded to .offload/ — read those files as needed.
+4. Use web_search to find sources (at most 2 searches), then fetch_url /
+   extract_text for full pages. Large tool results may be offloaded to .offload/
+   — read those files as needed. Do not keep searching once you have usable URLs.
 5. Register important sources with register_source; end deliverables with
    format_bibliography (or paste its output into the report).
-6. For visual evidence: fetch_image then analyze_image; store notes under images/.
+6. For visual evidence: discover_images on a source page, then fetch_image +
+   analyze_image; store notes under images/.
 7. Use the task tool to spawn a specialist for isolated research or drafting
    when that work would bloat your own context. Pass a crisp task description.
    Specialists share this workspace — they can write files you can read.
 8. Use think for brief private reasoning; use memory when durable facts should
    survive beyond this session (if the memory tool is available).
-9. Finish by producing the user-facing deliverable (and update todos to completed).
+9. Finish by writing the user-facing deliverable with write_file (e.g. reports/…),
+   then update todos to completed. Do not stop after format_bibliography alone —
+   the Markdown report file is required.
 
 Quality bar: be concrete, cite sources from tools when available, and verify
 the deliverable against the original goal before stopping.
@@ -120,6 +124,7 @@ def create_deep_agent(
     require_confirmation: list[str] | None = None,
     web_search: bool = True,
     url_fetch: bool = True,
+    url_max_length: int = 8_000,
     citations: bool = True,
     images: bool | None = None,
     offload_large_tools: bool = True,
@@ -139,6 +144,8 @@ def create_deep_agent(
     memory_window: int = 16,
     compaction_threshold: int = 32,
     use_llm_summarizer: bool = True,
+    loop_repeat_threshold: int = 6,
+    token_budget: int = 128_000,
     name: str = "deep-agent",
     goal: str = "Complete hard, long-horizon tasks with planning and delegation",
     modalities: str = "text+image",
@@ -206,9 +213,9 @@ def create_deep_agent(
         try:
             from loomable.toolkits.url_tools import URLTools
 
-            url_kit = URLTools()
+            url_kit = URLTools(max_length=url_max_length)
             bundled.append(url_kit)
-            shared_for_task.append(URLTools())
+            shared_for_task.append(URLTools(max_length=url_max_length))
         except Exception:  # noqa: BLE001
             pass
 
@@ -242,11 +249,16 @@ def create_deep_agent(
     if instructions:
         prompt = f"{prompt}\n\nAdditional instructions:\n{instructions.strip()}"
 
-    # Merge offload post-hook with any caller tool_hooks
+    # Merge offload post-hook with any caller tool_hooks.
+    # Pass the same WorkspaceStore so offloads are immediately readable via read_file.
     existing_hooks = list(agent_kwargs.pop("tool_hooks", None) or [])
     if offload_large_tools:
         existing_hooks.append(
-            make_workspace_offload_hook(root, threshold=offload_threshold)
+            make_workspace_offload_hook(
+                root,
+                threshold=offload_threshold,
+                store=workspace_kit.store,
+            )
         )
 
     kwargs: dict[str, Any] = dict(
@@ -276,6 +288,8 @@ def create_deep_agent(
         memory_window=memory_window,
         compaction_threshold=compaction_threshold,
         use_llm_summarizer=use_llm_summarizer,
+        loop_repeat_threshold=loop_repeat_threshold,
+        token_budget=token_budget,
         modalities=modalities,
         debug=debug,
         mode=mode,
@@ -304,6 +318,9 @@ def create_research_agent(
 
     Thin wrapper around :func:`create_deep_agent` with research-ready defaults.
     """
+    require_tools = kwargs.pop("require_tools", None)
+    if require_tools is None:
+        require_tools = ["write_file"]
     return create_deep_agent(
         model,
         workspace=workspace,
@@ -321,5 +338,6 @@ def create_research_agent(
             "goal",
             "Research topics thoroughly: search, fetch, cite, analyze images, deliver briefs",
         ),
+        require_tools=require_tools,
         **kwargs,
     )

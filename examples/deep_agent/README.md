@@ -75,7 +75,10 @@ DEEP_AGENT_LIVE=1 GEMINI_API_KEY=... \
 
 ## Framework notes
 
+- Default Agent `token_budget=8192` aborts mid-research → deep uses **128000**.
 - Default Agent `max_tool_iterations=12` is too low → deep uses **40**.
 - Truncating large tools loses evidence → deep post-hook **offloads** to `.offload/`.
+- Uncapped `fetch_url`/`extract_text` can blow the context → deep caps at **8000** chars.
 - `modalities` default for deep is **`text+image`** (override with `modalities="text"`).
-- `create_research_agent` is an opinionated alias over `create_deep_agent`.
+- `create_research_agent` requires a `write_file` deliverable and is an opinionated alias over `create_deep_agent`.
+- Live Gemini: use `GEMINI_MODEL=gemini-flash-latest` (older `gemini-2.0-flash` IDs may 404).

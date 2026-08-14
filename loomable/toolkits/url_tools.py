@@ -63,7 +63,10 @@ class URLTools(Toolkit):
                     return (
                         f"Error: HTTP {response.status_code} for URL: {url}"
                     )
-                return response.text
+                text = response.text
+                if self._max_length is not None and len(text) > self._max_length:
+                    text = text[: self._max_length]
+                return text
         except httpx.TimeoutException:
             return f"Error: Request timed out after {self._timeout} seconds: {url}"
         except httpx.HTTPError as exc:

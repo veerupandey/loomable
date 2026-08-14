@@ -212,11 +212,29 @@ class _ScriptedResearchProvider:
         )
 
 
-def _pick_live_model() -> str:
+def _pick_live_model() -> object:
     if os.environ.get("DEEP_MODEL"):
-        return os.environ["DEEP_MODEL"]
-    if os.environ.get("GEMINI_API_KEY"):
-        return os.environ.get("DEEP_MODEL_GEMINI", "gemini:gemini-2.0-flash")
+        raw = os.environ["DEEP_MODEL"]
+        if raw.startswith("gemini:") or (
+            "GEMINI_API_KEY" in os.environ and not raw.startswith("openai:")
+        ):
+            from loomable.providers.gemini import GeminiProvider
+
+            model_name = raw.split(":", 1)[-1] if ":" in raw else raw
+            return GeminiProvider(
+                model=model_name,
+                api_key=os.environ.get("GEMINI_API_KEY")
+                or os.environ.get("GOOGLE_API_KEY"),
+            )
+        return raw
+    if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+        from loomable.providers.gemini import GeminiProvider
+
+        return GeminiProvider(
+            model=os.environ.get("GEMINI_MODEL", "gemini-flash-latest"),
+            api_key=os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY"),
+        )
     if os.environ.get("OPENAI_API_KEY"):
         return "openai:gpt-4o-mini"
     raise RuntimeError("Set GEMINI_API_KEY or OPENAI_API_KEY (or DEEP_MODEL)")
@@ -262,9 +280,10 @@ async def main() -> None:
 
     prompt = (
         f"Research: {TOPIC}\n\n"
-        "Search the web if available, fetch top sources, register citations, "
-        "download and analyze at least one relevant image when possible, "
-        "write reports/research.md with a bibliography, and complete your todos."
+        "Search the web at most twice, then extract_text on the best source "
+        "(prefer https://docs.langchain.com/oss/python/deepagents/overview when relevant). "
+        "register_source for sources you use, write reports/research.md with a bibliography, "
+        "download/analyze an image only if easy, and complete your todos."
     )
     result = await agent.arun(prompt)
     print(result.output.text() or "(no text)")

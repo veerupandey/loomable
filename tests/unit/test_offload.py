@@ -21,6 +21,16 @@ def test_offload_tool_text_writes_file(tmp_path: Path) -> None:
     assert "read_file" in msg
 
 
+def test_offload_visible_via_workspace_store(tmp_path: Path) -> None:
+    from loomable.toolkits.workspace_tools import WorkspaceStore
+
+    store = WorkspaceStore(tmp_path)
+    body = "VISIBLE_" + ("z" * 200)
+    rel, _ = offload_tool_text(tmp_path, "extract_text", body, store=store)
+    assert store.read(rel) == body
+    assert rel in store.glob(".offload/*")
+
+
 def test_offload_hook_transforms_large_result(tmp_path: Path) -> None:
     hook = make_workspace_offload_hook(tmp_path, threshold=100, preview_chars=20)
     big = "y" * 200
@@ -90,3 +100,11 @@ async def test_deep_agent_offloads_large_tool_result(tmp_path: Path) -> None:
     assert big_html in offloads[0].read_text(encoding="utf-8")
     tool_msg = getattr(provider, "last_tool", "")
     assert "offloaded" in str(tool_msg)
+    # Agent can still read the full body via workspace tools
+    from loomable.toolkits.workspace_tools import WorkspaceTools
+
+    ws = WorkspaceTools(root=tmp_path)
+    read = next(t for t in ws.tools() if t.name == "read_file")
+    rel = str(offloads[0].relative_to(tmp_path)).replace("\\", "/")
+    recovered = str((await read.invoke({"path": rel})).content)
+    assert big_html in recovered

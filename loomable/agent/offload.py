@@ -25,16 +25,28 @@ def offload_tool_text(
     content: str,
     *,
     preview_chars: int = DEFAULT_PREVIEW,
+    store: Any | None = None,
 ) -> tuple[str, str]:
-    """Write ``content`` under ``workspace/.offload/`` and return (rel_path, preview_msg)."""
+    """Write ``content`` under ``workspace/.offload/`` and return (rel_path, preview_msg).
+
+    When ``store`` is a :class:`~loomable.toolkits.workspace_tools.WorkspaceStore`,
+    the body is written through the store so ``read_file`` / ``grep`` see it immediately.
+    """
     root = Path(workspace)
-    offload_dir = root / ".offload"
-    offload_dir.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha1(content.encode("utf-8", errors="replace")).hexdigest()[:12]
     safe_tool = "".join(c if c.isalnum() or c in "-_" else "_" for c in (tool_name or "tool"))[:40]
     rel = f".offload/{safe_tool}_{digest}.txt"
-    dest = root / rel
-    dest.write_text(content, encoding="utf-8")
+    if store is not None and hasattr(store, "write"):
+        written = store.write(rel, content)
+        if written is None:
+            # Fall back to raw disk if store rejects the path
+            offload_dir = root / ".offload"
+            offload_dir.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(content, encoding="utf-8")
+    else:
+        offload_dir = root / ".offload"
+        offload_dir.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(content, encoding="utf-8")
     preview = content[:preview_chars]
     if len(content) > preview_chars:
         preview += "\n..."
@@ -52,10 +64,12 @@ def make_workspace_offload_hook(
     threshold: int = DEFAULT_THRESHOLD,
     preview_chars: int = DEFAULT_PREVIEW,
     skip_tools: frozenset[str] | None = None,
+    store: Any | None = None,
 ) -> Callable[[str, ToolCall | None, ToolOutcome], Any]:
     """Return a post-tool hook that offloads oversized string results to disk.
 
     Attach via ``Agent(tool_hooks=[hook])`` — the hook sets ``phase = \"post\"``.
+    Pass ``store=`` (WorkspaceStore) so offloads are visible to WorkspaceTools.
     """
     skip = skip_tools or frozenset(
         {
@@ -89,7 +103,11 @@ def make_workspace_offload_hook(
         if not isinstance(content, str) or len(content) <= threshold:
             return None
         _rel, msg = offload_tool_text(
-            root, tool_name, content, preview_chars=preview_chars
+            root,
+            tool_name,
+            content,
+            preview_chars=preview_chars,
+            store=store,
         )
         meta = dict(outcome.result.metadata or {})
         meta["offloaded"] = True

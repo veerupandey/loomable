@@ -439,7 +439,8 @@ agent = create_research_agent(
 await agent.arun("Research X and write reports/x.md with citations")
 ```
 
-Defaults: `modalities="text+image"`, `use_llm_summarizer=True`, `max_tool_iterations=40`.
+Defaults: `modalities="text+image"`, `use_llm_summarizer=True`, `max_tool_iterations=40`,
+`token_budget=128000` (Agent default 8192 is too low for research tool loops).
 
 See `examples/deep_agent/` (including `03_live_multimodal_research.py`).
 

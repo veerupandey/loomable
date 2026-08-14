@@ -81,6 +81,7 @@ class ImageTools(Toolkit):
             FunctionTool(self._fetch_image, name="fetch_image"),
             FunctionTool(self._analyze_image, name="analyze_image"),
             FunctionTool(self._list_images, name="list_images"),
+            FunctionTool(self._discover_images, name="discover_images"),
         ]
 
     def _resolve_path(self, path: str) -> Path | None:
@@ -212,3 +213,55 @@ class ImageTools(Toolkit):
                 }:
                     entries.append(str(p.relative_to(self._root)).replace("\\", "/"))
         return json.dumps({"dir": dir, "entries": entries}, ensure_ascii=False)
+
+    async def _discover_images(self, url: str, limit: int = 8) -> str:
+        """Fetch a page and return candidate image URLs (for fetch_image follow-up)."""
+        import httpx
+        from urllib.parse import urljoin
+
+        url = (url or "").strip()
+        if not url:
+            return "Error: url is required"
+        limit = max(1, min(int(limit) or 8, 20))
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._timeout, follow_redirects=True
+            ) as client:
+                response = await client.get(url)
+                if response.status_code < 200 or response.status_code >= 300:
+                    return f"Error: HTTP {response.status_code} for URL: {url}"
+                html = response.text
+        except Exception as exc:  # noqa: BLE001
+            return f"Error: Failed to discover images: {exc}"
+
+        # Lightweight scrape — prefer BeautifulSoup when available
+        found: list[str] = []
+        try:
+            from bs4 import BeautifulSoup
+
+            soup = BeautifulSoup(html, "html.parser")
+            for tag in soup.find_all("img"):
+                src = tag.get("src") or tag.get("data-src") or ""
+                if not src or src.startswith("data:"):
+                    continue
+                found.append(urljoin(url, src))
+                if len(found) >= limit:
+                    break
+        except ImportError:
+            for match in re.finditer(
+                r"""(?:src|data-src)\s*=\s*["']([^"']+\.(?:png|jpe?g|gif|webp|svg))["']""",
+                html,
+                flags=re.I,
+            ):
+                found.append(urljoin(url, match.group(1)))
+                if len(found) >= limit:
+                    break
+
+        # De-dupe preserving order
+        uniq: list[str] = []
+        seen: set[str] = set()
+        for u in found:
+            if u not in seen:
+                seen.add(u)
+                uniq.append(u)
+        return json.dumps({"url": url, "images": uniq[:limit]}, ensure_ascii=False)

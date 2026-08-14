@@ -138,7 +138,7 @@ def _resolve_model() -> ModelSpec | str:
             from loomable.providers.gemini import GeminiProvider
 
             return GeminiProvider(
-                model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+                model=os.environ.get("GEMINI_MODEL", "gemini-flash-latest"),
                 api_key=os.environ.get("GEMINI_API_KEY")
                 or os.environ.get("GOOGLE_API_KEY"),
             )
@@ -149,13 +149,18 @@ def _resolve_model() -> ModelSpec | str:
 
 
 async def main() -> None:
+    live = bool(os.environ.get("DEEP_AGENT_LIVE"))
     agent = create_deep_agent(
         _resolve_model(),
         workspace=ROOT,
-        web_search=bool(os.environ.get("DEEP_AGENT_LIVE")),
+        web_search=live,
+        url_fetch=live,
+        citations=live,
+        images=False,
         enable_task_tool=True,
         think_tool=True,
         modalities="text",
+        use_llm_summarizer=False,
         instructions=(
             "Topic: why deep agents need todos + filesystem + subagents. "
             "Write the final answer to reports/brief.md."
