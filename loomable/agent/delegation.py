@@ -152,6 +152,29 @@ async def spawn_specialist(
     instructions: str | None = None,
     tools: list[Any] | None = None,
     modalities: str | None = None,
+    note_store: Any | None = None,
+    memory_tool: bool = False,
+    memory: Any | None = None,
+    knowledge: list[str] | None = None,
+    knowledge_base: Any = None,
+    retrievers: list[Any] | None = None,
+    embedder: Any = None,
+    skills: list[Any] | None = None,
+    tool_hooks: list[Any] | None = None,
+    think_tool: bool = False,
+    require_tools: list[str] | None = None,
+    resilience: Any | None = None,
+    tool_timeout: float | None = None,
+    tool_concurrency: int | None = None,
+    max_tool_iterations: int | None = None,
+    token_budget: int | None = None,
+    max_run_tokens: int | None = None,
+    discovery: bool | None = None,
+    discovery_core_tools: list[str] | None = None,
+    defer_local_tools: bool | None = None,
+    lazy_mcp: bool | None = None,
+    activation_allowlist: list[str] | None = None,
+    activation_denylist: list[str] | None = None,
 ) -> str:
     """Create an ephemeral specialist Agent, run ``task``, and discard it.
 
@@ -162,6 +185,13 @@ async def spawn_specialist(
             role="Cert Auditor",
             task="Review CHG-55219 for pool saturation risk",
         )
+
+    Optional kwargs (skills, tool_hooks/offload, memory, budgets) let deep agents
+    share research infrastructure with specialists. Passing ``discovery=True``
+    (and optionally ``discovery_core_tools`` / ``defer_local_tools`` /
+    ``lazy_mcp`` / ``activation_allowlist`` / ``activation_denylist``) wires
+    progressive capability discovery into the specialist too, so a large
+    shared toolset (research kit, images, MCP) doesn't blow its schema budget.
     """
     from .builder import Agent
 
@@ -171,9 +201,53 @@ async def spawn_specialist(
         "goal": goal or f"Complete tasks as {role}",
         "instructions": instructions or f"You are {role}. Be concise and factual.",
         "tools": tools or [],
+        "think_tool": think_tool,
     }
     if modalities is not None:
         kwargs["modalities"] = modalities
+    if note_store is not None:
+        kwargs["note_store"] = note_store
+        kwargs["memory_tool"] = memory_tool
+    if memory is not None:
+        kwargs["memory"] = memory
+    if knowledge is not None:
+        kwargs["knowledge"] = knowledge
+    if knowledge_base is not None:
+        kwargs["knowledge_base"] = knowledge_base
+    if retrievers is not None:
+        kwargs["retrievers"] = retrievers
+    if embedder is not None:
+        kwargs["embedder"] = embedder
+    if skills is not None:
+        kwargs["skills"] = skills
+    if tool_hooks is not None:
+        kwargs["tool_hooks"] = tool_hooks
+    if require_tools is not None:
+        kwargs["require_tools"] = require_tools
+    if resilience is not None:
+        kwargs["resilience"] = resilience
+    if tool_timeout is not None:
+        kwargs["tool_timeout"] = tool_timeout
+    if tool_concurrency is not None:
+        kwargs["tool_concurrency"] = tool_concurrency
+    if max_tool_iterations is not None:
+        kwargs["max_tool_iterations"] = max_tool_iterations
+    if token_budget is not None:
+        kwargs["token_budget"] = token_budget
+    if max_run_tokens is not None:
+        kwargs["max_run_tokens"] = max_run_tokens
+    if discovery is not None:
+        kwargs["discovery"] = discovery
+    if discovery_core_tools is not None:
+        kwargs["discovery_core_tools"] = discovery_core_tools
+    if defer_local_tools is not None:
+        kwargs["defer_local_tools"] = defer_local_tools
+    if lazy_mcp is not None:
+        kwargs["lazy_mcp"] = lazy_mcp
+    if activation_allowlist is not None:
+        kwargs["activation_allowlist"] = activation_allowlist
+    if activation_denylist is not None:
+        kwargs["activation_denylist"] = activation_denylist
     agent = Agent(**kwargs)
     result = await agent.arun(task)
     return result.output.text()

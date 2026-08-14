@@ -101,4 +101,4 @@ class TestGeminiProvider:
 
     def test_default_model(self):
         p = GeminiProvider(api_key="test")
-        assert p.model == "gemini-2.0-flash"
+        assert p.model == "gemini-flash-latest"

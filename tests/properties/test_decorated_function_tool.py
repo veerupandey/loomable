@@ -12,6 +12,8 @@ functions.
 from __future__ import annotations
 
 import asyncio
+import inspect
+import keyword
 from typing import Any
 
 import pytest
@@ -29,7 +31,9 @@ from loomable.kernel.models import ToolResult
 
 # Strategy: valid Python identifier names for tool name overrides
 # Python identifiers: start with letter/underscore, followed by alnum/underscore
-valid_identifiers = st.from_regex(r"[a-z_][a-z0-9_]{0,29}", fullmatch=True)
+valid_identifiers = st.from_regex(r"[a-z_][a-z0-9_]{0,29}", fullmatch=True).filter(
+    lambda n: n.isidentifier() and not keyword.iskeyword(n)
+)
 
 # Strategy: non-empty description strings
 descriptions = st.text(min_size=1, max_size=100)
@@ -97,7 +101,8 @@ class TestToolNameDescriptionDefaults:
         result = tool(sample_fn)
 
         assert isinstance(result, Tool)
-        assert result.description == docstring.strip()
+        # inspect.getdoc() runs cleandoc (expands tabs, strips).
+        assert result.description == (inspect.getdoc(sample_fn) or "").strip()
 
 
 class TestToolNameDescriptionOverrides:

@@ -14,10 +14,16 @@ Usage::
 """
 
 from loomable.toolkits._base import Toolkit
+from loomable.toolkits.citation_tools import CitationStore, CitationTools
+from loomable.toolkits.code_tools import CodeTools
 from loomable.toolkits.file_tools import FileTools
+from loomable.toolkits.image_tools import ImageTools
 from loomable.toolkits.python_tools import PythonTools
+from loomable.toolkits.shell_tools import ShellTools
 from loomable.toolkits.sql_tools import SQLTools
+from loomable.toolkits.todo_tools import TodoStore, TodoTools
 from loomable.toolkits.web_search import WebSearchTools
+from loomable.toolkits.workspace_tools import WorkspaceStore, WorkspaceTools
 
 # Conditional imports for toolkits with optional dependencies
 try:
@@ -37,11 +43,20 @@ except ImportError:  # pragma: no cover
 
 __all__ = [
     "Toolkit",
+    "CitationTools",
+    "CitationStore",
+    "CodeTools",
     "FileTools",
+    "ImageTools",
     "PDFTools",
     "PPTTools",
     "PythonTools",
+    "ShellTools",
     "SQLTools",
     "URLTools",
     "WebSearchTools",
+    "TodoTools",
+    "TodoStore",
+    "WorkspaceTools",
+    "WorkspaceStore",
 ]

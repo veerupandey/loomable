@@ -21,6 +21,7 @@ Depends on ``loomable.agent`` and ``loomable.content`` plus FastAPI/Pydantic.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from typing import Any
@@ -184,14 +185,63 @@ def _chunk_to_dict(chunk: RunChunk) -> dict[str, Any]:
     }
 
 
-def _register_agent_routes(app: FastAPI, agent: Any, *, prefix: str = "") -> None:
+def _extract_request_api_key(request: Request) -> str | None:
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    if auth:
+        parts = auth.split(None, 1)
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            return parts[1].strip() or None
+    xkey = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
+    if xkey:
+        return xkey.strip() or None
+    return None
+
+
+def _register_agent_routes(
+    app: FastAPI,
+    agent: Any,
+    *,
+    prefix: str = "",
+    api_key: str | None = None,
+) -> None:
     """Register health / run / NDJSON stream / AG-UI SSE routes on ``app``."""
     p = prefix.rstrip("/")
+    expected_key = (api_key or "").strip() or None
+
+    def _auth_or_401(request: Request) -> JSONResponse | None:
+        if expected_key is None:
+            return None
+        provided = _extract_request_api_key(request)
+        if provided is None or provided != expected_key:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "unauthorized"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return None
+
+    def _cancel_agent() -> None:
+        for target in (agent, getattr(agent, "_built", None), getattr(agent, "_agent", None)):
+            if target is None:
+                continue
+            cancel = getattr(target, "cancel", None)
+            if callable(cancel):
+                try:
+                    cancel()
+                except Exception:  # noqa: BLE001
+                    pass
 
     def _apply_session(body: RunRequestModel) -> None:
         sid = body.session_id
         if not sid:
             return
+        # Prefer bind_session so Agent L1/L2 and Case checkpoints stay aligned.
+        if hasattr(agent, "bind_session") and callable(getattr(agent, "bind_session")):
+            try:
+                agent.bind_session(sid)
+                return
+            except Exception:  # noqa: BLE001
+                pass
         if hasattr(agent, "session_id"):
             try:
                 agent.session_id = sid  # type: ignore[attr-defined]
@@ -202,10 +252,17 @@ def _register_agent_routes(app: FastAPI, agent: Any, *, prefix: str = "") -> Non
                 agent._session_id = sid  # type: ignore[attr-defined]
             except Exception:  # noqa: BLE001
                 pass
-        # Cached Case should pick up session for streaming labels
-        case = getattr(agent, "_case", None)
-        if case is not None and hasattr(case, "session_id"):
+        # Case (direct or cached under Agent mode=case) must bind checkpoint thread.
+        case = agent if type(agent).__name__ == "Case" else getattr(agent, "_case", None)
+        if case is not None and hasattr(case, "bind_session"):
+            case.bind_session(sid)
+        elif case is not None and hasattr(case, "session_id"):
             case.session_id = sid
+            if hasattr(case, "_kwargs") and isinstance(case._kwargs, dict):
+                case._kwargs["session_id"] = sid
+                wf = getattr(case, "_workflow", None)
+                if wf is not None:
+                    wf._session_id = sid
 
     async def _invoke_arun(agent_input: AgentInput, body: RunRequestModel) -> RunResult:
         _apply_session(body)
@@ -236,11 +293,17 @@ def _register_agent_routes(app: FastAPI, agent: Any, *, prefix: str = "") -> Non
             yield event
 
     @app.get(f"{p}/health")
-    async def health() -> dict[str, str]:
+    async def health(request: Request) -> Any:
+        denied = _auth_or_401(request)
+        if denied is not None:
+            return denied
         return {"status": "ok"}
 
     @app.post(f"{p}/run")
-    async def run(body: RunRequestModel) -> JSONResponse:
+    async def run(request: Request, body: RunRequestModel) -> JSONResponse:
+        denied = _auth_or_401(request)
+        if denied is not None:
+            return denied
         try:
             agent_input = _request_to_agent_input(body)
         except ValueError as exc:
@@ -255,7 +318,10 @@ def _register_agent_routes(app: FastAPI, agent: Any, *, prefix: str = "") -> Non
         )
 
     @app.post(f"{p}/run/stream")
-    async def run_stream(body: RunRequestModel) -> Any:
+    async def run_stream(request: Request, body: RunRequestModel) -> Any:
+        denied = _auth_or_401(request)
+        if denied is not None:
+            return denied
         try:
             agent_input = _request_to_agent_input(body)
         except ValueError as exc:
@@ -265,19 +331,31 @@ def _register_agent_routes(app: FastAPI, agent: Any, *, prefix: str = "") -> Non
         async def event_stream():
             try:
                 async for chunk in agent.astream(agent_input):
+                    if await request.is_disconnected():
+                        _cancel_agent()
+                        break
                     yield json.dumps(_chunk_to_dict(chunk)) + "\n"
             except UnsupportedModalityError as exc:
                 yield json.dumps({"error": str(exc)}) + "\n"
+            except asyncio.CancelledError:
+                _cancel_agent()
+                raise
             except Exception as exc:  # noqa: BLE001
                 yield json.dumps({"error": str(exc)}) + "\n"
+            finally:
+                if await request.is_disconnected():
+                    _cancel_agent()
 
         return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
     @app.post(f"{p}/run/events")
-    async def run_events(body: RunRequestModel) -> Any:
+    async def run_events(request: Request, body: RunRequestModel) -> Any:
         """AG-UI-compatible Server-Sent Events stream."""
         from loomable.stream import sse_encode
 
+        denied = _auth_or_401(request)
+        if denied is not None:
+            return denied
         try:
             agent_input = _request_to_agent_input(body)
         except ValueError as exc:
@@ -294,6 +372,9 @@ def _register_agent_routes(app: FastAPI, agent: Any, *, prefix: str = "") -> Non
 
             try:
                 async for event in _invoke_astream_events(agent_input, body):
+                    if await request.is_disconnected():
+                        _cancel_agent()
+                        break
                     yield sse_encode(event)
             except UnsupportedModalityError as exc:
                 yield sse_encode(
@@ -303,6 +384,9 @@ def _register_agent_routes(app: FastAPI, agent: Any, *, prefix: str = "") -> Non
                         data={"message": str(exc)},
                     )
                 )
+            except asyncio.CancelledError:
+                _cancel_agent()
+                raise
             except Exception as exc:  # noqa: BLE001
                 yield sse_encode(
                     StreamEvent(
@@ -311,6 +395,9 @@ def _register_agent_routes(app: FastAPI, agent: Any, *, prefix: str = "") -> Non
                         data={"message": str(exc), "error_type": type(exc).__name__},
                     )
                 )
+            finally:
+                if await request.is_disconnected():
+                    _cancel_agent()
 
         return StreamingResponse(
             sse_stream(),
@@ -323,11 +410,20 @@ def _register_agent_routes(app: FastAPI, agent: Any, *, prefix: str = "") -> Non
         )
 
 
-def mount_agent(app: FastAPI, agent: Any, *, prefix: str = "/agent") -> FastAPI:
+def mount_agent(
+    app: FastAPI,
+    agent: Any,
+    *,
+    prefix: str = "/agent",
+    api_key: str | None = None,
+) -> FastAPI:
     """Mount Agent AG-UI routes on an existing FastAPI app.
 
     Routes: ``{prefix}/health``, ``{prefix}/run``, ``{prefix}/run/stream``,
     ``{prefix}/run/events`` (SSE).
+
+    When ``api_key`` is set, require ``Authorization: Bearer <key>`` or
+    ``X-API-Key: <key>`` on all routes (including health).
     """
     # High-level Agent → BuiltAgent when needed for legacy adapter compat
     target = agent
@@ -335,13 +431,19 @@ def mount_agent(app: FastAPI, agent: Any, *, prefix: str = "/agent") -> FastAPI:
         target = agent.build()
     elif hasattr(agent, "_get_built") and not hasattr(agent, "astream_events"):
         target = agent._get_built()
-    _register_agent_routes(app, target, prefix=prefix)
+    _register_agent_routes(app, target, prefix=prefix, api_key=api_key)
     return app
 
 
-def mount_case(app: FastAPI, case: Any, *, prefix: str = "/cases") -> FastAPI:
+def mount_case(
+    app: FastAPI,
+    case: Any,
+    *,
+    prefix: str = "/cases",
+    api_key: str | None = None,
+) -> FastAPI:
     """Mount Case AG-UI SSE routes (same shape as Agent)."""
-    _register_agent_routes(app, case, prefix=prefix)
+    _register_agent_routes(app, case, prefix=prefix, api_key=api_key)
     return app
 
 
@@ -353,9 +455,11 @@ class FastAPIAdapter:
     - ``POST /run``
     - ``POST /run/stream`` (NDJSON)
     - ``POST /run/events`` (``text/event-stream`` AG-UI events)
+
+    Optional ``api_key`` enables Bearer / ``X-API-Key`` auth on all routes.
     """
 
-    def __init__(self, agent: Any) -> None:
+    def __init__(self, agent: Any, *, api_key: str | None = None) -> None:
         # Accept BuiltAgent or high-level Agent
         if hasattr(agent, "astream_events"):
             self._agent = agent
@@ -365,11 +469,12 @@ class FastAPIAdapter:
             self._agent = agent.build()
         else:
             self._agent = agent
+        self._api_key = api_key
 
     def app(self) -> FastAPI:
         """Build and return the FastAPI application exposing the agent."""
         app = FastAPI(title="loomable agent")
-        _register_agent_routes(app, self._agent, prefix="")
+        _register_agent_routes(app, self._agent, prefix="", api_key=self._api_key)
         # Also expose under /agent for enterprise convention
-        _register_agent_routes(app, self._agent, prefix="/agent")
+        _register_agent_routes(app, self._agent, prefix="/agent", api_key=self._api_key)
         return app

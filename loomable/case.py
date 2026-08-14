@@ -278,6 +278,17 @@ async def map_specialists(
     tools: list[Any] | None = None,
     modalities: str | None = None,
     concurrency: int | None = None,
+    note_store: Any | None = None,
+    memory_tool: bool = False,
+    knowledge: list[str] | None = None,
+    knowledge_base: Any = None,
+    retrievers: list[Any] | None = None,
+    embedder: Any = None,
+    max_tool_iterations: int | None = None,
+    token_budget: int | None = None,
+    max_run_tokens: int | None = None,
+    tool_hooks: list[Any] | None = None,
+    skills: list[Any] | None = None,
 ) -> list[str]:
     """Dispatch: spawn one ephemeral specialist per plan step (parallel)."""
     from loomable.agent.delegation import spawn_specialist
@@ -294,6 +305,17 @@ async def map_specialists(
                 instructions=instructions,
                 tools=tools,
                 modalities=modalities,
+                note_store=note_store,
+                memory_tool=memory_tool,
+                knowledge=knowledge,
+                knowledge_base=knowledge_base,
+                retrievers=retrievers,
+                embedder=embedder,
+                max_tool_iterations=max_tool_iterations,
+                token_budget=token_budget,
+                max_run_tokens=max_run_tokens,
+                tool_hooks=tool_hooks,
+                skills=skills,
             )
 
         if sem is None:
@@ -331,17 +353,38 @@ def _default_agent(
     instructions: str,
     tools: list[Any] | None = None,
     modalities: str | None = None,
+    memory: dict[str, Any] | None = None,
+    runtime: dict[str, Any] | None = None,
 ) -> Any:
     from loomable.agent.builder import Agent
+    from loomable.agent.memory_opts import role_scoped_memory
 
-    return Agent(
-        model=model,
-        role=role,
-        goal=goal,
-        instructions=instructions,
-        tools=tools or [],
-        modalities=modalities or "text",
-    )
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "role": role,
+        "goal": goal,
+        "instructions": instructions,
+        "tools": tools or [],
+        "modalities": modalities or "text",
+    }
+    if memory:
+        kwargs.update(role_scoped_memory(memory, role=role.lower().replace(" ", "_")))
+    if runtime:
+        for key in (
+            "max_tool_iterations",
+            "token_budget",
+            "max_run_tokens",
+            "tool_hooks",
+            "skills",
+            "tool_timeout",
+            "tool_concurrency",
+            "resilience",
+            "think_tool",
+            "require_tools",
+        ):
+            if key in runtime and runtime[key] is not None:
+                kwargs[key] = runtime[key]
+    return Agent(**kwargs)
 
 
 def build_case_workflow(
@@ -361,6 +404,10 @@ def build_case_workflow(
     modalities: str | None = None,
     concurrency: int | None = None,
     board: Board | None = None,
+    # Agent-identical memory (applied to default role agents)
+    agent_memory: dict[str, Any] | None = None,
+    # Deep-agent runtime knobs (iterations, offload hooks, skills, budgets)
+    agent_runtime: dict[str, Any] | None = None,
 ) -> Workflow:
     """Build a Workflow: plan → dispatch → synthesize → optional accept loop."""
     if model is None and (planner is None or worker is None):
@@ -368,6 +415,17 @@ def build_case_workflow(
 
     gate = _as_accept(accept)
     mode = _normalize_dispatch(dispatch)
+
+    # WorkItems tools so planners/workers can mutate the live board (not just glue).
+    tools_list = list(tools or [])
+    if board is not None:
+        existing_names = {
+            getattr(t, "name", None) or getattr(t, "__name__", None) for t in tools_list
+        }
+        for t in board_tools(board):
+            tname = getattr(t, "name", None) or getattr(t, "__name__", None)
+            if tname not in existing_names:
+                tools_list.append(t)
 
     if planner is None:
         planner = _default_agent(
@@ -380,15 +438,23 @@ def build_case_workflow(
                 "short imperative strings. No prose, no markdown."
             ),
             modalities=modalities,
+            memory=agent_memory,
+            runtime=agent_runtime,
         )
     if worker is None and mode == "reuse":
         worker = _default_agent(
             model,
             role="Worker",
             goal="Execute one plan step thoroughly",
-            instructions="Complete ONLY the assigned step. Be concrete and concise.",
-            tools=tools,
+            instructions=(
+                "Complete ONLY the assigned step. Be concrete and concise. "
+                "Prefer workspace files for large evidence; use offloaded paths "
+                "with read_file(offset, limit) instead of pasting blobs."
+            ),
+            tools=tools_list,
             modalities=modalities,
+            memory=agent_memory,
+            runtime=agent_runtime,
         )
     if synthesizer is None:
         synthesizer = _default_agent(
@@ -400,6 +466,8 @@ def build_case_workflow(
                 "Preserve facts; do not invent missing evidence."
             ),
             modalities=modalities,
+            memory=agent_memory,
+            runtime=agent_runtime,
         )
 
     async def plan_step(inp: Any, *, context: RunContext | None = None) -> RunResult:
@@ -452,12 +520,25 @@ def build_case_workflow(
         if mode == "spawn":
             if model is None:
                 raise ValueError("dispatch='spawn' requires model=")
+            mem = agent_memory or {}
+            rt = agent_runtime or {}
             texts = await map_specialists(
                 steps,
                 model=model,
-                tools=tools,
+                tools=tools_list,
                 modalities=modalities,
                 concurrency=concurrency,
+                note_store=mem.get("note_store"),
+                memory_tool=bool(mem.get("memory_tool", False)),
+                knowledge=mem.get("knowledge"),
+                knowledge_base=mem.get("knowledge_base"),
+                retrievers=mem.get("retrievers"),
+                embedder=mem.get("embedder"),
+                max_tool_iterations=rt.get("max_tool_iterations"),
+                token_budget=rt.get("token_budget"),
+                max_run_tokens=rt.get("max_run_tokens"),
+                tool_hooks=rt.get("tool_hooks"),
+                skills=rt.get("skills"),
             )
         else:
             async def _work(step: str) -> str:
@@ -484,9 +565,17 @@ def build_case_workflow(
                 texts = list(await asyncio.gather(*[_work(s) for s in steps]))
 
         if board is not None:
-            for it in board.list():
-                if it.title in steps and it.status == "in_progress":
-                    board.update(it.id, status="done")
+            by_title = {it.title: it for it in board.list()}
+            for step, text in zip(steps, texts):
+                it = by_title.get(step)
+                if it is None or it.status != "in_progress":
+                    continue
+                failed = str(text).lstrip().upper().startswith("ERROR")
+                board.update(
+                    it.id,
+                    status="blocked" if failed else "done",
+                    note=(str(text)[:240] if failed else None),
+                )
 
         state_updates: dict[str, Any] = {"map": texts, "plan_steps": steps}
         if board is not None:
@@ -636,7 +725,25 @@ class Case:
         tools: list[Any] | None = None,
         modalities: str | None = None,
         concurrency: int | None = None,
+        # Same memory kwargs as Agent — applied to default planner/worker/synth
+        session_store: Any | None = None,
+        memory_backend: Any | None = None,
+        note_store: Any | None = None,
+        memory_tool: bool = False,
+        memory_window: int = 8,
+        compaction_threshold: int = 16,
+        use_llm_summarizer: bool = False,
+        knowledge: list[str] | None = None,
+        knowledge_base: Any = None,
+        embedder: Any = None,
+        knowledge_top_k: int = 3,
+        retrievers: list[Any] | None = None,
+        user_id: str | None = None,
+        memory: Any | None = None,
+        agent_runtime: dict[str, Any] | None = None,
     ) -> None:
+        from loomable.agent.memory_opts import filter_memory_kwargs
+
         self.goal = goal
         self._model = model
         if board is True:
@@ -645,6 +752,37 @@ class Case:
             self.board = None
         else:
             self.board = board
+
+        agent_memory = filter_memory_kwargs(
+            {
+                "memory": memory,
+                "session_id": session_id,
+                "user_id": user_id,
+                "session_store": session_store,
+                "memory_backend": memory_backend,
+                "note_store": note_store,
+                "memory_tool": memory_tool,
+                "memory_window": memory_window,
+                "compaction_threshold": compaction_threshold,
+                "use_llm_summarizer": use_llm_summarizer,
+                "knowledge": knowledge,
+                "knowledge_base": knowledge_base,
+                "embedder": embedder,
+                "knowledge_top_k": knowledge_top_k,
+                "retrievers": retrievers,
+            }
+        )
+        # If a Memory bundle was provided, expand it into agent_memory for roles.
+        if memory is not None and hasattr(memory, "to_agent_kwargs"):
+            from loomable.memory.compose import is_memory_bundle
+
+            if is_memory_bundle(memory):
+                composed = memory.with_user_id(user_id).to_agent_kwargs()
+                for k, v in composed.items():
+                    agent_memory.setdefault(k, v)
+        # Case session_id is the checkpointer thread; role agents get scoped ids.
+        if session_id is not None:
+            agent_memory["session_id"] = session_id
 
         self._kwargs = dict(
             planner=planner,
@@ -661,17 +799,69 @@ class Case:
             modalities=modalities,
             concurrency=concurrency,
             board=self.board,
+            agent_memory=agent_memory or None,
+            agent_runtime=agent_runtime,
         )
         self._workflow: Workflow | None = None
         self.session_id = session_id or ""
+        from loomable.agent.memory_opts import apply_knowledge_base
+
+        apply_knowledge_base(
+            [planner, worker, synthesizer],
+            knowledge_base=knowledge_base,
+            retrievers=retrievers,
+            embedder=embedder,
+        )
+
+    def bind_session(self, session_id: str | None) -> None:
+        """Bind HTTP/stream session id into Case + compiled Workflow checkpoints.
+
+        FastAPI and ``astream_events(session_id=...)`` must call this so
+        checkpointer thread ids match the client session (not a frozen
+        constructor default / ``\"default\"``).
+        """
+        if not session_id:
+            return
+        self.session_id = session_id
+        self._kwargs["session_id"] = session_id
+        mem = self._kwargs.get("agent_memory")
+        if isinstance(mem, dict):
+            mem = dict(mem)
+            mem["session_id"] = session_id
+            self._kwargs["agent_memory"] = mem
+            # Role agents baked into a cached workflow keep old scoped ids —
+            # invalidate so next as_workflow() rebuilds with new scopes.
+            self._workflow = None
+        elif self._workflow is not None:
+            self._workflow._session_id = session_id
+
+    def bind_checkpointer(self, checkpointer: Any) -> None:
+        """Attach or replace the Case checkpointer (invalidates cached Workflow)."""
+        self._kwargs["checkpointer"] = checkpointer
+        if self._workflow is not None:
+            self._workflow._checkpointer = checkpointer
 
     @classmethod
     def from_agent(cls, agent: Any) -> Case:
-        """Build a Case from ``Agent(mode='case', ...)`` attributes."""
+        """Build a Case from ``Agent(mode='case', ...)`` — copies Agent memory too."""
+        from loomable.agent.memory_opts import memory_kwargs_from_agent
+
         dispatch = getattr(agent, "_dispatch", None) or "reuse"
         max_rounds = getattr(agent, "_max_rounds", None)
         if max_rounds is None:
             max_rounds = max(1, int(getattr(agent, "_max_verify_retries", 1) or 1) + 1)
+        mem = memory_kwargs_from_agent(agent)
+        runtime = {
+            "max_tool_iterations": getattr(agent, "_max_tool_iterations", None) or 40,
+            "token_budget": getattr(agent, "_token_budget", None) or 64_000,
+            "max_run_tokens": getattr(agent, "_max_run_tokens", None),
+            "tool_hooks": getattr(agent, "_tool_hooks", None),
+            "skills": getattr(agent, "_skills", None),
+            "tool_timeout": getattr(agent, "_tool_timeout", None),
+            "tool_concurrency": getattr(agent, "_tool_concurrency", None),
+            "resilience": getattr(agent, "_resilience", None),
+            "think_tool": bool(getattr(agent, "_think_tool", False)),
+        }
         return cls(
             model=getattr(agent, "_model", None),
             goal=str(getattr(agent, "_goal", "") or ""),
@@ -683,13 +873,34 @@ class Case:
             tools=list(getattr(agent, "_tools", None) or []),
             modalities=getattr(agent, "_modalities_raw", None),
             session_id=getattr(agent, "_session_id", None),
+            checkpointer=getattr(agent, "_checkpointer", None),
             name=str(getattr(agent, "_name", None) or "case"),
+            session_store=mem.get("session_store"),
+            memory_backend=mem.get("memory_backend"),
+            note_store=mem.get("note_store"),
+            memory_tool=bool(mem.get("memory_tool", False)),
+            memory_window=int(mem.get("memory_window", 8) or 8),
+            compaction_threshold=int(mem.get("compaction_threshold", 16) or 16),
+            use_llm_summarizer=bool(mem.get("use_llm_summarizer", False)),
+            knowledge=mem.get("knowledge"),
+            embedder=mem.get("embedder"),
+            knowledge_top_k=int(mem.get("knowledge_top_k", 3) or 3),
+            knowledge_base=mem.get("knowledge_base"),
+            retrievers=mem.get("retrievers"),
+            user_id=mem.get("user_id"),
+            memory=getattr(agent, "_memory_bundle", None) or mem.get("memory"),
+            agent_runtime=runtime,
         )
 
     def as_workflow(self) -> Workflow:
         """Compile to a Workflow (nesting, HITL, checkpoints)."""
         if self._workflow is None:
+            # Keep kwargs session in sync with live Case.session_id
+            if self.session_id and not self._kwargs.get("session_id"):
+                self._kwargs["session_id"] = self.session_id
             self._workflow = build_case_workflow(model=self._model, **self._kwargs)
+        elif self.session_id:
+            self._workflow._session_id = self.session_id
         return self._workflow
 
     async def arun(self, task: Any, **kwargs: Any) -> RunResult:
@@ -698,8 +909,14 @@ class Case:
         prompt = text
         if self.goal:
             prompt = f"Goal: {self.goal}\n\nTask: {text}"
+        sid = kwargs.pop("session_id", None)
+        if isinstance(sid, str) and sid:
+            self.bind_session(sid)
+        await self._hydrate_board_from_checkpoint(resume=kwargs.get("resume"))
         wf = self.as_workflow()
         result = await wf.arun(prompt, **kwargs)
+        # Prefer live SharedState board after the run (covers resume + plan writes)
+        self._hydrate_board_from_state(getattr(wf, "state", None))
         meta = dict(result.metadata or {})
         meta.setdefault("case", True)
         meta.setdefault("dispatch", self._kwargs.get("dispatch") or "reuse")
@@ -710,6 +927,50 @@ class Case:
                 ss["board"] = self.board.to_dict()
         result.metadata = meta
         return result
+
+    def _hydrate_board_from_state(self, shared: Any) -> None:
+        if self.board is None or shared is None:
+            return
+        raw = None
+        if hasattr(shared, "get"):
+            raw = shared.get("board")
+        elif isinstance(shared, dict):
+            raw = shared.get("board")
+        if isinstance(raw, dict) and raw.get("items") is not None:
+            restored = Board.from_dict(raw)
+            # Preserve on_change callback on the live board object
+            on_change = getattr(self.board, "_on_change", None)
+            self.board._items = restored._items
+            self.board.set_on_change(on_change)
+
+    async def _hydrate_board_from_checkpoint(self, *, resume: bool | None = None) -> None:
+        if self.board is None:
+            return
+        checkpointer = self._kwargs.get("checkpointer")
+        session_id = self._kwargs.get("session_id") or self.session_id
+        if checkpointer is None or not session_id:
+            return
+        if resume is False:
+            return
+        try:
+            cp = await checkpointer.get(session_id)
+        except Exception:  # noqa: BLE001
+            return
+        if cp is None:
+            return
+        # Restore board from latest checkpoint even when complete=True so a new
+        # Case process can continue / display WorkItems after a finished run.
+        # Workflow resume semantics (skip completed nodes) remain separate.
+        ss = getattr(cp, "session_state", None) or {}
+        shared = ss.get("shared_state") if isinstance(ss, dict) else None
+        board_data = None
+        if isinstance(shared, dict):
+            # snapshot may nest values under keys directly
+            board_data = shared.get("board")
+            if board_data is None and "values" in shared and isinstance(shared["values"], dict):
+                board_data = shared["values"].get("board")
+        if isinstance(board_data, dict):
+            self._hydrate_board_from_state({"board": board_data})
 
     @staticmethod
     def _coerce_task_text(task: Any) -> str:
@@ -744,7 +1005,11 @@ class Case:
     ) -> AsyncIterator[StreamEvent]:
         """AG-UI events: lifecycle + board STATE_* + nested workflow NODE_*."""
         rid = run_id or uuid.uuid4().hex
+        if session_id:
+            self.bind_session(session_id)
         sid = session_id or self.session_id or ""
+        # Hydrate BEFORE first STATE_SNAPSHOT so resume streams don't wipe board.
+        await self._hydrate_board_from_checkpoint(resume=kwargs.get("resume"))
         bus = AsyncStreamBus(run_id=rid, session_id=sid)
         await bus.emit(
             StreamEvent(
@@ -773,11 +1038,12 @@ class Case:
                 prompt = f"Goal: {self.goal}\n\nTask: {text}" if self.goal else text
                 wf = self.as_workflow()
                 async for ev in wf.astream_events(
-                    prompt, session_id=sid, run_id=rid, **kwargs
+                    prompt, session_id=sid or None, run_id=rid, **kwargs
                 ):
                     if ev.type in (RUN_STARTED, RUN_FINISHED, RUN_ERROR):
                         continue
                     await bus.emit(ev)
+                self._hydrate_board_from_state(getattr(wf, "state", None))
                 if self.board is not None:
                     await bus.emit(self.board.snapshot_event(run_id=rid, session_id=sid))
                 await bus.emit(

@@ -133,9 +133,33 @@ def _build_agent_for_test(
     return built, provider
 
 
-def _count_media_content_entries(tool_msg: dict) -> int:
-    """Count non-text content entries in a tool result message (i.e. injected media)."""
-    return sum(1 for entry in tool_msg.get("content", []) if entry.get("type") != "text")
+def _count_media_content_entries(msg: dict) -> int:
+    """Count non-text content entries in a message (injected media parts)."""
+    content = msg.get("content", [])
+    if not isinstance(content, list):
+        return 0
+    return sum(
+        1 for entry in content if isinstance(entry, dict) and entry.get("type") != "text"
+    )
+
+
+def _count_feedback_media(request: ModelRequest) -> int:
+    """Media feedback is a follow-up user message (not attached to role=tool)."""
+    total = 0
+    for msg in request.messages:
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        texts = [
+            str(entry.get("text") or "")
+            for entry in content
+            if isinstance(entry, dict) and entry.get("type") == "text"
+        ]
+        if any("produced media" in text for text in texts):
+            total += _count_media_content_entries(msg)
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -175,17 +199,14 @@ class TestFeedbackInjectionRespectsCapabilities:
         assert len(provider._requests) >= 2
         second_request = provider._requests[1]
 
-        # Find the tool result message
         tool_msgs = [m for m in second_request.messages if m.get("role") == "tool"]
         assert len(tool_msgs) == 1
 
-        tool_msg = tool_msgs[0]
-        # Should have text content + at least one injected media entry
-        media_entries = _count_media_content_entries(tool_msg)
+        media_entries = _count_feedback_media(second_request)
         assert media_entries >= 1, (
             f"Expected media injection for modality={media_modality} "
             f"with capabilities={capabilities_input} and feedback_media=True, "
-            f"but found {media_entries} media entries in tool message"
+            f"but found {media_entries} media entries in feedback user message"
         )
 
     @settings(max_examples=100, deadline=None)
@@ -215,12 +236,10 @@ class TestFeedbackInjectionRespectsCapabilities:
         tool_msgs = [m for m in second_request.messages if m.get("role") == "tool"]
         assert len(tool_msgs) == 1
 
-        tool_msg = tool_msgs[0]
-        # Should only have text content, no injected media
-        media_entries = _count_media_content_entries(tool_msg)
+        media_entries = _count_feedback_media(second_request)
         assert media_entries == 0, (
             f"Expected NO media injection when feedback_media=False, "
-            f"but found {media_entries} media entries in tool message"
+            f"but found {media_entries} media entries in feedback user message"
         )
 
         # But media should still appear on RunResult properties
@@ -262,13 +281,11 @@ class TestFeedbackInjectionRespectsCapabilities:
         tool_msgs = [m for m in second_request.messages if m.get("role") == "tool"]
         assert len(tool_msgs) == 1
 
-        tool_msg = tool_msgs[0]
-        # Should only have text content, no injected media
-        media_entries = _count_media_content_entries(tool_msg)
+        media_entries = _count_feedback_media(second_request)
         assert media_entries == 0, (
             f"Expected NO media injection for modality={media_modality} "
             f"NOT in capabilities={capabilities_input}, "
-            f"but found {media_entries} media entries in tool message"
+            f"but found {media_entries} media entries in feedback user message"
         )
 
         # But media should still appear on RunResult properties
@@ -310,8 +327,7 @@ class TestFeedbackInjectionRespectsCapabilities:
         tool_msgs = [m for m in second_request.messages if m.get("role") == "tool"]
         assert len(tool_msgs) == 1
 
-        tool_msg = tool_msgs[0]
-        media_entries = _count_media_content_entries(tool_msg)
+        media_entries = _count_feedback_media(second_request)
 
         if should_inject:
             assert media_entries >= 1, (

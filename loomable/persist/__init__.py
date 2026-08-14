@@ -10,6 +10,7 @@ from .checkpoint import (
     SQLiteCheckpointer,
 )
 from .listener import CheckpointListener
+from .postgres import PostgresCheckpointer
 
 __all__ = [
     "Checkpoint",
@@ -20,4 +21,6 @@ __all__ = [
     "JsonFileCheckpointer",
     "PendingAction",
     "SQLiteCheckpointer",
+    "PostgresCheckpointer",
 ]
+

@@ -8,22 +8,28 @@ Tests cover:
 
 import pytest
 
-from loomable.kernel.long_term import LongTermStore
+from loomable.kernel.long_term import InMemoryVectorBackend, LongTermStore
+from loomable.providers.vector_store import open_vector_store
 from loomable.kernel.memory import MemoryManager
 from loomable.kernel.models import StructuredSummary, Turn
+
+
+def _mm() -> MemoryManager:
+    """MemoryManager with in-memory L3 (unit tests; product default is Alibaba zvec)."""
+    return MemoryManager(long_term_store=open_vector_store(engine="memory"))
 
 
 class TestMemoryManagerL1:
     """Tests for L1 (raw recent turns) tier."""
 
     def test_record_turn_appends_to_l1(self) -> None:
-        mm = MemoryManager()
+        mm = _mm()
         turn = Turn(role="user", content="hello", tokens=5, step=1)
         mm.record_turn(turn)
         assert mm.l1 == [turn]
 
     def test_record_multiple_turns_preserves_order(self) -> None:
-        mm = MemoryManager()
+        mm = _mm()
         t1 = Turn(role="user", content="hello", tokens=5, step=1)
         t2 = Turn(role="assistant", content="hi", tokens=3, step=2)
         t3 = Turn(role="user", content="how are you?", tokens=8, step=3)
@@ -33,7 +39,7 @@ class TestMemoryManagerL1:
         assert mm.l1 == [t1, t2, t3]
 
     def test_l1_starts_empty(self) -> None:
-        mm = MemoryManager()
+        mm = _mm()
         assert mm.l1 == []
 
 
@@ -41,7 +47,7 @@ class TestMemoryManagerL2:
     """Tests for L2 (compressed summaries/entities) tier."""
 
     def test_add_summary_appends_to_l2(self) -> None:
-        mm = MemoryManager()
+        mm = _mm()
         summary = StructuredSummary(
             covers_steps=range(1, 6),
             objectives=["complete task"],
@@ -53,7 +59,7 @@ class TestMemoryManagerL2:
         assert mm.l2 == [summary]
 
     def test_add_multiple_summaries_preserves_order(self) -> None:
-        mm = MemoryManager()
+        mm = _mm()
         s1 = StructuredSummary(
             covers_steps=range(1, 6),
             objectives=["task 1"],
@@ -73,7 +79,7 @@ class TestMemoryManagerL2:
         assert mm.l2 == [s1, s2]
 
     def test_l2_starts_empty(self) -> None:
-        mm = MemoryManager()
+        mm = _mm()
         assert mm.l2 == []
 
 
@@ -81,12 +87,12 @@ class TestMemoryManagerL3:
     """Tests for L3 (vector episodic memory) tier."""
 
     async def test_recall_returns_empty_when_no_items_indexed(self) -> None:
-        mm = MemoryManager()
+        mm = _mm()
         results = await mm.recall([1.0, 0.0, 0.0], k=5)
         assert results == []
 
     async def test_recall_returns_similarity_ranked_items(self) -> None:
-        mm = MemoryManager()
+        mm = _mm()
         # Index some items directly into L3
         await mm.l3.index("item1", [1.0, 0.0, 0.0], {"text": "first"})
         await mm.l3.index("item2", [0.0, 1.0, 0.0], {"text": "second"})
@@ -102,7 +108,7 @@ class TestMemoryManagerL3:
         assert results[2]["id"] == "item2"
 
     async def test_recall_respects_k_limit(self) -> None:
-        mm = MemoryManager()
+        mm = _mm()
         await mm.l3.index("a", [1.0, 0.0], {"text": "a"})
         await mm.l3.index("b", [0.9, 0.1], {"text": "b"})
         await mm.l3.index("c", [0.0, 1.0], {"text": "c"})
@@ -111,7 +117,7 @@ class TestMemoryManagerL3:
         assert len(results) == 2
 
     async def test_recall_results_contain_score_and_metadata(self) -> None:
-        mm = MemoryManager()
+        mm = _mm()
         await mm.l3.index("ep1", [1.0, 0.0], {"topic": "memory", "step": 5})
 
         results = await mm.recall([1.0, 0.0], k=1)
@@ -125,11 +131,24 @@ class TestMemoryManagerL3:
 class TestMemoryManagerInit:
     """Tests for MemoryManager initialization."""
 
-    def test_default_long_term_store_created(self) -> None:
+    def test_default_long_term_store_is_alibaba_zvec(self) -> None:
         mm = MemoryManager()
         assert isinstance(mm.l3, LongTermStore)
+        assert mm.l3.backend_name == "zvec"
 
     def test_custom_long_term_store_used(self) -> None:
-        custom_store = LongTermStore(backend_name="custom")
+        custom_store = LongTermStore(
+            backend=InMemoryVectorBackend(), backend_name="custom"
+        )
         mm = MemoryManager(long_term_store=custom_store)
         assert mm.l3 is custom_store
+
+    @pytest.mark.asyncio
+    async def test_two_default_stores_do_not_deadlock_on_zvec_lock(self) -> None:
+        pytest.importorskip("zvec")
+        first = LongTermStore()
+        await first.index("note-1", [1.0, 0.0, 0.0], {"topic": "lock"})
+        second = LongTermStore()
+        hits = await second.query([1.0, 0.0, 0.0], k=1)
+        assert hits
+        assert hits[0]["id"] == "note-1"

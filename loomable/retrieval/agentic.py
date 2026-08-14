@@ -1,0 +1,335 @@
+"""Agentic retriever — pluggable rewrite / route / base / rerank / compress.
+
+``AgenticRetriever`` / ``CompositeRetriever`` are ready-to-ship
+:class:`~loomable.kernel.contracts.Retriever` tools. Pass them to
+``Agent(retrievers=[...])``; tool names are normalized to ``search_*``.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Sequence
+
+from loomable.kernel.contracts import Retriever
+from loomable.retrieval.corpus import Corpus
+from loomable.retrieval.naming import (
+    DEFAULT_SEARCH_DOCS,
+    DEFAULT_SEARCH_KNOWLEDGE,
+    ensure_search_tool_name,
+)
+from loomable.retrieval.rerank import resolve_compressor, resolve_reranker
+from loomable.retrieval.rewrite import resolve_rewriter
+from loomable.retrieval.route import (
+    match_file_sources,
+    resolve_corpus_router,
+    resolve_mode_router,
+)
+
+__all__ = ["AgenticRetriever", "CompositeRetriever", "build_agentic_retriever"]
+
+
+def _merge_hits(groups: Sequence[Sequence[dict[str, Any]]], *, k: int) -> list[dict[str, Any]]:
+    """RRF-merge hit lists from multiple query rewrites / corpora."""
+    scores: dict[str, float] = {}
+    payloads: dict[str, dict[str, Any]] = {}
+    for hits in groups:
+        for rank, hit in enumerate(hits):
+            key = str(hit.get("id") or hit.get("content"))
+            scores[key] = scores.get(key, 0.0) + 1.0 / (60 + rank)
+            payloads.setdefault(key, hit)
+    ordered = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    out: list[dict[str, Any]] = []
+    for key, score in ordered[: max(1, int(k))]:
+        row = dict(payloads[key])
+        row["score"] = score
+        out.append(row)
+    return out
+
+
+class AgenticRetriever(Retriever):
+    """Single-corpus agentic search tool (hybrid RRF + optional MMR by default).
+
+    Pipeline::
+
+        query → rewrite → mode route (chunks|file) → base retrieve → rerank → compress
+
+    Ship to an agent::
+
+        agent = Agent(model=..., retrievers=[AgenticRetriever(corpus)])
+        # tool name defaults to search_<corpus.name> e.g. search_docs
+    """
+
+    def __init__(
+        self,
+        corpus: Corpus,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        mode: str | Any = "auto",
+        rewrite: str | Any | None = "off",
+        rerank: str | bool | Any | None = "mmr",
+        compress: str | bool | Any | None = "off",
+        llm: Any | None = None,
+        fetch_k: int | None = None,
+    ) -> None:
+        self.corpus = corpus
+        # Agent tool name (search_*); corpus.name stays the collection id.
+        self.name = ensure_search_tool_name(
+            name, default=ensure_search_tool_name(corpus.name)
+        )
+        self.description = (
+            (description if description is not None else "")
+            or (corpus.description or "").strip()
+            or (
+                f"Search the '{corpus.name}' knowledge base for relevant documents "
+                "and cite them when answering."
+            )
+        )
+        self.rewriter = resolve_rewriter(rewrite, llm=llm)
+        self.mode_router = resolve_mode_router(mode, llm=llm)
+        self.reranker = resolve_reranker(rerank, llm=llm)
+        self.compressor = resolve_compressor(compress, llm=llm)
+        self.fetch_k = fetch_k
+        self.llm = llm
+
+    async def _retrieve_chunks(
+        self, query: str, k: int, filters: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        retrieve = self.corpus.retriever.retrieve
+        try:
+            return await retrieve(query, k, filters=filters)
+        except TypeError:
+            return await retrieve(query, k)
+
+    async def _retrieve_file(self, query: str, k: int) -> list[dict[str, Any]]:
+        sources = list(self.corpus.documents_by_source().keys())
+        matched = match_file_sources(query, sources)
+        if not matched:
+            # Fall back to chunks if no filename cue matched.
+            return await self._retrieve_chunks(query, k)
+        chunks = self.corpus.chunks_for_sources(matched)
+        if not chunks:
+            # Return whole documents as single hits
+            docs = self.corpus.documents_by_source()
+            out: list[dict[str, Any]] = []
+            for src in matched:
+                doc = docs.get(src)
+                if doc is None:
+                    continue
+                out.append(
+                    {
+                        "id": doc.id,
+                        "content": doc.text[:12_000],
+                        "score": 1.0,
+                        "source": doc.source or doc.id,
+                        "path": doc.source or doc.id,
+                        "retrieval_mode": "file",
+                        "kind": "document",
+                        "name": doc.id,
+                    }
+                )
+            return out[: max(1, int(k))]
+        # Prefer lexical over matched file chunks for ranking within file
+        from loomable.retrieval.retrievers import LexicalRetriever
+
+        lex = LexicalRetriever(f"{self.name}__file", chunks)
+        hits = await lex.retrieve(query, k)
+        for h in hits:
+            h["retrieval_mode"] = "file"
+        if hits:
+            return hits
+        return [c.as_result(score=1.0) | {"retrieval_mode": "file"} for c in chunks[:k]]
+
+    async def retrieve(
+        self,
+        query: str,
+        k: int,
+        filters: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        k = max(1, int(k))
+        fetch = int(self.fetch_k) if self.fetch_k else max(k * 4, k)
+        if filters:
+            fetch = max(fetch * 3, k * 8)
+        queries = await self.rewriter.rewrite(query)
+        if not queries:
+            queries = [query]
+        mode = await self.mode_router.choose_mode(query)
+
+        groups: list[list[dict[str, Any]]] = []
+        for q in queries:
+            if mode == "file":
+                hits = await self._retrieve_file(q, fetch)
+            else:
+                hits = await self._retrieve_chunks(q, fetch, filters=filters)
+            for h in hits:
+                h.setdefault("retrieval_mode", mode)
+                h.setdefault("corpus", self.corpus.name)
+            groups.append(hits)
+
+        merged = _merge_hits(groups, k=fetch) if len(groups) > 1 else (groups[0][:fetch] if groups else [])
+        if filters:
+            from loomable.retrieval.metadata import matches_filters
+
+            merged = [h for h in merged if matches_filters(h, filters)]
+        ranked = await self.reranker.rerank(query, merged, top_n=k)
+        compressed = await self.compressor.compress(query, ranked)
+        out: list[dict[str, Any]] = []
+        for hit in compressed[:k]:
+            row = dict(hit)
+            row.setdefault("content", row.get("text") or "")
+            row.setdefault("corpus", self.corpus.name)
+            row.setdefault("retrieval_mode", mode)
+            out.append(row)
+        return out
+
+
+class CompositeRetriever(Retriever):
+    """Multi-corpus search tool (pluggable :class:`CorpusRouter`).
+
+    Agent tool name defaults to ``search_knowledge``. Children are keyed by
+    ``corpus.name`` for routing, independent of each child's tool name.
+    """
+
+    def __init__(
+        self,
+        corpora: Sequence[Corpus | AgenticRetriever],
+        *,
+        name: str = DEFAULT_SEARCH_KNOWLEDGE,
+        description: str | None = None,
+        corpus_router: str | Any = "all",
+        llm: Any | None = None,
+        # Defaults applied when wrapping bare Corpus objects
+        mode: str | Any = "auto",
+        rewrite: str | Any | None = "off",
+        rerank: str | bool | Any | None = "mmr",
+        compress: str | bool | Any | None = "off",
+    ) -> None:
+        self.name = ensure_search_tool_name(name, default=DEFAULT_SEARCH_KNOWLEDGE)
+        self.description = (description or "").strip() or (
+            "Search across configured knowledge corpora and return the best matching passages."
+        )
+        self.llm = llm
+        self.router = resolve_corpus_router(corpus_router, llm=llm)
+        self._children: dict[str, AgenticRetriever] = {}
+        for item in corpora:
+            if isinstance(item, AgenticRetriever):
+                self._children[item.corpus.name] = item
+            elif isinstance(item, Corpus):
+                self._children[item.name] = AgenticRetriever(
+                    item,
+                    mode=mode,
+                    rewrite=rewrite,
+                    rerank=rerank,
+                    compress=compress,
+                    llm=llm,
+                )
+            else:
+                raise TypeError("corpora must be Corpus or AgenticRetriever instances")
+
+    def infos(self) -> list[dict[str, str]]:
+        return [c.corpus.info() for c in self._children.values()]
+
+    async def retrieve(
+        self,
+        query: str,
+        k: int,
+        filters: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        k = max(1, int(k))
+        chosen = await self.router.choose_corpora(query, self.infos())
+        if not chosen:
+            chosen = list(self._children.keys())[:1]
+        per = max(k, (k + len(chosen) - 1) // max(1, len(chosen)))
+        groups: list[list[dict[str, Any]]] = []
+        for name in chosen:
+            child = self._children.get(name)
+            if child is None:
+                continue
+            try:
+                hits = await child.retrieve(query, per, filters=filters)
+            except TypeError:
+                hits = await child.retrieve(query, per)
+            groups.append(hits)
+        return _merge_hits(groups, k=k)
+
+
+async def build_agentic_retriever(
+    sources: Sequence[Any] | Corpus | Sequence[Corpus],
+    *,
+    name: str = DEFAULT_SEARCH_DOCS,
+    description: str = "",
+    # ingestion
+    strategy: Any = "auto",
+    embedder: Any | None = None,
+    store: Any | None = None,
+    backend: Any | None = None,
+    persist_path: Any | None = None,
+    base_mode: str = "hybrid",
+    vector_weight: float = 0.7,
+    metadata: dict | None = None,
+    # agentic stages (all pluggable)
+    mode: str | Any = "auto",
+    rewrite: str | Any | None = "off",
+    rerank: str | bool | Any | None = "mmr",
+    compress: str | bool | Any | None = "off",
+    corpus_router: str | Any = "all",
+    llm: Any | None = None,
+) -> Retriever:
+    """Build a shippable search :class:`~loomable.kernel.contracts.Retriever`.
+
+    ``sources`` may be raw ingest inputs, a single :class:`Corpus`, or a list
+    of corpora for multi-corpus routing. The returned object's ``.name`` is the
+    agent tool name (``search_*``).
+    """
+    from loomable.retrieval.corpus import ingest
+
+    tool_name = ensure_search_tool_name(name, default=DEFAULT_SEARCH_DOCS)
+    # Corpus collection id: strip search_ prefix so routing keys stay short.
+    corpus_id = name
+    if corpus_id.lower().startswith("search_"):
+        corpus_id = corpus_id[len("search_") :] or "docs"
+
+    # Multi-corpus: list of Corpus
+    if (
+        isinstance(sources, (list, tuple))
+        and sources
+        and all(isinstance(s, Corpus) for s in sources)
+    ):
+        return CompositeRetriever(
+            list(sources),  # type: ignore[arg-type]
+            name=tool_name,
+            description=description or None,
+            corpus_router=corpus_router,
+            llm=llm,
+            mode=mode,
+            rewrite=rewrite,
+            rerank=rerank,
+            compress=compress,
+        )
+
+    if isinstance(sources, Corpus):
+        corpus = sources
+    else:
+        corpus = await ingest(
+            sources,  # type: ignore[arg-type]
+            name=corpus_id,
+            description=description,
+            strategy=strategy,
+            embedder=embedder,
+            store=store,
+            backend=backend,
+            persist_path=persist_path,
+            base_mode=base_mode,
+            vector_weight=vector_weight,
+            metadata=metadata,
+        )
+
+    return AgenticRetriever(
+        corpus,
+        name=tool_name,
+        description=description or None,
+        mode=mode,
+        rewrite=rewrite,
+        rerank=rerank,
+        compress=compress,
+        llm=llm,
+    )

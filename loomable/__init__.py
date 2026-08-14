@@ -12,7 +12,7 @@ Progressive disclosure:
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.2.0b0"
 
 from loomable.agent import (
     Agent,
@@ -20,9 +20,22 @@ from loomable.agent import (
     ContextPolicy,
     RunResult,
     Team,
+    create_deep_agent,
+    create_research_agent,
     spawn_specialist,
     tool,
 )
+from loomable.memory import (
+    ConversationMemory,
+    KnowledgeMemory,
+    Memory,
+    MemoryScope,
+    UserMemory,
+    WorkingMemory,
+    open_session_store,
+)
+from loomable.providers.vector_store import open_vector_store
+from loomable.skills import list_bundled_skills, resolve_skills
 from loomable.case import (
     Board,
     Case,
@@ -49,6 +62,7 @@ from loomable.flow import (
 from loomable.persist import (
     InMemoryCheckpointer,
     JsonFileCheckpointer,
+    PostgresCheckpointer,
     SQLiteCheckpointer,
 )
 
@@ -69,6 +83,18 @@ __all__ = [
     "RunResult",
     "ContextPolicy",
     "spawn_specialist",
+    "create_deep_agent",
+    "create_research_agent",
+    "resolve_skills",
+    "list_bundled_skills",
+    "Memory",
+    "MemoryScope",
+    "ConversationMemory",
+    "UserMemory",
+    "KnowledgeMemory",
+    "WorkingMemory",
+    "open_session_store",
+    "open_vector_store",
     "FlowPaused",
     "build_case_workflow",
     "map_specialists",
@@ -82,5 +108,6 @@ __all__ = [
     "JsonFileCheckpointer",
     "SQLiteCheckpointer",
     "InMemoryCheckpointer",
+    "PostgresCheckpointer",
     "Flow",
 ]

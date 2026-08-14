@@ -22,6 +22,7 @@ Workflows, and Cases with SharedState, HITL, checkpoints, and AG-UI SSE.
 - [Flow Engine](#flow-engine)
 - [Knowledge / RAG](#knowledge--rag)
 - [Production Hardening](#production-hardening)
+- [Retrieval](#retrieval-docs-code-mixed-corpora)
 - [MCP Integration](#mcp-integration)
 - [Serving](#serving)
 - [Checkpointing](#checkpointing)
@@ -312,7 +313,8 @@ agent = Agent(
     tools=[...],                        # list of @tool-decorated functions
     subagents=[...],                    # list of Agent instances for delegation
     session_id="conv-1",                # enables multi-turn memory
-    user_id="alice",                    # scopes long-term memory per user
+    user_id="alice",                    # scopes UserMemory notes when using Memory.compose
+    memory=None,                        # Memory.compose(conversation=..., user=...)
     debug=True,                         # prints trace to stderr
 )
 ```
@@ -407,6 +409,71 @@ result.tool_activity       # tool outcomes from this run
 result.metadata            # {"stop_reason": "final", ...}
 result.trace               # list of Event objects (when debug=True)
 ```
+
+---
+
+## Deep Agent
+
+Loomable-native long-horizon harness. **One API:** `create_deep_agent`.
+Specialize with skills — research any topic via the bundled `research` skill:
+
+```python
+from loomable import create_deep_agent
+
+agent = create_deep_agent(
+    model="openai:gpt-4o-mini",
+    profile="research",  # = skills=["research"] + report/citation gates
+    workspace="./.deep_workspace",
+    knowledge_base=store,  # same Agent kwarg — vector DB → search_* tools
+    # discovery_core="research" (default, correctness-first)
+    # discovery_core="research-slim"  # smaller schema budget (≥50% target)
+)
+
+```python
+# Deep code — index a repo (Alibaba zvec on disk by default) + coding skill + sandbox
+# Swap store via open_vector_store(postgres_url=...) or backend=PgVectorBackend(...)
+agent = create_deep_agent(
+    model,
+    profile="code",
+    repo="./my-app",
+    # or code_index=await CodeIndex.build("./my-app", embedder=OpenAIEmbedder())
+)
+```
+
+await agent.arun("Research any topic; write reports/brief.md")
+```
+
+`create_research_agent(...)` is a **deprecated** alias for `profile="research"`
+(emits `DeprecationWarning`; prefer `create_deep_agent`).
+
+Pillars:
+
+1. **Planning** — `TodoTools`
+2. **Workspace FS** — sliced reads, `delete_file`, token-aware offload (**local only** in beta)
+3. **Subagents** — `task` / `task_batch` + named `specialists=` (inherit `discovery=True`)
+4. **Skills** — `skills=["research"]` or any catalog / skill dir (SkillLoader accepts both)
+5. **Discovery** — deep agents enable `discovery=True` with a **schema budget**:
+   core tools stay advertised; the rest (images, PDF, code, MCP, …) use
+   `search_tools` / `search_mcp` / `activate_tool`. Skills are **metadata-first**
+   (`load_skill`). Profiles: `discovery_core="research"` (default) or
+   `"research-slim"` (experimental slim allowlist); see `docs/COMPETITIVE.md`
+   and `docs/STABILITY.md`.
+6. **Gates** — research profile requires `reports/` + `register_source` + accept verifier
+7. **Sandbox / shell** — `code_exec=True` / `shell=True` attach Python/Shell tools on
+   `loomable.sandbox` (subprocess default; optional Docker). Browser via MCP +
+   bundled skill `browser` (Lightpanda), not a built-in CDP client.
+
+### Cancel
+
+```python
+built = agent.build()
+# During an in-flight arun / astream_events:
+built.cancel()   # or agent.cancel() — cooperative at tool-loop boundaries
+```
+
+SSE / NDJSON client disconnect on `mount_*` also calls cancel.
+
+See `examples/deep_agent/` and `loomable/skills/research/SKILL.md`.
 
 ---
 
@@ -587,98 +654,237 @@ All support `complete()` and `stream()`.
 
 ## Memory
 
-Memory is automatic when you set `session_id`. No configuration needed for the common case.
+Compose memory layers and pass **one object** to the Agent:
 
-### Conversation Memory (short-term)
+```python
+from loomable import Agent, Memory, ConversationMemory, UserMemory, open_session_store
+from loomable.agent import NoteStore
+from loomable.kernel.long_term import LongTermStore  # default = Alibaba zvec
+from loomable.providers import OpenAIEmbedder
+
+# L3 default: Alibaba zvec at .loomable/memory_zvec  (pip install loomable[zvec])
+notes = NoteStore(long_term=LongTermStore(), embedder=OpenAIEmbedder())
+
+memory = Memory.compose(
+    conversation=ConversationMemory(
+        store=open_session_store("postgres", url=DSN, user_id="alice"),
+        window=8,
+        compaction_threshold=16,
+    ),
+    user=UserMemory(
+        note_store=notes,
+        memory_tool=True,
+        auto_extract=True,
+    ),
+)
+
+agent = Agent(
+    model="openai:gpt-4o-mini",
+    memory=memory,
+    session_id="conv-1",
+    user_id="alice",
+    scopes={"claim_id": "CLM-4421"},  # any extra keys: policy_id, case_id, …
+)
+```
+
+| Layer | Class | What it stores |
+|-------|--------|----------------|
+| Conversation | `ConversationMemory` (`short=`) | L1 turns + L2 summaries for `session_id` |
+| User | `UserMemory` (`long=`) | Cross-session facts via `NoteStore` (scoped) |
+| Knowledge | `KnowledgeMemory` | RAG docs into the prompt |
+| Working | `WorkingMemory` | Flow blackboard (`TieredMemoryStore`) — not Agent chat |
+
+### Scopes (user_id, claim_id, …)
+
+Long-term notes are isolated by a :class:`~loomable.memory.MemoryScope` — any
+key/value map, not only `user_id`:
+
+```python
+from loomable import MemoryScope
+
+# Same shape:
+scopes={"user_id": "alice", "claim_id": "CLM-4421", "lob": "auto"}
+# or
+MemoryScope.of(user_id="alice", claim_id="CLM-4421")
+```
+
+- Notes are prefixed `claim_id=CLM-4421|user_id=alice:…` and tagged `scope:key=value`.
+- Recall requires **all** scope tags — claim A never sees claim B for the same user.
+- For **conversation** isolation per claim, put it in `session_id`  
+  (e.g. `session_id=f"claim:{claim_id}"`) and/or Postgres `user_id=` tenant  
+  (`scope.tenant_key()`).
+
+Legacy kwargs (`session_store=`, `note_store=`, `memory_backend=`) still work and
+**override** the matching compose layer when both are set.
+
+`user_id` + `scopes` are applied automatically when using `Memory.compose` or when
+you pass a bare `note_store=` with `user_id`/`scopes`.
+
+### How to think about it (perspectives)
+
+1. **Same chat, same process** — only `session_id` (default in-process SQLite).
+2. **Durable chat** — `ConversationMemory(store=open_session_store(...))` + `resume=True` on reload.
+3. **User remembers across chats** — `UserMemory` + `user_id` (+ optional `auto_extract`).
+4. **Postgres chat + zvec notes** — compose both layers; backends stay independent.
+5. **Case / Workflow resume** — `checkpointer` is separate from Agent memory.
+
+`resume=True` means “this session row must already exist.” First turn: omit it. Later Agents: pass `resume=True`.
+
+### Same kwargs on Team / Case / Agent-in-Flow
+
+| Surface | Conversation L1/L2 | Long-term L3 | Notes |
+|---------|--------------------|--------------|-------|
+| **Agent** | `memory=` compose or `session_store` | `UserMemory` / `note_store` | Canonical API |
+| **Team** | Same kwargs → **coordinator** | Same → coordinator | Members keep their own memory |
+| **Case** | Same → role-scoped sessions | Shared notes | `from_agent` copies memory |
+| **Flow step** | Agent’s own memory | Agent’s own notes | `Flow(memory=True)` is TieredMemory blackboard |
+| **mount_agent** | `bind_session` reloads L1/L2 | unchanged | |
+
+### Minimal chat (same process)
 
 ```python
 agent = Agent(model="openai:gpt-4o-mini", session_id="conv-1")
-agent.run("My name is Alice")
-agent.run("What's my name?")  # → "Alice"
+await agent.arun("My name is Alice")
+await agent.arun("What's my name?")  # Alice
 ```
 
-### Memory Configuration
+### Conversation store (L1/L2) — including Postgres
+
+```python
+from loomable.memory import open_session_store
+
+store = open_session_store("sqlite", path="sessions.db")
+# store = open_session_store("file", path="./.sessions")
+# store = open_session_store("postgres", url=DSN, user_id="alice")
+# store = open_session_store("memory")
+
+agent = Agent(model=..., session_id="conv-1", session_store=store)
+await agent.arun("I prefer dark mode")
+
+agent2 = Agent(model=..., session_id="conv-1", session_store=store, resume=True)
+```
+
+Or pass a KV backend (whole session saved under `session:{id}`):
 
 ```python
 agent = Agent(
-    model="openai:gpt-4o-mini",
+    model=...,
     session_id="conv-1",
-    use_memory=True,               # default True when session_id is set
-    memory_window=8,               # last N turns replayed verbatim
-    compaction_threshold=16,       # summarize when turns exceed this
-    use_llm_summarizer=True,       # model-based summarization
+    memory_backend=PostgresMemoryBackend(DSN, user_id="alice"),
 )
 ```
 
-### Memory Tiers
+### Long-term (L3): Alibaba zvec by default; FAISS / Postgres optional
 
-| Tier | What | Scope | Trigger |
-|------|------|-------|---------|
-| L1 (turns) | Raw conversation messages | Per session | Automatic |
-| L2 (summaries) | Compressed older history | Per session | Auto-compaction at threshold |
-| L3 (episodic) | Vector-indexed long-term facts | Cross-session | NoteStore / memory_tool |
-
-### Pinned Facts
-
-```python
-built = agent.build()
-built.pin_fact("API key: sk-abc123")  # never summarized away
-```
-
-### Cross-Session Notes (long-term memory)
+**Default:** [Alibaba Zvec](https://github.com/alibaba/zvec) on disk at
+``.loomable/memory_zvec`` (`pip install loomable[zvec]`).
+`LongTermStore()` and `open_vector_store()` both use that default.
+Pass FAISS, Postgres, or `engine="memory"` when you want something else.
 
 ```python
 from loomable.agent import NoteStore
-from loomable.kernel import LongTermStore
-from loomable.providers import AzureOpenAIEmbedder
-
-store = NoteStore(
-    long_term=LongTermStore(),
-    embedder=AzureOpenAIEmbedder(),
+from loomable.kernel.long_term import LongTermStore
+from loomable.providers.vector_store import open_vector_store
+from loomable.providers import (
+    AzureOpenAIEmbedder,
+    GeminiEmbedder,
+    HuggingFaceEmbedder,
+    OpenAIEmbedder,
 )
 
-agent = Agent(
-    model="openai:gpt-4o-mini",
-    memory_tool=True,
-    note_store=store,
+# Industry embedders (pick one)
+embedder = GeminiEmbedder()                 # gemini-embedding-001
+# embedder = AzureOpenAIEmbedder(...)       # Azure deployment
+# embedder = HuggingFaceEmbedder()          # local MiniLM (pip install loomable[huggingface])
+# embedder = OpenAIEmbedder()
+
+# Default L3 — Alibaba zvec under .loomable/memory_zvec
+notes = NoteStore(long_term=LongTermStore(), embedder=embedder)
+# same as: open_vector_store()  or  open_vector_store(path="./.loomable/memory_zvec")
+
+# Custom zvec directory
+notes = NoteStore(
+    long_term=open_vector_store(path="./.loomable/notes_zvec"),
+    embedder=embedder,
 )
-# The model can now write/read/recall durable notes across sessions
+
+# FAISS (CPU / GPU)
+notes = NoteStore(
+    long_term=open_vector_store(
+        engine="faiss",
+        path="./.loomable/notes_faiss",
+        dimensions=1536,
+        device="auto",
+    ),
+    embedder=embedder,
+)
+
+# Chroma (file or HTTP)
+notes = NoteStore(
+    long_term=open_vector_store(
+        engine="chroma", path="./.loomable/chroma", dimensions=1536
+    ),
+    # or: uri="chroma:./.loomable/chroma" / uri="http://localhost:8000"
+    embedder=embedder,
+)
+
+# Milvus Lite (.db file) or server
+notes = NoteStore(
+    long_term=open_vector_store(
+        engine="milvus", path="./.loomable/milvus.db", dimensions=1536
+    ),
+    # or: uri="milvus:./.loomable/milvus.db" / uri="http://localhost:19530"
+    embedder=embedder,
+)
+
+# Postgres vectors
+notes = NoteStore(
+    long_term=open_vector_store(postgres_url=DSN, dimensions=1536, user_id="alice"),
+    embedder=embedder,
+)
+
+# Tests / ephemeral only
+notes = NoteStore(
+    long_term=open_vector_store(engine="memory"),
+    embedder=embedder,
+)
 ```
 
-### Cross-Session User Memory (user_id)
+### Compose matrix
 
-Scope memory per user with `user_id` — facts persist across sessions for the same user:
+| Want | Conversation | User / L3 |
+|------|--------------|-----------|
+| Default product | any | **Alibaba zvec** via `LongTermStore()` / `open_vector_store()` |
+| Custom zvec dir | any | `open_vector_store(path=...)` |
+| Local ANN (CPU/GPU) | any | FAISS via `engine="faiss"` |
+| Prod durable SQL vectors | postgres | `open_vector_store(postgres_url=...)` |
+| Unit tests | memory | `open_vector_store(engine="memory")` |
+| Case/Workflow resume | — | `PostgresCheckpointer` (separate) |
 
-```python
-agent = Agent(
-    model="openai:gpt-4o-mini",
-    session_id="conv-123",
-    user_id="alice",         # memory scoped to this user across all sessions
-)
+### Knobs
+
+| Param | Effect |
+|-------|--------|
+| `memory=Memory.compose(...)` | Unified layers |
+| `session_id` | Enables L1/L2 persist |
+| `user_id` | Scopes `UserMemory` notes |
+| `resume=True` | Reload L1/L2 (session must exist) |
+| `UserMemory(auto_extract=True)` | Heuristic facts after each turn |
+| `UserMemory(memory_tool=True)` | Agentic memory tool |
+| `memory_window` / `compaction_threshold` | Replay + L2 spill |
+
+### Postgres install
+
+```bash
+pip install 'loomable[postgres]'
+docker compose up -d
+# POSTGRES_URL=postgresql://loomable:loomable@127.0.0.1:5432/loomable
 ```
 
-### PostgreSQL Backend (persistent memory)
-
-For production deployments where memory must survive restarts:
-
-```python
-from loomable.providers.backends.postgres import PostgresMemoryBackend, PgVectorBackend
-
-# Key-value memory (session state, user facts)
-memory_backend = PostgresMemoryBackend(
-    url="postgresql://user:pass@localhost/agentdb",
-    user_id="alice",
-)
-
-# Vector memory (embeddings, RAG, semantic search)
-vector_backend = PgVectorBackend(
-    url="postgresql://user:pass@localhost/agentdb",
-    dimensions=1536,
-    user_id="alice",
-)
-```
-
-Both backends support `user_id` scoping for multi-tenant isolation. Requires `asyncpg` (optional dependency — install with `pip install asyncpg`). Tables are created automatically on first use.
+`PostgresCheckpointer` is for Case/Workflow resume — not Agent chat history.  
+`memory_tool=True` without a note store is a no-op.  
+Install L3 default: `pip install 'loomable[zvec]'`.  
+`knowledge` RAG uses its own store when configured — separate from `note_store`.
 
 ---
 
@@ -1064,12 +1270,15 @@ from fastapi import FastAPI
 from loomable.serve import mount_agent, mount_case
 
 app = FastAPI()
-mount_agent(app, agent, prefix="/agent")
-mount_case(app, case, prefix="/cases")
-# POST /agent/run/events  → text/event-stream
+# Optional api_key=: require Authorization: Bearer … or X-API-Key (401 if missing)
+mount_agent(app, agent, prefix="/agent", api_key="secret")
+mount_case(app, case, prefix="/cases", api_key="secret")
+# POST /agent/run/events  → text/event-stream (disconnect → cancel)
 # POST /cases/run/events  → text/event-stream
 # POST /agent/run/stream  → application/x-ndjson (legacy)
 ```
+
+See [SECURITY.md](../SECURITY.md) for trust boundaries.
 
 ---
 
@@ -1163,6 +1372,38 @@ from loomable.flow import (
 
 ## Knowledge / RAG
 
+Two layers — both on `Agent` (and therefore `create_deep_agent`, Team, Case, Workflow):
+
+**Searchable knowledge base** (vector DB, like Agno Knowledge / a VectorStoreIndex):
+
+```python
+from loomable.providers.vector_store import open_vector_store
+from loomable.retrieval import KnowledgeBase
+
+store = open_vector_store(engine="faiss", path="./.loomable/kb", dimensions=384)
+
+agent = Agent(
+    model="openai:gpt-4o-mini",
+    knowledge_base=KnowledgeBase(store=store, sources=["./handbook.pdf", "./runbooks"]),
+)
+# LLM calls search_knowledge(query, k)
+
+# Named collections → search_personal, search_company
+agent = Agent(
+    model=...,
+    knowledge_base={"personal": ["./notes"], "company": store},
+)
+
+# Extra retrievers on the same agent
+agent = Agent(model=..., knowledge_base=store, retrievers=[custom_retriever])
+
+create_deep_agent(model, knowledge_base=store, embedder=embedder)
+```
+
+`knowledge_base` accepts a vector store (`open_vector_store` / URI), sources to ingest, a `KnowledgeBase`, a `Corpus`, a retriever, or a name→collection mapping. Team, Case, Workflow, and Flow take the same kwarg and inherit it onto Agent members that do not already have one.
+
+**Passive recall** (short strings injected into context — no tool call):
+
 ```python
 from loomable.providers import AzureOpenAIEmbedder
 
@@ -1233,6 +1474,80 @@ agent = Agent(
 
 ---
 
+
+## Retrieval (docs, code, mixed corpora)
+
+Ingest → chunk → pluggable base retrieve → **agentic** rewrite / route / rerank.
+
+```python
+from loomable import Agent
+from loomable.providers import GeminiEmbedder, HuggingFaceEmbedder  # or AzureOpenAIEmbedder
+from loomable.providers.vector_store import open_vector_store
+from loomable.retrieval import ingest, build_agentic_retriever
+
+corpus = await ingest(
+    ["./docs", "./README.md", {"id": "note", "text": "Inline knowledge"}],
+    name="docs",           # corpus id (routing)
+    store=open_vector_store(engine="faiss", dimensions=3072, device="cpu"),
+    embedder=GeminiEmbedder(),  # or HuggingFaceEmbedder() / AzureOpenAIEmbedder(...)
+    strategy="auto",       # text | markdown | code | html | pdf | auto | custom
+    base_mode="hybrid",    # vector | lexical | hybrid (RRF fusion)
+)
+
+retriever = await build_agentic_retriever(
+    corpus,
+    name="search_docs",    # agent tool name (auto-prefixed if you pass "docs")
+    mode="auto",           # chunks | file | auto | custom ModeRouter
+    rewrite="off",         # off | multi_query | hyde | custom QueryRewriter
+    rerank="mmr",          # off | score | mmr | llm | custom Reranker
+    compress="off",        # off | llm | custom HitCompressor
+    # llm=provider,       # needed for multi_query / hyde / llm rerank / llm mode
+)
+agent = Agent(model=provider, retrievers=[retriever])  # LLM calls search_docs(query, k)
+
+# Simpler: the knowledge base *is* the vector store
+agent = Agent(model=provider, knowledge_base=store)  # search_knowledge
+# Named collections, extra retrievers, deep agent — same kwargs
+create_deep_agent(model, knowledge_base={"policy": store}, retrievers=[retriever])
+
+# Metadata: attached at ingest, returned on hits, filterable
+corpus = await ingest(
+    ["./handbook.pdf"],
+    metadata={"author": "security", "tags": ["policy"]},
+)
+hits = await retriever.retrieve("OAuth", k=5, filters={"page": 3, "tags": ["policy"]})
+# hit["author"], hit["page"], hit["filename"], hit["source"], …
+```
+
+Ship **any** custom retriever the same way — implement ``name`` + ``async retrieve``
+(optional ``description``) and pass ``Agent(retrievers=[...])``. See
+``examples/advanced/04_ship_any_retriever.py``.
+
+**Multi-corpus** (routed composite)::
+
+```python
+retriever = await build_agentic_retriever(
+    [auth_corpus, billing_corpus],
+    name="knowledge",
+    corpus_router="all",       # or "description" + llm= for LI-style routing
+)
+```
+
+Legacy one-shot: ``build_retriever(..., mode="hybrid")`` still works.
+Chunk strategies remain pluggable via ``register_strategy``.
+Deep code (``CodeIndex``) shares the same chunk/store stack.
+
+**Default ingest formats:** markdown, code (py/ts/js/go/rs/…), HTML, PDF
+(``loomable[pdf]``), DOCX (stdlib), PPTX (``loomable[ppt]``), JSON/CSV, notebooks,
+plus ``http(s)`` URLs (``load_url`` / pass a URL string to ``ingest``).
+
+PDFs are handled inside ``ingest``: extract pages, then page-chunk (split
+oversized pages with overlap — never truncate). Pass the ``.pdf`` path; do not
+pre-split.
+
+See ``examples/advanced/03_agentic_retriever.py`` and
+``examples/advanced/05_complex_agentic_rag.py``.
+
 ## MCP Integration
 
 Connect to Model Context Protocol servers — stdio (local) or SSE/HTTP (remote).
@@ -1269,15 +1584,18 @@ from loomable.serve import mount_agent, FastAPIAdapter
 agent = Agent(model=provider, tools=[search])
 
 app = FastAPI()
-mount_agent(app, agent, prefix="/agent")
+mount_agent(app, agent, prefix="/agent", api_key="optional-shared-secret")
 # GET  /agent/health
 # POST /agent/run
-# POST /agent/run/stream   (NDJSON)
-# POST /agent/run/events   (AG-UI SSE)
+# POST /agent/run/stream   (NDJSON; disconnect → BuiltAgent.cancel)
+# POST /agent/run/events   (AG-UI SSE; disconnect → cancel)
 
 # Or dual-mount at / and /agent:
-app = FastAPIAdapter(agent).app()
+app = FastAPIAdapter(agent, api_key="optional-shared-secret").app()
 ```
+
+Auth (when `api_key=` is set): `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+Anonymous requests receive `401`. This is a shared-key edge baseline, not full RBAC.
 
 ### HTTP (FastAPI) — Case
 
@@ -1286,7 +1604,7 @@ from loomable import Case
 from loomable.serve import mount_case
 
 case = Case(model=provider, goal="...", board=True, accept=ok)
-mount_case(app, case, prefix="/cases")
+mount_case(app, case, prefix="/cases", api_key="optional-shared-secret")
 # POST /cases/run/events → text/event-stream
 ```
 
@@ -1323,6 +1641,15 @@ checkpointer = JsonFileCheckpointer(
 from loomable.persist import SQLiteCheckpointer
 
 checkpointer = SQLiteCheckpointer("agent.db", max_checkpoints=100)
+```
+
+### PostgreSQL (production)
+
+```python
+# pip install 'loomable[postgres]'
+from loomable import PostgresCheckpointer
+
+checkpointer = PostgresCheckpointer("postgresql://loomable:loomable@127.0.0.1:5432/loomable")
 ```
 
 ### Event-Driven Triggers

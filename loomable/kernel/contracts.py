@@ -66,8 +66,9 @@ class MemoryBackend(Protocol):
 class VectorBackend(Protocol):
     """Pluggable long-term vector memory backend.
 
-    Structural protocol so that zvec, FAISS, Pinecone, or any conforming
-    vector store can be used without agent changes.
+    Structural protocol so that Alibaba zvec, FAISS (CPU/GPU), Postgres
+    (`PgVectorBackend`), Pinecone, or any conforming vector store can be
+    used without agent changes.
     """
 
     async def index(self, id: str, vector: list[float], metadata: dict[str, Any]) -> None:
@@ -109,11 +110,15 @@ class Tool(ABC):
 class Retriever(ABC):
     """Abstract base for retriever components.
 
-    A Retriever fetches relevant content for a query. Concrete retrievers
-    are exposed to Agents as MCP or API tools at the extension edge.
+    Ship any concrete Retriever (or duck-typed object with ``name`` +
+    ``async retrieve``) via ``Agent(retrievers=[...])``. At build time each
+    retriever becomes a tool named ``retriever.name`` (prefer ``search_*``).
+
+    Optional ``description`` is advertised to the model as the tool description.
     """
 
     name: str
+    description: str = ""
 
     @abstractmethod
     async def retrieve(self, query: str, k: int) -> list[dict[str, Any]]:

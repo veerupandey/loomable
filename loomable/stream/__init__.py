@@ -218,9 +218,68 @@ class StreamBridge:
             # Caller emits RUN_FINISHED after final TEXT_* frames.
             return []
         if event.kind == "tool_call":
+            # Prefer structured per-call payloads when present (START/ARGS/RESULT/END
+            # already published explicitly around dispatch).
+            if attrs.get("agui_skip"):
+                return []
+            calls = attrs.get("tool_calls")
+            if isinstance(calls, list) and calls:
+                out: list[StreamEvent] = []
+                results_by_id = {
+                    str(r.get("call_id")): r
+                    for r in (attrs.get("results") or [])
+                    if isinstance(r, dict)
+                }
+                for call in calls:
+                    if not isinstance(call, dict):
+                        continue
+                    cid = str(call.get("id") or "")
+                    name = str(call.get("tool_name") or call.get("name") or "tool")
+                    args = call.get("args") if isinstance(call.get("args"), dict) else {}
+                    out.append(
+                        StreamEvent(
+                            type=TOOL_CALL_START,
+                            **base,
+                            data={"tool_call_id": cid, "tool_name": name},
+                        )
+                    )
+                    out.append(
+                        StreamEvent(
+                            type=TOOL_CALL_ARGS,
+                            **base,
+                            data={"tool_call_id": cid, "tool_name": name, "args": args},
+                        )
+                    )
+                    res = results_by_id.get(cid)
+                    if res is not None:
+                        out.append(
+                            StreamEvent(
+                                type=TOOL_CALL_RESULT,
+                                **base,
+                                data={
+                                    "tool_call_id": cid,
+                                    "tool_name": name,
+                                    "content": res.get("content", ""),
+                                    "is_error": bool(res.get("is_error")),
+                                },
+                            )
+                        )
+                    out.append(
+                        StreamEvent(
+                            type=TOOL_CALL_END,
+                            **base,
+                            data={
+                                "tool_call_id": cid,
+                                "tool_name": name,
+                                "duration_ms": event.duration_ms,
+                            },
+                        )
+                    )
+                return out
+            # Legacy collapsed form (name list only)
             names = str(attrs.get("gen_ai.tool.name") or attrs.get("tool_count") or "")
             tool_names = [n for n in names.split(",") if n]
-            out: list[StreamEvent] = []
+            out = []
             for name in tool_names or ["tool"]:
                 out.append(
                     StreamEvent(

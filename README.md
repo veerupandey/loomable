@@ -2,10 +2,10 @@
   <h1>loomable</h1>
   <p>Enterprise AI agents — Agent · Team · Workflow · Case · AG-UI SSE</p>
   <p>
-    <a href="https://github.com/veerupandey/loomable/actions/workflows/ci.yml"><img src="https://github.com/veerupandey/loomable/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+    <a href="https://github.com/veerupandey/loomable/actions/workflows/ci.yml"><img src="https://github.com/veerupandey/loomable/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
     <img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+" />
     <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT" />
-    <img src="https://img.shields.io/badge/status-alpha-orange.svg" alt="Status: alpha" />
+    <img src="https://img.shields.io/badge/status-beta-blue.svg" alt="Status: beta" />
   </p>
 </div>
 
@@ -14,10 +14,16 @@
   <a href="#core-primitives">Primitives</a> ·
   <a href="#ag-ui-sse">AG-UI SSE</a> ·
   <a href="#examples">Examples</a> ·
-  <a href="docs/API.md">API Reference</a>
+  <a href="docs/API.md">API Reference</a> ·
+  <a href="docs/STABILITY.md">Stability</a> ·
+  <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="SECURITY.md">Security</a> ·
+  <a href="docs/BETA_PLAN.md">Beta plan</a>
 </p>
 
 ## Introduction
+
+**Public beta (`0.2.0b0`)** — durable primitives (Agent · Team · Workflow · Case · AG-UI), expect polish gaps. See [docs/STABILITY.md](docs/STABILITY.md) for the supported surface and beta limits (local workspace FS, cooperative cancel, shared API-key serve auth).
 
 Loomable is a Python framework for production agent systems. One `Runnable` contract (`arun` → `RunResult`), progressive disclosure:
 
@@ -27,6 +33,7 @@ Loomable is a Python framework for production agent systems. One `Runnable` cont
 | **Team** | Specialists (broadcast / sequential / coordinate) |
 | **Workflow** | Durable multi-step process (HITL, checkpoints, SharedState) |
 | **Case** | Goal + WorkItems board + plan → dispatch → accept |
+| **Deep Agent** | Loomable-only long-horizon research harness (beats LangGraph/Agno/Crew deep stacks) |
 | **Flow** | Low-level graph escape hatch |
 
 Everything that runs is a `Runnable`. Agents nest in workflows; cases compile to workflows; workflows stream the same AG-UI events as agents.
@@ -59,19 +66,22 @@ async for event in case.astream_events(email):
 ### Installation
 
 ```bash
+# Beta tag install (PyPI publish may lag the git tag)
+pip install "loomable @ git+https://github.com/veerupandey/loomable.git@v0.2.0b0"
+# or track main / editable
 pip install "loomable @ git+https://github.com/veerupandey/loomable.git"
-# or
 uv add "loomable @ git+https://github.com/veerupandey/loomable.git"
-# or
-git clone https://github.com/veerupandey/loomable.git && cd loomable && pip install -e ".[dev]"
+git clone https://github.com/veerupandey/loomable.git && cd loomable && pip install -e ".[dev,toolkits]"
 ```
 
 ### Provider credentials
 
+Copy [`.env.example`](.env.example) to `.env` in the repo root (gitignored — never commit it), or export:
+
 ```bash
 export GEMINI_API_KEY="..."          # Gemini
 # or
-export OPENAI_API_KEY="sk-..."       # OpenAI
+export OPENAI_API_KEY="..."          # OpenAI
 # or Azure: AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_API_KEY / AZURE_OPENAI_DEPLOYMENT_NAME
 ```
 
@@ -86,6 +96,12 @@ agent = Agent(model=GeminiProvider(), instructions="Be concise.")
 print(asyncio.run(agent.arun("Capital of France?")).output.text())
 ```
 
+Searchable knowledge base (vector store → `search_*` tools):
+
+```python
+agent = Agent(model=GeminiProvider(), knowledge_base=["./handbook.pdf", "./runbooks"])
+```
+
 ## Core primitives
 
 ### Agent
@@ -93,7 +109,12 @@ print(asyncio.run(agent.arun("Capital of France?")).output.text())
 ```python
 from loomable import Agent, tool
 
-agent = Agent(model=provider, tools=[multiply], response_model=Packet)
+agent = Agent(
+    model=provider,
+    tools=[multiply],
+    knowledge_base=["./handbook.pdf"],  # vector DB → search_knowledge
+    response_model=Packet,
+)
 result = await agent.arun("What is 7 * 8?")
 ```
 
@@ -102,6 +123,7 @@ result = await agent.arun("What is 7 * 8?")
 ```python
 from loomable import Workflow, JsonFileCheckpointer
 
+cp = JsonFileCheckpointer("./ckpts")  # or PostgresCheckpointer(POSTGRES_URL)
 wf = (
     Workflow("sev", session_id="inc-1", checkpointer=cp)
     .step("gather", gatherer)
@@ -109,7 +131,6 @@ wf = (
     .step("scribe", scribe, confirm=True)  # HITL
 )
 result = await wf.arun(email)
-# SharedState holds per-node outputs + plan_steps / board keys
 print(wf.state.get("gather"))
 ```
 
@@ -166,7 +187,7 @@ Legacy NDJSON remains at `POST /run/stream`.
 | **Tool-use loop** | Automatic tool iteration until final answer |
 | **Require tools** | Path-constrained side-effect enforcement |
 | **Memory** | Session / user / tiered stores + compaction |
-| **Knowledge (RAG)** | Embed at build, recall at run |
+| **Knowledge base** | Vector store → `search_*` tools (`knowledge_base=`); optional passive `knowledge=` |
 | **Multimodal I/O** | Image / audio / video in and out |
 | **Structured I/O** | Pydantic / dataclass schemas |
 | **Verification** | Same verifier protocol on Agent, Loop, Case |
@@ -182,7 +203,8 @@ Legacy NDJSON remains at `POST /run/stream`.
 
 ```
 examples/
-├── agents/               # Start here
+├── agents/               # Start here (07 = knowledge_base vector DB)
+├── deep_agent/           # Loomable-only deep research (beats peer deep agents)
 ├── subagents/            # Delegation & Team
 ├── patterns/             # Loop / pipeline / parallel / plan-execute
 ├── memory/               # Session & shared memory
@@ -193,6 +215,8 @@ examples/
 
 ```bash
 python examples/agents/01_hello_world.py
+python examples/agents/07_knowledge_base.py
+python examples/deep_agent/03_live_multimodal_research.py
 python examples/escalation_war_room/10_case.py
 python examples/escalation_war_room/12_agent_agui_sse.py
 ```
@@ -208,11 +232,12 @@ loomable/
 ├── stream/      # AG-UI StreamEvent + AsyncStreamBus
 ├── flow/        # Workflow, Flow, Loop, engines, SharedState
 ├── content/     # Media parts & coercion
-├── kernel/      # Core primitives (import-independent)
-├── providers/   # OpenAI, Azure, Anthropic, Gemini, Groq, Ollama
-├── persist/     # Checkpointers
+├── kernel/      # Core primitives
+├── providers/   # Models + backends (Postgres KV/vector)
+├── retrieval/   # ingest, KnowledgeBase, agentic retrievers
+├── persist/     # JsonFile / SQLite / Postgres checkpointers
 ├── serve/       # FastAPI + MCP adapters
-└── media/       # High-level Image / Audio / Video helpers
+└── media/       # Image / Audio / Video helpers
 ```
 
 ## Providers
@@ -231,6 +256,12 @@ loomable/
 ```bash
 pip install -e ".[dev]"
 python -m pytest tests/unit -q
+
+# Postgres live E2E (Agent memory + checkpointers)
+pip install -e ".[postgres]"
+docker compose up -d
+POSTGRES_URL=postgresql://loomable:loomable@127.0.0.1:5432/loomable \
+  python -m pytest tests/integration/test_postgres_live.py -q
 ```
 
 ## License
