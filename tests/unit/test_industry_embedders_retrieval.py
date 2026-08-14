@@ -192,13 +192,13 @@ def _hit_doc(hits: list[dict]) -> str:
     if not hits:
         return ""
     src = (hits[0].get("source") or hits[0].get("path") or "").lower()
-    for key in ("auth", "billing", "ops", "noise", "cooking"):
+    for key in ("auth", "billing", "ops", "noise", "cooking", "sku"):
         if key in src:
             return key
     content = (hits[0].get("content") or "").lower()
     if "kubectl" in content or "rollout" in content:
         return "ops"
-    if "invoice" in content or "discount" in content:
+    if "sku-9921" in content or "invoice" in content or "discount" in content or "early-pay" in content:
         return "billing"
     if "oauth" in content or "jwt" in content:
         return "auth"
@@ -211,10 +211,10 @@ def _hit_doc(hits: list[dict]) -> str:
 async def test_agentic_hybrid_mmr_beats_naive_vector_on_mixed_queries(
     tmp_path: Path,
 ) -> None:
-    """Hybrid RRF + MMR should beat naive dense-only (LlamaIndex-style top-k).
+    """Hybrid RRF + MMR must beat LlamaIndex-style dense-only VectorIndexRetriever.
 
-    Includes exact rare keywords (where sparse helps) and paraphrases. Naive
-    vector-only is the common LlamaIndex VectorIndexRetriever default.
+    Same MiniLM embedder both sides. Naive = vector top-k only. Agentic =
+    hybrid RRF + MMR. Includes rare IDs (sparse helps) and paraphrases.
     """
     pytest.importorskip("sentence_transformers")
     emb = HuggingFaceEmbedder(backend="local")
@@ -222,9 +222,12 @@ async def test_agentic_hybrid_mmr_beats_naive_vector_on_mixed_queries(
     docs.mkdir()
     corpus_files = {
         "auth.md": "# Auth\n\nSign in with OAuth2. Issue JWT access tokens.\n",
-        "billing.md": "# Billing\n\nQuarterly invoices include early-pay discounts.\n",
+        "billing.md": (
+            "# Billing\n\nQuarterly invoices include early-pay discounts. "
+            "Reference SKU-9921 for enterprise volume pricing.\n"
+        ),
         "ops.md": "# Ops\n\nUse kubectl to roll out the payment service.\n",
-        # Lexical trap: shares "service" with ops queries / auth paraphrases.
+        # Lexical trap: shares "service" with ops.
         "cooking.md": "# Cooking\n\nService the roast with gravy and herbs.\n",
         "noise.md": "# Notes\n\nThe weather in Lisbon is mild in spring.\n",
     }
@@ -240,6 +243,7 @@ async def test_agentic_hybrid_mmr_beats_naive_vector_on_mixed_queries(
         embedder=emb,
         strategy="markdown",
         base_mode="hybrid",
+        vector_weight=0.7,
     )
     naive_corpus = await ingest(
         [docs],
@@ -251,15 +255,24 @@ async def test_agentic_hybrid_mmr_beats_naive_vector_on_mixed_queries(
     )
 
     agentic = AgenticRetriever(
-        hybrid_corpus, mode="chunks", rewrite="off", rerank=MMRReranker(lambda_mult=0.7)
+        hybrid_corpus,
+        name="search_hybrid",
+        mode="chunks",
+        rewrite="off",
+        rerank=MMRReranker(lambda_mult=0.7),
     )
+    assert agentic.name == "search_hybrid"
     naive = AgenticRetriever(
-        naive_corpus, mode="chunks", rewrite="off", rerank=False
+        naive_corpus,
+        name="search_naive",
+        mode="chunks",
+        rewrite="off",
+        rerank=False,
     )
 
     cases = [
+        ("SKU-9921 early-pay", "billing"),  # rare id — sparse helps hybrid
         ("kubectl rollout payment", "ops"),
-        ("early payment discount invoices", "billing"),
         ("JWT OAuth sign-in", "auth"),
         ("how do users authenticate with bearer tokens", "auth"),
         ("volume pricing reductions on quarterly bills", "billing"),
@@ -275,9 +288,12 @@ async def test_agentic_hybrid_mmr_beats_naive_vector_on_mixed_queries(
         if _hit_doc(n_hits) == expect:
             naive_ok += 1
 
-    # Agentic hybrid+MMR must match or beat naive top-1 and clear a majority.
+    # Must beat or tie LlamaIndex-style naive top-k, and clear ≥4/5.
     assert agentic_ok >= naive_ok
     assert agentic_ok >= 4
+    # On the rare-ID query, hybrid must get billing (lexical signal).
+    sku_hits = await agentic.retrieve("SKU-9921 early-pay", k=1)
+    assert _hit_doc(sku_hits) == "billing"
     store_a.close()
     store_b.close()
 
@@ -313,6 +329,36 @@ async def test_score_metadata_does_not_clobber_similarity(tmp_path: Path) -> Non
     assert float(hits[0]["score"]) > 0.05
     store.close()
 
+
+@pytest.mark.asyncio
+async def test_ship_any_retriever_agent_tool_schema() -> None:
+    """Any Retriever becomes a properly-schematized agent tool under its name."""
+    from loomable.agent import Agent
+    from loomable.kernel.contracts import Retriever
+    from loomable.kernel.models import ModelRequest, ModelResponse
+    from loomable.kernel.retrievers import RetrieverTool
+
+    class AcmeSearch(Retriever):
+        name = "search_acme"
+        description = "Search Acme product catalog"
+
+        async def retrieve(self, query: str, k: int) -> list[dict]:
+            return [{"content": f"acme:{query}", "score": 1.0}]
+
+    class _P:
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            return ModelResponse(content="ok")
+
+    r = AcmeSearch()
+    built = Agent(model=_P(), retrievers=[r], use_llm_summarizer=False).build()
+    tool = built.tool_runtime._tools["search_acme"]
+    assert isinstance(tool, RetrieverTool)
+    assert tool.parameters["required"] == ["query"]
+    assert "query" in tool.parameters["properties"]
+    assert "Acme" in tool.description
+    assert built.instructions and "search_acme" in built.instructions
+    out = await tool.invoke({"query": "widgets", "k": 1})
+    assert out.content[0]["content"] == "acme:widgets"
 
 @pytest.mark.asyncio
 async def test_live_azure_openai_embed_when_configured() -> None:

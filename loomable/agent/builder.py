@@ -3603,6 +3603,20 @@ class Agent:
             for skill_name, body in self._skill_bodies:
                 title = skill_name or "skill"
                 parts.append(f"## Skill: {title}\n{body.strip()}")
+        # Ship-any-retriever: tell the model which search tools are attached.
+        if self._retrievers:
+            if parts:
+                parts.append("")
+            lines = [
+                "Knowledge search tools (call when facts from the knowledge base are needed):"
+            ]
+            for r in self._retrievers:
+                desc = (getattr(r, "description", None) or "").strip()
+                if desc:
+                    lines.append(f"- `{r.name}`: {desc}")
+                else:
+                    lines.append(f"- `{r.name}`: search this knowledge base")
+            parts.append("\n".join(lines))
         if not parts:
             return None
         return "\n".join(parts)
@@ -3757,7 +3771,8 @@ class Agent:
                         f"retrievers[{retriever.name!r}] "
                         f"(name collides with an existing tool)"
                     )
-                registry[retriever.name] = RetrieverTool(retriever)
+                desc = (getattr(retriever, "description", None) or "").strip() or None
+                registry[retriever.name] = RetrieverTool(retriever, description=desc)
 
         return registry, skill_errors
 

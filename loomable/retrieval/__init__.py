@@ -1,32 +1,30 @@
 """loomable.retrieval — ingest, chunking, and pluggable agentic retrievers.
 
-High-level::
+Ship any :class:`~loomable.kernel.contracts.Retriever` to the agent::
 
     from loomable.retrieval import ingest, build_agentic_retriever
     from loomable.providers.vector_store import open_vector_store
 
     corpus = await ingest(
         ["./docs", "./README.md"],
-        name="docs",
-        store=open_vector_store(path="./.loomable/docs_zvec"),  # or faiss/postgres
+        name="docs",                          # corpus id
+        store=open_vector_store(path="./.loomable/docs_zvec"),
         strategy="auto",
-        base_mode="hybrid",
+        base_mode="hybrid",                   # RRF hybrid (beats naive vector top-k)
     )
 
     retriever = await build_agentic_retriever(
         corpus,
-        mode="auto",              # chunks | file | auto | custom ModeRouter
-        rewrite="off",            # off | multi_query | hyde | custom QueryRewriter
-        rerank=True,              # off | score | llm | custom Reranker
-        compress="off",           # off | llm | custom HitCompressor
-        # llm=provider,          # required for multi_query / hyde / llm rerank
+        name="search_docs",                   # agent tool name
+        mode="auto",
+        rewrite="off",
+        rerank="mmr",                         # default; diversity + relevance
+        compress="off",
     )
-    agent = Agent(model=..., retrievers=[retriever])
+    agent = Agent(model=..., retrievers=[retriever])  # LLM calls search_docs
 
-Everything is pluggable: store, chunk strategy, base mode, rewrite, mode router,
-rerank, compress, and multi-corpus ``CorpusRouter``.
-
-Deep code uses the same stack via :class:`~loomable.codeindex.CodeIndex`.
+Custom retrievers work the same — implement ``name`` + ``async retrieve`` and
+pass ``Agent(retrievers=[my_retriever])``.
 """
 
 from __future__ import annotations
@@ -76,6 +74,11 @@ from loomable.retrieval.route import (
     LLMModeRouter,
 )
 from loomable.retrieval.types import Chunk, Document
+from loomable.retrieval.naming import (
+    DEFAULT_SEARCH_DOCS,
+    DEFAULT_SEARCH_KNOWLEDGE,
+    ensure_search_tool_name,
+)
 from loomable.providers.vector_store import open_vector_store
 
 __all__ = [
@@ -100,6 +103,9 @@ __all__ = [
     "list_strategies",
     "register_strategy",
     "resolve_strategy",
+    "ensure_search_tool_name",
+    "DEFAULT_SEARCH_DOCS",
+    "DEFAULT_SEARCH_KNOWLEDGE",
     # Base retrievers
     "HybridRetriever",
     "LexicalRetriever",
