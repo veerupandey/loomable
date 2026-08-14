@@ -25,18 +25,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _provider import require_provider  # noqa: E402
+from _provider import make_embedder, require_provider  # noqa: E402
 
 from loomable import Agent, ConversationMemory, Memory, UserMemory, open_session_store
 from loomable.agent import NoteStore
 from loomable.kernel.long_term import LongTermStore
-from loomable.providers import GeminiEmbedder
 from loomable.providers.vector_store import open_vector_store
 
 
 async def main() -> None:
     model = require_provider()
-    embedder = GeminiEmbedder()
+    embedder = make_embedder()
     dsn = os.environ.get("POSTGRES_URL") or os.environ.get("DATABASE_URL")
     session_id = f"compose-demo-{uuid.uuid4().hex[:8]}"
 

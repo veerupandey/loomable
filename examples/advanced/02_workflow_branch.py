@@ -1,4 +1,4 @@
-"""Custom Flow via high-level Workflow.branch — Agents only.
+"""Custom routing via high-level Workflow.branch — Agents only.
 
 Prefer this over hand-built Node/Edge graphs. Each Agent receives the
 previous Agent's output automatically.

@@ -1,6 +1,6 @@
 # Loomable — High-Level API Reference
 
-A production-grade agent framework. Build agents in a few lines, scale to Teams,
+Public beta agent framework. Build agents in a few lines, scale to Teams,
 Workflows, and Cases with SharedState, HITL, checkpoints, and AG-UI SSE.
 
 ---
@@ -145,67 +145,20 @@ wf = (
 
 Declarative style still works: `Workflow("pipe", steps=[Step("a", a), Step("b", b)])`.
 
-Low-level `Flow` / `sequential()` / `Edge` remain available as an advanced escape hatch.
+Low-level `Flow` / `sequential()` / `Edge` remain available as an advanced escape hatch
+(see [Flow Engine](#flow-engine)). Prefer the `Workflow` builders above.
 
-### Level 4b: Flow list shorthand (advanced alias)
-
-Compose multiple agents/functions into a sequential workflow. The simplest Flow — just a list.
-
-```python
-from loomable.flow import Flow
-
-def research(input):
-    return f"Research findings about: {input}"
-
-def write(input):
-    return f"Article based on: {input}"
-
-def edit(input):
-    return f"Polished: {input}"
-
-flow = Flow([research, write, edit])
-result = await flow.arun("AI agents in 2025")
-```
-
-Or use the `sequential()` helper (replaces the old `Pipeline`):
+### Level 5: Workflow parallel + branch (same object)
 
 ```python
-from loomable.flow import sequential
-
-flow = sequential(research, write, edit)
-result = await flow.arun("AI agents in 2025")
-```
-
-Zero-config: no engine, optimizer, memory, or checkpointer needed.
-
-### Level 5: Flow with parallel engine
-
-Run independent branches concurrently. The engine handles supersteps automatically.
-
-```python
-from loomable.flow import Flow, Edge
-
-flow = Flow(
-    {"research": researcher, "analyze": analyst, "synthesize": writer},
-    edges=[
-        Edge(source="research", target="synthesize"),
-        Edge(source="analyze", target="synthesize"),
-    ],
-    engine="auto",  # auto-selects ParallelEngine (research & analyze are independent)
+wf = (
+    Workflow("sev1", session_id="inc-1", memory=True)
+    .step("gather", gatherer)
+    .parallel(analyst=analyst, visual=visual)
+    .branch(when=needs_human, then=approver, else_=auto)
+    .step("publish", publisher)
 )
-result = await flow.arun("Compare AI frameworks")
 ```
-
-Or use the `parallel()` helper for the fully-concurrent broadcast pattern:
-
-```python
-from loomable.flow import parallel
-
-flow = parallel(researcher, analyst, writer)
-result = await flow.arun("Analyze the AI market")
-```
-
-Engine selection is automatic by default: linear chains get Sequential, independent branches get Parallel, a manager node gets Hierarchical.
 
 ### Level 6: Workflow with shared memory + checkpointer
 
@@ -234,53 +187,31 @@ print(wf.explain())  # inspect topology
 Low-level `Flow(optimizer=..., memory=TieredMemoryStore(), ...)` remains an
 advanced escape hatch; teaching demos and new code should use `Workflow`.
 
-### Level 7: Custom engine, HITL, observability
+### Level 7: Workflow HITL + observability
 
-Full control: custom execution engines, human-in-the-loop gates, and context-snapshot observability.
+Human-in-the-loop and durable resume stay on `Workflow` — mark a step with
+`confirm=True`, catch pause, then `approve()` + `arun(resume=True)`.
 
 ```python
-from loomable.flow import (
-    Flow, Node, Edge, FlowPaused,
-    ExecutionEngine, ContextSnapshotConfig,
-)
+from loomable import Agent, Workflow, FlowPaused
 from loomable.persist import JsonFileCheckpointer
 
-# Custom engine (satisfies the ExecutionEngine protocol)
-class MyStreamingEngine:
-    async def run(self, flow, input, state, context):
-        # Custom execution logic — dependency-driven, streaming, etc.
-        ...
-
-# Human-in-the-loop: mark a node as requiring confirmation
-flow = Flow(
-    {
-        "draft": Node(node_id="draft", runnable=writer),
-        "publish": Node(node_id="publish", runnable=publisher, require_confirmation=True),
-    },
-    edges=[Edge(source="draft", target="publish")],
-    engine=MyStreamingEngine(),
-    checkpointer=JsonFileCheckpointer(".checkpoints"),
-    session_id="pub-flow",
-    events=my_event_emitter,  # receives node_start/node_end + context_snapshot events
+wf = (
+    Workflow("publish", session_id="pub-1", checkpointer=JsonFileCheckpointer(".checkpoints"))
+    .step("draft", writer)
+    .step("publish", publisher, confirm=True)
 )
 
 try:
-    result = await flow.arun("Publish the quarterly report")
-except FlowPaused as paused:
-    # Flow paused before 'publish' — checkpoint saved, process can exit
-    # Later: resume with approval decision
-    ...
+    result = await wf.arun("Publish the quarterly report")
+except FlowPaused:
+    # Checkpoint saved — process can exit. Later:
+    wf.approve("publish")
+    result = await wf.arun(resume=True)
 ```
 
-Context-snapshot observability (opt-in, zero overhead when disabled):
-
-```python
-from loomable.flow import ContextSnapshotConfig
-
-# Enable snapshots to see exactly what context each node received
-config = ContextSnapshotConfig(enabled=True, metadata_only=False)
-# Attach via events emitter — diagnose "green trace but wrong output" failures
-```
+Low-level `Flow` / `Node` / custom `ExecutionEngine` remain available as an
+advanced escape hatch; new code should stay on `Workflow`.
 
 ---
 
@@ -427,19 +358,15 @@ agent = create_deep_agent(
     # discovery_core="research" (default, correctness-first)
     # discovery_core="research-slim"  # smaller schema budget (≥50% target)
 )
+await agent.arun("Research any topic; write reports/brief.md")
 
-```python
 # Deep code — index a repo (Alibaba zvec on disk by default) + coding skill + sandbox
-# Swap store via open_vector_store(postgres_url=...) or backend=PgVectorBackend(...)
 agent = create_deep_agent(
     model,
     profile="code",
     repo="./my-app",
     # or code_index=await CodeIndex.build("./my-app", embedder=OpenAIEmbedder())
 )
-```
-
-await agent.arun("Research any topic; write reports/brief.md")
 ```
 
 Pillars:
@@ -476,7 +403,7 @@ See `examples/deep_agent/` and `loomable/skills/research/SKILL.md`.
 ## Case
 
 Long-running goal work with an optional WorkItems board. Compiles to a `Workflow`
-(plan → dispatch → synthesize → accept) and shares `SharedState` with Flow engines.
+(plan → dispatch → synthesize → accept) and shares `SharedState` with the process.
 
 ```python
 from loomable import Case
@@ -510,9 +437,9 @@ Multi-agent collaboration where an agent delegates to specialist subagents at ru
 | I need... | Use... |
 |-----------|--------|
 | One agent with full flexibility on who to delegate to | `Agent(subagents=[...])` |
-| Named orchestration mode without custom instructions | `Team(mode="coordinate")` |
-| Explicit step-by-step pipeline | `sequential(a, b, c)` |
-| Workers + manager synthesis | `coordinate(workers=[...], manager=mgr)` |
+| Named orchestration mode without custom instructions | `Team(mode="coordinate"\|"route"\|...)` |
+| Explicit step-by-step pipeline | `Workflow(...).step(...).step(...)` |
+| Workers + manager synthesis | `Team(mode="coordinate")` |
 
 ### Subagents (recommended for most cases)
 
@@ -688,7 +615,7 @@ agent = Agent(
 | Conversation | `ConversationMemory` (`short=`) | L1 turns + L2 summaries for `session_id` |
 | User | `UserMemory` (`long=`) | Cross-session facts via `NoteStore` (scoped) |
 | Knowledge | `KnowledgeMemory` | Passive RAG into the prompt, or `store`/`sources`/`knowledge_base` → `search_*` tools |
-| Working | `WorkingMemory` | Flow blackboard (`TieredMemoryStore`) — not Agent chat |
+| Working | `WorkingMemory` | `Workflow(..., memory=True)` blackboard (`TieredMemoryStore` internals) |
 
 ### Scopes (user_id, claim_id, …)
 
@@ -748,28 +675,24 @@ await agent.arun("What's my name?")  # Alice
 ### Conversation store (L1/L2) — including Postgres
 
 ```python
-from loomable.memory import open_session_store
+from loomable import Agent, ConversationMemory, Memory, open_session_store
 
 store = open_session_store("sqlite", path="sessions.db")
 # store = open_session_store("file", path="./.sessions")
 # store = open_session_store("postgres", url=DSN, user_id="alice")
 # store = open_session_store("memory")
 
-agent = Agent(model=..., session_id="conv-1", session_store=store)
+memory = Memory.compose(
+    conversation=ConversationMemory(store=store, window=8),
+)
+agent = Agent(model=..., memory=memory, session_id="conv-1")
 await agent.arun("I prefer dark mode")
 
-agent2 = Agent(model=..., session_id="conv-1", session_store=store, resume=True)
+agent2 = Agent(model=..., memory=memory, session_id="conv-1", resume=True)
 ```
 
-Or pass a KV backend (whole session saved under `session:{id}`):
-
-```python
-agent = Agent(
-    model=...,
-    session_id="conv-1",
-    memory_backend=PostgresMemoryBackend(DSN, user_id="alice"),
-)
-```
+Flat kwargs (`session_store=`, `memory_backend=`) still work as overrides — prefer
+`Memory.compose` for new code.
 
 ### Long-term (L3): Alibaba zvec by default; FAISS / Postgres optional
 

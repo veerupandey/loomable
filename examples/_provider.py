@@ -68,3 +68,23 @@ def require_provider():
             "AZURE_OPENAI_*) in the environment or repo-root .env — see .env.example."
         )
     return make_provider()
+
+
+def make_embedder():
+    """Return an embedder aligned with ``make_provider`` credential priority."""
+    require_provider()
+    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if gemini_key:
+        from loomable.providers import GeminiEmbedder
+
+        return GeminiEmbedder(api_key=gemini_key)
+
+    openai_key = os.environ.get("ZAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    if openai_key:
+        from loomable.providers import OpenAIEmbedder
+
+        return OpenAIEmbedder(api_key=openai_key)
+
+    from loomable.providers import AzureOpenAIEmbedder
+
+    return AzureOpenAIEmbedder()

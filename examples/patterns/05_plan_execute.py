@@ -1,10 +1,8 @@
-"""Plan and Execute — Dynamic task decomposition.
+"""Plan and Execute — dynamic task decomposition via Workflow.map.
 
 USE WHEN: The task is too complex for a single agent and the steps
-aren't known in advance. The planner decomposes dynamically.
-
-Uses plan_and_execute: a planner breaks the task into steps,
-workers execute each step, a synthesizer combines results.
+aren't known in advance. A planner decomposes; workers execute; a
+synthesizer merges.
 """
 
 import asyncio
@@ -18,8 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _provider import require_provider  # noqa: E402
 
-from loomable.agent import Agent
-from loomable.flow.helpers import plan_and_execute
+from loomable import Agent, Workflow
 
 provider = require_provider()
 
@@ -48,10 +45,16 @@ synthesizer = Agent(
     instructions="Merge all step results into one cohesive response.",
 )
 
-flow = plan_and_execute(planner, worker, synthesizer)
+wf = Workflow("plan-execute").map(
+    worker,
+    planner=planner,
+    synthesizer=synthesizer,
+)
 
-result = asyncio.run(flow.arun(
-    "Design a caching strategy for a social media feed API "
-    "that handles 10K requests/second."
-))
+result = asyncio.run(
+    wf.arun(
+        "Design a caching strategy for a social media feed API "
+        "that handles 10K requests/second."
+    )
+)
 print(result.output.text())
