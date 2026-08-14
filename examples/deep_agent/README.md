@@ -20,6 +20,7 @@ agent = create_deep_agent(model, profile="research", workspace="./.deep_workspac
 | Subagents | `task` / `task_batch` + named specialists |
 | Context | `compact_conversation`, Memory, summarizer |
 | Skills | Bundled `research` (any topic) via `loomable.skills` |
+| Discovery | `search_skills` / `load_skill`, `search_tools`, `search_mcp` / `activate_tool` (on by default) |
 | Hard tasks | accept gates, Case, AG-UI / Team / Workflow |
 
 ## Why this beats peer deep agents
