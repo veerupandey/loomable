@@ -11,7 +11,7 @@ Usage (wired by :class:`~loomable.agent.builder.Agent`)::
     search_mcp(query="github")
     activate_tool(name="create_issue")  # MCP or catalogued local tool
 
-P1/P2 additions (see ``docs/COMPETITIVE.md``):
+P1/P2 additions:
 
     search_namespaces(query="mcp")           # browse tool groups
     activate_mcp_server(server_id="github")  # lazy connect on demand

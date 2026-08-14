@@ -19,7 +19,7 @@
 - PDF ingest: page extract + bounded page chunks (no 8k truncation / overlap-shard bug); large-PDF quality matrix across all engines
 - Retrieval **metadata**: ingest-time fields on every chunk/hit (author, tags, page, filename, …) + `retrieve(..., filters=)`
 - `Agent(knowledge_base=)` / `create_deep_agent(knowledge_base=)` — knowledge base **is** a vector store (optional ingest); `retrievers=` for extra search tools; Team / Case / Workflow / Flow inherit the same object. Search tools stay advertised under discovery.
-- Stability policy ([docs/STABILITY.md](docs/STABILITY.md)), SECURITY.md, beta graduation plan
+- SECURITY.md
 - `BuiltAgent.cancel()` / `Agent.cancel()` with active `RunContext` tracking
 - SSE / stream client disconnect triggers cooperative cancel
 - `mount_agent` / `mount_case` optional `api_key=` (Bearer or `X-API-Key`)
@@ -40,7 +40,7 @@
 - Renamed `memory/03_workflow_shared_memory.py`, `advanced/02_workflow_branch.py`
 - Fail loud on silent no-ops: `knowledge=` without `embedder=`, `memory_tool=`/`UserMemory(auto_extract=)` without a note store, `Team(hard=True)` on soft modes
 - `mount_case` / case-mode Agent omit NDJSON `/run/stream`; `Agent(mode="case").astream` raises
-- `knowledge_base=` promoted to Stable in STABILITY.md
+- `knowledge_base=` on Agent / Team / Case / Workflow / `create_deep_agent`
 - `BuiltAgent.astream` falls back to `arun` when tools / complexity router are present (no silent tool skip)
 - Reject unknown `Agent(mode=...)`, invalid `dispatch=`, and case-only `checkpointer=`/`max_rounds=` without `mode="case"`
 - Remove unused `ConversationMemory.scope`; wire `Agent(description=)` into the system prompt
@@ -57,7 +57,7 @@
 - Custom Flow engines with a checkpointer fail loud instead of silently dropping HITL/checkpoint kwargs
 - Soft `except: pass` on serve cancel / bind_session and discovery activation → logged
 - Docs: NDJSON demoted; Flow Engine Workflow-first; KnowledgeMemory in compose example
-- Docs: API.md matches 0.2.0b0 (`Loop(body=)`, CheckpointListener wiring, Workflow display, no Jupyter HTML / `mount_team`); removed names tabulated
+- Docs: public surface is README + `docs/API.md`; removed internal planning notes
 
 ### Removed (greenfield clean — no compatibility shims)
 
@@ -75,6 +75,7 @@
 - `rank_match` discovery helper — use `rank_bm25`
 - Passing kernel `MemoryManager` as `Agent(memory=...)` — use `Memory.compose`
 - `HITLPause` — never raised; Workflow HITL uses `FlowPaused`
+- Internal planning docs (`docs/STABILITY.md`, `docs/BETA_PLAN.md`, `docs/COMPETITIVE.md`)
 - `ExtensionRegistry` removed from `loomable.kernel.__all__` (import `loomable.kernel.registry`)
 
 ### Limits (documented)
