@@ -48,7 +48,7 @@ print(result.output.text())
 
 No optimizer, no engine, no checkpointer, no verifier, no deps, no memory. Just works.
 
-### Level 1: Agent + Tools (auto-escalates)
+### Level 1: Agent + Tools
 
 Add tools and the agent automatically uses its tool loop. No strategy selection needed.
 
@@ -64,7 +64,8 @@ agent = Agent(model="openai:gpt-4o-mini", tools=[search])
 result = agent.run("Find the latest AI news")
 ```
 
-The complexity router auto-escalates: simple inputs get single-shot responses, complex inputs trigger the tool loop or self-plan — all transparent.
+With tools attached, runs use the tool loop; without tools, a single model call. Pass
+`complexity_router=` only when you want explicit single-shot / tool-loop / plan routing.
 
 ### Level 2: Agent + Verifier (output guardrail)
 
@@ -305,12 +306,15 @@ result = await team.arun("Review our API design")
 
 | Mode | Behavior |
 |------|----------|
-| `coordinate` | Delegate to ALL members, synthesize results |
-| `route` | Pick the single best member for the task |
-| `broadcast` | Send same input to all, merge labeled results |
-| `sequential` | Chain members in order, each builds on previous |
+| `coordinate` | Soft: LLM delegates to ALL members, synthesizes results |
+| `route` | Soft: LLM picks the single best member |
+| `broadcast` | Hard by default: same input to all, merge labeled results |
+| `sequential` | Hard by default: chain members in order |
 
-Under the hood, `Team` creates a parent Agent with auto-generated instructions and `subagents=members`.
+`hard=True` is only valid with `broadcast` / `sequential` (raises otherwise).
+`hard=False` on those modes opts into soft LLM coordination instead.
+
+Under the hood, soft modes create a parent Agent with auto-generated instructions and `subagents=members`.
 
 ### Running
 
@@ -325,6 +329,9 @@ result = agent.run("hello")
 async for chunk in agent.astream("hello"):
     print(chunk.delta.data.decode(), end="")
 ```
+
+`astream` uses provider `stream()` only for single-shot runs (no tools). With tools,
+it falls back to `arun` then chunks so the tool loop is preserved.
 
 ### RunResult
 
@@ -394,7 +401,10 @@ built = agent.build()
 built.cancel()   # or agent.cancel() — cooperative at tool-loop boundaries
 ```
 
-SSE / NDJSON client disconnect on `mount_*` also calls cancel.
+SSE / NDJSON client disconnect on `mount_agent` calls `cancel()` when the target
+exposes it (`BuiltAgent` / normal `Agent`). Case / Workflow / Team do not implement
+cancel yet — disconnect stops reading the stream but does not cooperative-cancel
+the underlying run.
 
 See `examples/deep_agent/` and `loomable/skills/research/SKILL.md`.
 
@@ -657,8 +667,8 @@ you pass a bare `note_store=` with `user_id`/`scopes`.
 
 | Surface | Conversation L1/L2 | Long-term L3 | Notes |
 |---------|--------------------|--------------|-------|
-| **Agent** | `Memory.compose` (or flat stores alone) | `UserMemory` notes layer | Prefer compose |
-| **Team** | Same kwargs → **coordinator** | Same → coordinator | Members keep their own memory |
+| **Agent** | `Memory.compose` (or flat stores alone) | `UserMemory` notes layer | Prefer compose; `scopes=` / `user_id=` stamp UserMemory |
+| **Team** | Same memory kwargs → **coordinator** | Same → coordinator | No Team-level `scopes=`; set on members or coordinator `memory=` / `user_id=` |
 | **Case** | Same → role-scoped sessions | Shared notes | `from_agent` copies memory |
 | **Workflow step** | Agent’s own memory | Agent’s own notes | `Workflow(memory=True)` is working blackboard |
 | **mount_agent** | `bind_session` reloads L1/L2 | unchanged | |
@@ -801,7 +811,8 @@ docker compose up -d
 ```
 
 `PostgresCheckpointer` is for Case/Workflow resume — not Agent chat history.  
-`memory_tool=True` without a note store is a no-op.  
+`memory_tool=True` / `UserMemory(auto_extract=True)` without a resolvable note store raises `AgentConfigError` (pass `note_store=` or `embedder=`).  
+`knowledge=[...]` without `embedder=` also raises — use `knowledge_base=` for search tools without passive injection.  
 Install L3 default: `pip install 'loomable[zvec]'`.  
 `knowledge` RAG uses its own store when configured — separate from `note_store`.
 
@@ -1152,9 +1163,10 @@ async for chunk in agent.astream("Tell me about AI"):
         print()  # final chunk
 ```
 
-- Real token-level deltas when the provider supports `stream()`
-- Automatic fallback to chunked output for non-streaming providers
-- Same context assembly, memory, and capability gating as `arun()`
+- Real token-level deltas when the provider supports `stream()` **and** the run is
+  single-shot (no tools / no complexity router)
+- Automatic fallback to `arun` then chunked output otherwise (preserves tool loop)
+- Same context assembly, memory, and capability gating as `arun()` on the fallback path
 
 ### AG-UI events (in-process)
 
@@ -1192,9 +1204,9 @@ app = FastAPI()
 # Optional api_key=: require Authorization: Bearer … or X-API-Key (401 if missing)
 mount_agent(app, agent, prefix="/agent", api_key="secret")
 mount_case(app, case, prefix="/cases", api_key="secret")
-# POST /agent/run/events  → text/event-stream (disconnect → cancel)
+# POST /agent/run/events  → text/event-stream (disconnect → cancel when supported)
 # POST /cases/run/events  → text/event-stream
-# Optional: POST /agent/run/stream → NDJSON for simple clients
+# Optional: POST /agent/run/stream → NDJSON (Agent/BuiltAgent only; omitted for Case / mode=case)
 ```
 
 See [SECURITY.md](../SECURITY.md) for trust boundaries.
@@ -1498,7 +1510,7 @@ app = FastAPI()
 mount_agent(app, agent, prefix="/agent", api_key="optional-shared-secret")
 # GET  /agent/health
 # POST /agent/run
-# POST /agent/run/stream   (NDJSON; disconnect → BuiltAgent.cancel)
+# POST /agent/run/stream   (NDJSON when astream is usable; disconnect → cancel)
 # POST /agent/run/events   (AG-UI SSE; disconnect → cancel)
 
 # Or dual-mount at / and /agent:
@@ -1516,7 +1528,9 @@ from loomable.serve import mount_case
 
 case = Case(model=provider, goal="...", board=True, accept=ok)
 mount_case(app, case, prefix="/cases", api_key="optional-shared-secret")
-# POST /cases/run/events → text/event-stream
+# POST /cases/run          → JSON result
+# POST /cases/run/events   → text/event-stream
+# (no /run/stream — Case has no astream; use SSE)
 ```
 
 ### MCP Server (expose agent as a tool)

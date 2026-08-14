@@ -38,6 +38,13 @@
 - Memory compose example uses `Memory.compose` (not flat `session_store=` / `note_store=`)
 - Shared provider helper adds `make_embedder()` aligned with chat credentials
 - Renamed `memory/03_workflow_shared_memory.py`, `advanced/02_workflow_branch.py`
+- Fail loud on silent no-ops: `knowledge=` without `embedder=`, `memory_tool=`/`UserMemory(auto_extract=)` without a note store, `Team(hard=True)` on soft modes
+- `mount_case` / case-mode Agent omit NDJSON `/run/stream`; `Agent(mode="case").astream` raises
+- `knowledge_base=` promoted to Stable in STABILITY.md
+- `BuiltAgent.astream` falls back to `arun` when tools / complexity router are present (no silent tool skip)
+- Reject unknown `Agent(mode=...)`, invalid `dispatch=`, and case-only `checkpointer=`/`max_rounds=` without `mode="case"`
+- Remove unused `ConversationMemory.scope`; wire `Agent(description=)` into the system prompt
+- Docs honesty: complexity router is opt-in; cancel-on-disconnect is Agent/BuiltAgent; Team has no `scopes=`
 
 ### Removed (greenfield clean — no compatibility shims)
 

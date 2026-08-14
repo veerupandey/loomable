@@ -704,7 +704,12 @@ def build_case_workflow(
 
 
 class Case:
-    """Long-running case: goal + WorkItems board + dispatch + accept gate."""
+    """Long-running case: goal + WorkItems board + dispatch + accept gate.
+
+    ``max_steps`` caps planner WorkItems for this Case. When wrapping via
+    ``Agent(mode="case", max_plan_steps=...)``, the Agent knob maps to
+    ``max_steps`` on the underlying Case.
+    """
 
     def __init__(
         self,
