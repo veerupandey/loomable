@@ -22,6 +22,7 @@ Workflows, and Cases with SharedState, HITL, checkpoints, and AG-UI SSE.
 - [Flow Engine](#flow-engine)
 - [Knowledge / RAG](#knowledge--rag)
 - [Production Hardening](#production-hardening)
+- [Retrieval](#retrieval-docs-code-mixed-corpora)
 - [MCP Integration](#mcp-integration)
 - [Serving](#serving)
 - [Checkpointing](#checkpointing)
@@ -1379,6 +1380,36 @@ agent = Agent(
 | Plan tool | Model can self-escalate to fan-out |
 
 ---
+
+
+## Retrieval (docs, code, mixed corpora)
+
+High-level API to ingest heterogeneous sources, chunk them, and build a
+:class:`~loomable.kernel.contracts.Retriever` for ``Agent(retrievers=[...])``.
+
+```python
+from loomable import Agent
+from loomable.retrieval import build_retriever, list_strategies
+
+retriever = await build_retriever(
+    [
+        "./docs",                 # directory
+        "./README.md",            # file
+        {"id": "note", "text": "Inline knowledge"},
+    ],
+    name="docs",
+    mode="hybrid",              # vector | lexical | hybrid
+    strategy="auto",            # text | markdown | code | html | pdf | auto
+    persist_path="./.loomable/docs.zvec.json",  # file-backed zvec
+    # embedder=OpenAIEmbedder(), store=LongTermStore(backend=...),
+)
+agent = Agent(model=provider, retrievers=[retriever])
+```
+
+Chunk strategies are pluggable via ``register_strategy``. Deep code
+(``CodeIndex`` / ``profile="code"``) uses the same ``code`` strategy and zvec store.
+
+See ``examples/advanced/02_build_retriever.py``.
 
 ## MCP Integration
 

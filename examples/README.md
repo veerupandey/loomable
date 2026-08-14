@@ -14,6 +14,7 @@
 | Deep agent (LangGraph-style) | `create_deep_agent` | `deep_agent/` |
 | Sandbox + browser skill/MCP | `code_exec` / `shell` / `skills=["browser"]` | `deep_agent/05_sandbox_browser.py` |
 | Deep code (repo index + coding) | `profile="code"` / `CodeIndex` | `deep_agent/06_deep_code.py` |
+| Build retrievers (docs/code) | `build_retriever` | `advanced/02_build_retriever.py` |
 | RAG | `knowledge` + embedder | `agents/05_with_knowledge.py` |
 | Production hardening | resilience + hooks | `agents/06_production.py` |
 | Specialists | `Team` / subagents | `subagents/` |
