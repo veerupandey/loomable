@@ -1,10 +1,8 @@
-"""Competitive plan: beat deepagents / Claude Code / OpenAI Agents / Agno / CrewAI.
+# Competitive notes
 
-Loomable wins by shipping progressive disclosure *and* enterprise primitives
-(Agent | Team | Workflow | Case + AG-UI + Memory) on one loomable-only stack.
-"""
+Loomable ships progressive disclosure and enterprise primitives
+(Agent | Team | Workflow | Case + AG-UI + Memory) on one stack.
 
-# Beat industry frameworks — loomable deep agent
 
 ## Thesis
 

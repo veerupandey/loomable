@@ -31,6 +31,14 @@ class ToolRuntime:
         """
         self._tools = tools
 
+    def __contains__(self, name: object) -> bool:
+        return isinstance(name, str) and name in self._tools
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        """Registered tool names, sorted."""
+        return tuple(sorted(self._tools))
+
     async def dispatch(self, calls: list[ToolCall]) -> list[ToolOutcome]:
         """Dispatch tool calls concurrently and return their outcomes.
 

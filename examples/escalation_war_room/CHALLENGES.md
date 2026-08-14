@@ -13,7 +13,7 @@ Findings from stress (`08`) and HITL (`09`) exams, plus Case / AG-UI SSE.
 | `require_tools` with path constraints | Forces side-effect writes |
 | Fluent HITL `confirm=True` + `approve()` | Pause without low-level `Node` APIs |
 | `Case` + WorkItems board | Plan → dispatch → accept with `STATE_*` |
-| Agent / Case AG-UI SSE | CopilotKit-compatible event types |
+| Agent / Case AG-UI SSE | Lifecycle, text, tools, nodes, `STATE_*` |
 
 ## Easy API contract
 

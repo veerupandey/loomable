@@ -17,7 +17,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from loomable import Agent, Step, Workflow, tool
+from loomable import Agent, Workflow, tool
 from loomable.toolkits import FileTools, PDFTools, PPTTools
 
 from _common import ESCALATION_EMAIL, FIXTURES, OUTPUT, ROOT, make_provider

@@ -8,7 +8,6 @@ Asserts text/event-stream with RUN_STARTED → TEXT_* → RUN_FINISHED.
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 
 from loomable import Agent
