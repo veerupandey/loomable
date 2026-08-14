@@ -143,7 +143,7 @@ wf = (
 )
 ```
 
-Declarative style still works: `Workflow("pipe", steps=[Step("a", a), Step("b", b)])`.
+Declarative style: `Workflow("pipe", steps=[Step("a", a), Step("b", b)])`.
 
 Low-level `Flow` / `Edge` remain available as an advanced escape hatch
 (see [Flow Engine](#flow-engine)). Prefer the `Workflow` builders above.
@@ -963,7 +963,7 @@ result = await agent.arun("Analyze", images=[
     Image(content=raw_bytes),
 ])
 
-# Explicit control via low-level helper (still works)
+# Explicit control via low-level helper
 from loomable.agent import image
 result = await agent.arun("Analyze", images=[
     image(path="./photo.jpg"),
@@ -1033,7 +1033,7 @@ if result.images:
 
 Ordering: model-generated media appears first, followed by tool-generated media in tool invocation order.
 
-### Output: low-level access (still works)
+### Output: low-level access
 
 ```python
 # Image output (when model generates images)
@@ -1194,7 +1194,7 @@ mount_agent(app, agent, prefix="/agent", api_key="secret")
 mount_case(app, case, prefix="/cases", api_key="secret")
 # POST /agent/run/events  → text/event-stream (disconnect → cancel)
 # POST /cases/run/events  → text/event-stream
-# POST /agent/run/stream  → application/x-ndjson (legacy)
+# Optional: POST /agent/run/stream → NDJSON for simple clients
 ```
 
 See [SECURITY.md](../SECURITY.md) for trust boundaries.
@@ -1203,7 +1203,8 @@ See [SECURITY.md](../SECURITY.md) for trust boundaries.
 
 ## Flow Engine
 
-The unified composition model. One primitive (`Runnable`), one composition path (`Flow` / `Workflow`).
+Prefer **`Workflow`** for multi-step processes. `Flow` / engines / edges are the
+compiled graph escape hatch underneath.
 
 ### Core Concepts
 
@@ -1263,7 +1264,7 @@ from loomable.flow import (
     Verifier, VerdictResult, AlwaysOkVerifier, CallableVerifier,
     # Advanced graph escape hatch
     Flow, FlowPlan, Node, Edge, MapNode, RouterNode, FlowConfigError,
-    FlowClass, start, listen, router,  # experimental decorator DSL
+    FlowClass, start, listen, router,  # experimental — prefer Workflow
     # State / engines
     SharedState, Reducer, overwrite, append, merge,
     ExecutionEngine, SequentialEngine, ParallelEngine, HierarchicalEngine,
@@ -1274,6 +1275,7 @@ from loomable.flow import (
     plan_and_execute,  # used by Workflow.map
 )
 # Advanced Flow helpers: from loomable.flow.helpers import sequential, parallel, ...
+# ExtensionRegistry (experimental): from loomable.kernel.registry import ExtensionRegistry
 ```
 
 ---
@@ -1441,7 +1443,7 @@ retriever = await build_agentic_retriever(
 )
 ```
 
-Legacy one-shot: ``build_retriever(..., mode="hybrid")`` still works.
+Simple hybrid retriever: ``build_retriever(..., mode="hybrid")``.
 Chunk strategies remain pluggable via ``register_strategy``.
 Deep code (``CodeIndex``) shares the same chunk/store stack.
 

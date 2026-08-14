@@ -36,12 +36,6 @@ from loomable.kernel.memory import MemoryManager
 from loomable.kernel.summarizer import Summarizer
 from loomable.kernel.model_interface import ModelInterface
 from loomable.kernel.model_router import ModelRouter, TierSubstitution
-from loomable.kernel.registry import (
-    ExtensionHandle,
-    ExtensionRegistry,
-    ExtensionSpec,
-    KernelData,
-)
 from loomable.kernel.retrievers import RetrieverTool
 from loomable.kernel.tool_runtime import ToolRuntime
 from loomable.kernel.models import (
@@ -94,11 +88,6 @@ __all__ = [
     # Model Router
     "ModelRouter",
     "TierSubstitution",
-    # Registry
-    "ExtensionHandle",
-    "ExtensionRegistry",
-    "ExtensionSpec",
-    "KernelData",
     # Retrievers
     "RetrieverTool",
     # Tool Runtime
