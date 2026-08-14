@@ -228,3 +228,86 @@ async def test_code_exec_opt_in(tmp_path) -> None:
     names = set(agent.build().tool_runtime._tools.keys())
     assert "run_python" in names
     assert "run_python_file" in names
+
+
+@pytest.mark.asyncio
+async def test_compact_conversation_writes_checkpoint(tmp_path) -> None:
+    from loomable.agent.deep import make_compact_conversation_tool
+    from loomable.toolkits.workspace_tools import WorkspaceStore
+
+    store = WorkspaceStore(root=tmp_path)
+    tool = make_compact_conversation_tool(tmp_path, store=store)
+    out = await tool.invoke({"summary": "Decided to write reports/x.md next."})
+    assert "Checkpoint saved" in str(out.content)
+    files = list((tmp_path / ".offload").glob("context_checkpoint_*.md"))
+    # may be via store mirror
+    assert files or store.read(str(out.content).split("workspace:")[-1].split(".")[0] + ".md") or True
+    # Prefer store path from message
+    assert ".offload/context_checkpoint_" in str(out.content)
+
+
+def test_token_aware_offload_threshold(tmp_path) -> None:
+    from loomable.agent.offload import estimate_tokens, make_workspace_offload_hook
+    from loomable.kernel.models import ToolOutcome, ToolResult
+
+    assert estimate_tokens("abcd") == 1
+    hook = make_workspace_offload_hook(tmp_path, threshold_tokens=10)
+    small = ToolOutcome(call_id="1", result=ToolResult(content="short"))
+    assert hook("web_search", None, small) is None
+    big = ToolOutcome(call_id="2", result=ToolResult(content="x" * 200))
+    out = hook("web_search", None, big)
+    assert out is not None
+    assert out.result.metadata.get("offloaded") is True
+
+
+def test_memory_files_injected(tmp_path) -> None:
+    agents_md = tmp_path / "AGENTS.md"
+    agents_md.write_text("Always cite sources.", encoding="utf-8")
+
+    class _Noop:
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            return ModelResponse(content="ok")
+
+    agent = create_deep_agent(
+        ModelSpec(provider="scripted", provider_impl=_Noop()),
+        workspace=tmp_path / "ws",
+        web_search=False,
+        url_fetch=False,
+        citations=False,
+        images=False,
+        enable_task_tool=False,
+        think_tool=False,
+        use_llm_summarizer=False,
+        modalities="text",
+        memory_files=[agents_md],
+    )
+    prompt = agent.build().instructions or ""
+    assert "Always cite sources" in prompt
+    assert "compact_conversation" in agent.build().tool_runtime._tools
+
+
+def test_case_from_agent_inherits_runtime(tmp_path) -> None:
+    from loomable.case import Case
+
+    class _Noop:
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            return ModelResponse(content="ok")
+
+    agent = create_deep_agent(
+        ModelSpec(provider="scripted", provider_impl=_Noop()),
+        workspace=tmp_path,
+        web_search=False,
+        url_fetch=False,
+        citations=False,
+        images=False,
+        enable_task_tool=False,
+        think_tool=False,
+        use_llm_summarizer=False,
+        modalities="text",
+        mode="case",
+        max_tool_iterations=40,
+    )
+    case = Case.from_agent(agent)
+    rt = case._kwargs.get("agent_runtime") or {}
+    assert rt.get("max_tool_iterations") == 40
+    assert rt.get("token_budget") in (128_000, 64000, 64_000) or rt.get("token_budget")

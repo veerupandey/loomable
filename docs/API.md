@@ -413,19 +413,21 @@ result.trace               # list of Event objects (when debug=True)
 
 ## Deep Agent
 
-LangGraph-style long-horizon harness (`create_deep_agent` / `create_research_agent`)
-on top of `Agent` — designed to match and beat langchain-ai/deepagents for research:
+Loomable-native long-horizon harness (`create_deep_agent` / `create_research_agent`)
+built **solely on loomable** — designed to **beat other deep agents** (LangGraph
+deepagents, Agno teams, CrewAI crews) on research and hard delivery:
 
 1. **Planning** — `TodoTools` (`write_todos` / `read_todos` / `update_todo`)
-2. **Workspace FS** — `WorkspaceTools` (`ls` / `read_file` / `write_file` / `edit_file` / `glob` / `grep`) with sliced reads (`offset`/`limit`)
-3. **Subagents** — `task` tool with **shared workspace** + inherited budgets (plus optional `subagents=` / `mode="case"`)
-4. **Context** — think/plan, `Memory.compose`, LLM summarizer, **large-tool offload** to `.offload/`
-5. **Research defaults** — `WebSearchTools`, `URLTools` (capped + SSRF guard), `ImageTools`, `CitationTools`
-6. **Skills / HITL** — `skills=`, `require_confirmation=`, `require_tools=`
+2. **Workspace FS** — `WorkspaceTools` with sliced reads + **token-aware offload** to `.offload/`
+3. **Subagents** — `task` / `task_batch` + named `specialists=` + shared workspace (plus `mode="case"`)
+4. **Context** — `compact_conversation`, think/plan, `Memory.compose`, LLM summarizer, `memory_files=` (AGENTS.md)
+5. **Research defaults** — search, URL fetch (SSRF + redirect-safe), images, citations (`verify_source` / `register_claim`)
+6. **Gates / HITL** — `require_tools=["write_file:reports/", "register_source"]`, research accept verifier, `require_confirmation=`, `code_exec=`
 
 ```python
 from pathlib import Path
 from loomable import create_research_agent, Memory, ConversationMemory, UserMemory
+from loomable.agent.deep import SpecialistSpec
 
 agent = create_research_agent(
     model="openai:gpt-4o-mini",
@@ -435,14 +437,20 @@ agent = create_research_agent(
         user=UserMemory(auto_extract=True),
     ),
     skills=[Path("examples/deep_agent/skills/research")],
+    specialists={
+        "web-researcher": SpecialistSpec(
+            name="web-researcher",
+            description="Finds primary sources",
+        ),
+    },
 )
 await agent.arun("Research X and write reports/x.md with citations")
 ```
 
 Industry defaults: `modalities="text+image"`, `use_llm_summarizer=True`,
-`max_tool_iterations=40`, `token_budget=128000` (context window),
-`max_run_tokens=0` (unbounded cumulative spend), `url_max_length=8000`,
-research agents `require_tools=["write_file"]`.
+`max_tool_iterations=40`, `token_budget=128000`, `max_run_tokens=0`,
+`tool_concurrency=4`, `tool_timeout=60`, `offload_threshold_tokens=3000`,
+`url_max_length=8000`, research accept gate on `reports/` + sources.
 
 See `examples/deep_agent/` (including `03_live_multimodal_research.py`).
 

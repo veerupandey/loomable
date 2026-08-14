@@ -1,14 +1,13 @@
-"""Deep Agent harness — LangGraph-style long-horizon agent on loomable.
+"""Deep Agent harness — loomable-native long-horizon agent.
 
-Four pillars (same idea as langchain-ai/deepagents), plus research wins:
+Built **solely on loomable** (no LangGraph / deepagents dependency). Designed to
+beat other deep-agent stacks on research and hard long-horizon work:
 
 1. **Planning** — ``TodoTools`` (``write_todos`` / ``read_todos`` / ``update_todo``)
-2. **Workspace FS** — ``WorkspaceTools`` (ls/read/write/edit/glob/grep) to offload context
-3. **Subagents** — ``task`` / ``task_batch`` (+ named ``specialists`` / Case spawn)
-4. **Context engineering** — think/plan tools, memory, compaction, large-tool offload
-
-Research defaults also bundle web search, URL fetch, image analyze, citations,
-parallel fan-out, verification accept gate, and optional code exec.
+2. **Workspace FS** — ``WorkspaceTools`` + token-aware offload (not truncate)
+3. **Subagents** — ``task`` / ``task_batch`` + named ``specialists`` + Case spawn
+4. **Context engineering** — think/plan, compact_conversation, Memory, summarizer
+5. **Research** — search, fetch, citations (verify/claim), vision, accept gates
 """
 
 from __future__ import annotations
@@ -16,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -32,6 +32,7 @@ __all__ = [
     "SpecialistSpec",
     "create_deep_agent",
     "create_research_agent",
+    "make_compact_conversation_tool",
     "make_research_accept",
     "make_task_tool",
     "make_task_tools",
@@ -40,8 +41,9 @@ __all__ = [
 logger = logging.getLogger("loomable.agent.deep")
 
 DEEP_AGENT_INSTRUCTIONS = """\
-You are a deep agent: you solve hard, long-horizon tasks by planning, offloading
-context to the workspace filesystem, and delegating focused sub-work.
+You are a loomable deep agent: a long-horizon agent built solely on loomable
+(not LangGraph). You beat generic deep-agent scaffolds by planning, offloading
+evidence to a shared workspace, verifying sources, and delegating in parallel.
 
 Operating rules:
 1. Start by calling write_todos with a concrete checklist for the user goal.
@@ -68,7 +70,9 @@ Operating rules:
    you can read.
 8. Use think for brief private reasoning; use memory when durable facts should
    survive beyond this session (if the memory tool is available).
-9. Finish by writing the user-facing deliverable under reports/ with write_file,
+9. When chat context feels heavy, call compact_conversation with a short
+   checkpoint summary so the workspace remains the source of truth.
+10. Finish by writing the user-facing deliverable under reports/ with write_file,
    then mark todos completed in at most one update_todo call and STOP. Do not
    keep updating todos after the report exists — emit your final answer
    summarizing the deliverable path. Do not stop after format_bibliography alone —
@@ -77,6 +81,76 @@ Operating rules:
 Quality bar: be concrete, cite verified sources, and verify the deliverable
 against the original goal before stopping.
 """
+
+
+def make_compact_conversation_tool(
+    workspace: str | Path,
+    *,
+    store: Any | None = None,
+) -> FunctionTool:
+    """Tool that archives a context checkpoint into the shared workspace."""
+
+    root = Path(workspace)
+
+    async def compact_conversation(summary: str) -> str:
+        """Save a context checkpoint to the workspace and continue from files.
+
+        Call when the conversation is getting long. Pass a short summary of
+        decisions, open questions, and key file paths. Prefer workspace files
+        over replaying chat history after this.
+        """
+        text = (summary or "").strip()
+        if not text:
+            return "Error: summary is required"
+        stamp = time.strftime("%Y%m%dT%H%M%S")
+        rel = f".offload/context_checkpoint_{stamp}.md"
+        body = (
+            f"# Context checkpoint ({stamp})\n\n"
+            f"{text}\n\n"
+            "_Continue from workspace files; do not reload full chat history._\n"
+        )
+        if store is not None and hasattr(store, "write"):
+            written = store.write(rel, body)
+            if written is None:
+                (root / ".offload").mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text(body, encoding="utf-8")
+        else:
+            (root / ".offload").mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(body, encoding="utf-8")
+        return (
+            f"Checkpoint saved to workspace:{rel}. "
+            "Treat workspace files as source of truth; keep subsequent replies short."
+        )
+
+    return FunctionTool(
+        compact_conversation,
+        name="compact_conversation",
+        description=(
+            "Archive a short context checkpoint to .offload/ and continue from "
+            "workspace files when the chat is getting long."
+        ),
+        idempotent=False,
+    )
+
+
+def _load_memory_files(paths: Sequence[str | Path] | None) -> str:
+    """Load always-on project memory files (e.g. AGENTS.md) into instructions."""
+    if not paths:
+        return ""
+    chunks: list[str] = []
+    for raw in paths:
+        path = Path(raw)
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if text:
+            chunks.append(f"### {path.name}\n{text}")
+    if not chunks:
+        return ""
+    return "Project memory (always follow):\n\n" + "\n\n".join(chunks)
 
 
 @dataclass
@@ -376,7 +450,9 @@ def create_deep_agent(
     documents: bool = False,
     code_exec: bool = False,
     offload_large_tools: bool = True,
-    offload_threshold: int = 12_000,
+    offload_threshold: int | None = None,
+    offload_threshold_tokens: int = 3_000,
+    memory_files: Sequence[str | Path] | None = None,
     think_tool: bool = True,
     plan_tool: bool = False,
     enable_task_tool: bool = True,
@@ -515,9 +591,14 @@ def create_deep_agent(
             make_workspace_offload_hook(
                 root,
                 threshold=offload_threshold,
+                threshold_tokens=offload_threshold_tokens,
                 store=workspace_kit.store,
             )
         )
+
+    bundled.append(
+        make_compact_conversation_tool(root, store=workspace_kit.store)
+    )
 
     if enable_task_tool:
         bundled.extend(
@@ -546,6 +627,9 @@ def create_deep_agent(
         bundled.extend(list(tools))
 
     prompt = DEEP_AGENT_INSTRUCTIONS
+    memory_block = _load_memory_files(memory_files)
+    if memory_block:
+        prompt = f"{prompt}\n\n{memory_block}"
     if specialist_registry:
         lines = [
             f"- {k}: {v.description or v.role or v.name}"
