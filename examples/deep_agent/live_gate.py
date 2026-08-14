@@ -1,8 +1,10 @@
-"""Live Gemini gate for loomable create_deep_agent (research + discovery).
+"""Live Gemini correctness gate (CI / workflow_dispatch — not a tutorial).
 
-Measures schema budget, runs a bounded research brief, and checks accept.
+Runs a bounded research brief and checks the deliverable gate. ``arun()``
+already builds the agent; ``build()`` here is only used to print advertised
+vs deferred tool counts.
 
-    DEEP_AGENT_LIVE=1 python examples/deep_agent/05_live_gemini_gate.py
+    python examples/deep_agent/live_gate.py
 """
 
 from __future__ import annotations
@@ -87,6 +89,7 @@ async def main() -> None:
         ),
     )
 
+    # Optional: arun() builds internally. Inspect tools only for this gate.
     built = agent.build()
     advertised = _schema_count(built)
     catalog = _catalog_counts(built)

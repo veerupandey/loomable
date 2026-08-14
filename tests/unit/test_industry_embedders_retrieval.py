@@ -120,8 +120,7 @@ async def test_live_gemini_embed_and_retrieve(tmp_path: Path) -> None:
         "# Recipes\n\nBake sourdough at 230C for 40 minutes.\n",
         encoding="utf-8",
     )
-    dims = len(v)
-    store = open_vector_store(engine="faiss", dimensions=dims, device="cpu")
+    store = open_vector_store(engine="memory")
     corpus = await ingest(
         [docs],
         name="docs",
@@ -162,7 +161,7 @@ async def test_live_huggingface_minilm_retrieve(tmp_path: Path) -> None:
         "# Sports\n\nThe team won the championship in overtime.\n",
         encoding="utf-8",
     )
-    store = open_vector_store(engine="faiss", dimensions=384, device="cpu")
+    store = open_vector_store(engine="memory")
     corpus = await ingest(
         [docs],
         name="docs",
@@ -234,8 +233,8 @@ async def test_agentic_hybrid_mmr_beats_naive_vector_on_mixed_queries(
     for name, text in corpus_files.items():
         (docs / name).write_text(text, encoding="utf-8")
 
-    store_a = open_vector_store(engine="faiss", dimensions=384, device="cpu")
-    store_b = open_vector_store(engine="faiss", dimensions=384, device="cpu")
+    store_a = open_vector_store(engine="memory")
+    store_b = open_vector_store(engine="memory")
     hybrid_corpus = await ingest(
         [docs],
         name="hybrid",
@@ -311,7 +310,7 @@ async def test_score_metadata_does_not_clobber_similarity(tmp_path: Path) -> Non
     (docs / "cooking.md").write_text(
         "# Cooking\n\nService the roast with gravy.\n", encoding="utf-8"
     )
-    store = open_vector_store(engine="faiss", dimensions=384, device="cpu")
+    store = open_vector_store(engine="memory")
     corp = await ingest(
         [docs],
         name="d",
@@ -402,8 +401,7 @@ async def test_live_gemini_quality_vs_hashing(tmp_path: Path) -> None:
     query = "How often should credentials be refreshed?"
 
     gem = GeminiEmbedder()
-    dims = len(await gem.embed("probe"))
-    g_store = open_vector_store(engine="faiss", dimensions=dims, device="cpu")
+    g_store = open_vector_store(engine="memory")
     g_corp = await ingest(
         [docs],
         name="g",
