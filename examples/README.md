@@ -11,7 +11,7 @@
 | User / long-term memory | `Memory.compose` + `UserMemory` | `memory/02_user_memory.py` |
 | Shared memory across a Workflow | `Workflow(..., memory=True)` | `memory/03_workflow_shared_memory.py` |
 | Compose Postgres L1/L2 + zvec L3 | `Memory.compose` + Postgres / zvec | `memory/04_compose_postgres_zvec.py` |
-| Unified Memory.compose | `Memory.compose(conversation=..., user=...)` | `memory/05_compose_memory.py` |
+| Unified Memory.compose | `Memory.compose(conversation=..., user=..., knowledge=...)` | `memory/05_compose_memory.py` |
 | Claim / custom scopes | `scopes={"claim_id": "..."}` | `memory/06_claim_scopes.py` |
 | Deep agent | `create_deep_agent(profile=...)` | `deep_agent/` |
 | Progressive discovery | `search_skills` / `load_skill` / `activate_tool` | `deep_agent/02_progressive_discovery.py` |
