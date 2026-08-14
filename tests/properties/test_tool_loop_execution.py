@@ -64,7 +64,8 @@ iteration_st = st.lists(tool_call_spec_st, min_size=1, max_size=3)
 scripted_sequence_st = st.lists(iteration_st, min_size=1, max_size=4)
 
 # Strategy: the final answer text
-final_answer_st = st.text(min_size=1, max_size=50)
+# Non-whitespace: empty/whitespace finals are synthesized into a summary.
+final_answer_st = st.text(min_size=1, max_size=50).filter(lambda s: bool(s.strip()))
 
 # Strategy: max_tool_iterations (at least 1)
 max_iterations_st = st.integers(min_value=1, max_value=10)

@@ -142,3 +142,13 @@ class TestMemoryManagerInit:
         )
         mm = MemoryManager(long_term_store=custom_store)
         assert mm.l3 is custom_store
+
+    @pytest.mark.asyncio
+    async def test_two_default_stores_do_not_deadlock_on_zvec_lock(self) -> None:
+        pytest.importorskip("zvec")
+        first = LongTermStore()
+        await first.index("note-1", [1.0, 0.0, 0.0], {"topic": "lock"})
+        second = LongTermStore()
+        hits = await second.query([1.0, 0.0, 0.0], k=1)
+        assert hits
+        assert hits[0]["id"] == "note-1"
