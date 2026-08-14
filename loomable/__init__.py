@@ -21,6 +21,7 @@ from loomable.agent import (
     RunResult,
     Team,
     create_deep_agent,
+    create_research_agent,
     spawn_specialist,
     tool,
 )
@@ -81,6 +82,7 @@ __all__ = [
     "ContextPolicy",
     "spawn_specialist",
     "create_deep_agent",
+    "create_research_agent",
     "Memory",
     "MemoryScope",
     "ConversationMemory",

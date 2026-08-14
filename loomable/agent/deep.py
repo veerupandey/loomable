@@ -1,17 +1,19 @@
 """Deep Agent harness — LangGraph-style long-horizon agent on loomable.
 
-Four pillars (same idea as langchain-ai/deepagents):
+Four pillars (same idea as langchain-ai/deepagents), plus research wins:
 
 1. **Planning** — ``TodoTools`` (``write_todos`` / ``read_todos`` / ``update_todo``)
 2. **Workspace FS** — ``WorkspaceTools`` (ls/read/write/edit/glob/grep) to offload context
 3. **Subagents** — ``task`` tool (+ optional named ``subagents=`` / Case spawn)
-4. **Context engineering** — think/plan tools, memory, compaction, long tool loops
+4. **Context engineering** — think/plan tools, memory, compaction, large-tool offload
+
+Research defaults also bundle web search, URL fetch, image analyze, and citations.
 
 Usage::
 
-    from loomable.agent.deep import create_deep_agent
+    from loomable.agent.deep import create_deep_agent, create_research_agent
 
-    agent = create_deep_agent(model=provider, workspace=\"./.deep_workspace\")
+    agent = create_research_agent(model=provider, workspace=\"./.deep_workspace\")
     result = await agent.arun(\"Research X and write a brief to /reports/x.md\")
 """
 
@@ -22,11 +24,13 @@ from typing import Any, Sequence
 
 from loomable.agent.builder import Agent
 from loomable.agent.delegation import spawn_specialist
+from loomable.agent.offload import make_workspace_offload_hook
 from loomable.agent.tools import FunctionTool
 
 __all__ = [
     "DEEP_AGENT_INSTRUCTIONS",
     "create_deep_agent",
+    "create_research_agent",
     "make_task_tool",
 ]
 
@@ -40,11 +44,17 @@ Operating rules:
 2. Prefer writing intermediate notes, research dumps, and drafts to workspace
    files (write_file / edit_file). Do not paste huge blobs into chat.
 3. Use read_file / grep / glob to pull back only the slices you need.
-4. Use the task tool to spawn a specialist for isolated research or drafting
+4. Use web_search to find sources, then fetch_url / extract_text for full pages.
+   Large tool results may be offloaded to .offload/ — read those files as needed.
+5. Register important sources with register_source; end deliverables with
+   format_bibliography (or paste its output into the report).
+6. For visual evidence: fetch_image then analyze_image; store notes under images/.
+7. Use the task tool to spawn a specialist for isolated research or drafting
    when that work would bloat your own context. Pass a crisp task description.
-5. Use think for brief private reasoning; use memory when durable facts should
+   Specialists share this workspace — they can write files you can read.
+8. Use think for brief private reasoning; use memory when durable facts should
    survive beyond this session (if the memory tool is available).
-6. Finish by producing the user-facing deliverable (and update todos to completed).
+9. Finish by producing the user-facing deliverable (and update todos to completed).
 
 Quality bar: be concrete, cite sources from tools when available, and verify
 the deliverable against the original goal before stopping.
@@ -78,6 +88,17 @@ def make_task_tool(
     return FunctionTool(task, name="task", idempotent=False)
 
 
+def _modalities_include_image(modalities: str | None) -> bool:
+    if not modalities:
+        return False
+    parts = {
+        p.strip().lower()
+        for p in modalities.replace(",", "+").replace("|", "+").split("+")
+        if p.strip()
+    }
+    return "image" in parts
+
+
 def create_deep_agent(
     model: Any,
     *,
@@ -90,9 +111,19 @@ def create_deep_agent(
     memory_backend: Any | None = None,
     note_store: Any | None = None,
     memory_tool: bool = False,
+    memory: Any = None,
     knowledge: list[str] | None = None,
     embedder: Any = None,
+    skills: list[Path] | None = None,
+    user_id: str | None = None,
+    scopes: dict[str, str] | None = None,
+    require_confirmation: list[str] | None = None,
     web_search: bool = True,
+    url_fetch: bool = True,
+    citations: bool = True,
+    images: bool | None = None,
+    offload_large_tools: bool = True,
+    offload_threshold: int = 12_000,
     think_tool: bool = True,
     plan_tool: bool = False,
     enable_task_tool: bool = True,
@@ -107,10 +138,10 @@ def create_deep_agent(
     max_tool_iterations: int = 40,
     memory_window: int = 16,
     compaction_threshold: int = 32,
-    use_llm_summarizer: bool = False,
+    use_llm_summarizer: bool = True,
     name: str = "deep-agent",
     goal: str = "Complete hard, long-horizon tasks with planning and delegation",
-    modalities: str = "text",
+    modalities: str = "text+image",
     debug: bool = False,
     **agent_kwargs: Any,
 ) -> Agent:
@@ -126,33 +157,74 @@ def create_deep_agent(
         Directory for virtual FS + persisted todos (created if missing).
     web_search:
         Include :class:`~loomable.toolkits.web_search.WebSearchTools` when available.
+    url_fetch:
+        Include :class:`~loomable.toolkits.url_tools.URLTools` when available.
+    citations:
+        Include :class:`~loomable.toolkits.citation_tools.CitationTools`.
+    images:
+        Include :class:`~loomable.toolkits.image_tools.ImageTools` when modalities
+        include image (default: auto).
+    offload_large_tools:
+        Post-hook that saves oversized tool results under ``.offload/``.
     enable_task_tool:
-        Register the general-purpose ``task`` subagent tool.
+        Register the general-purpose ``task`` subagent tool (shares workspace tools).
     mode:
         Pass ``\"case\"`` for Case plan→dispatch→synthesize→accept spine.
     max_tool_iterations:
         Deep work needs a higher ceiling than the Agent default.
     """
+    from loomable.toolkits.citation_tools import CitationTools
     from loomable.toolkits.todo_tools import TodoTools
     from loomable.toolkits.workspace_tools import WorkspaceTools
 
     root = Path(workspace)
     root.mkdir(parents=True, exist_ok=True)
 
-    bundled: list[Any] = [
-        TodoTools(workspace=root),
-        WorkspaceTools(root=root),
-    ]
+    todo_kit = TodoTools(workspace=root)
+    workspace_kit = WorkspaceTools(root=root)
+    citation_kit = CitationTools(workspace=root) if citations else None
+
+    bundled: list[Any] = [todo_kit, workspace_kit]
+    if citation_kit is not None:
+        bundled.append(citation_kit)
+
+    shared_for_task: list[Any] = [todo_kit, workspace_kit]
+    if citation_kit is not None:
+        shared_for_task.append(citation_kit)
 
     if web_search:
         try:
             from loomable.toolkits.web_search import WebSearchTools
 
-            bundled.append(WebSearchTools())
-            if task_tools is None:
-                task_tools = [WebSearchTools()]
+            search_kit = WebSearchTools()
+            bundled.append(search_kit)
+            shared_for_task.append(WebSearchTools())
         except Exception:  # noqa: BLE001 — optional deps / network backends
             pass
+
+    if url_fetch:
+        try:
+            from loomable.toolkits.url_tools import URLTools
+
+            url_kit = URLTools()
+            bundled.append(url_kit)
+            shared_for_task.append(URLTools())
+        except Exception:  # noqa: BLE001
+            pass
+
+    use_images = _modalities_include_image(modalities) if images is None else bool(images)
+    if use_images:
+        try:
+            from loomable.toolkits.image_tools import ImageTools
+
+            image_kit = ImageTools(workspace=root, model=model)
+            bundled.append(image_kit)
+            shared_for_task.append(ImageTools(workspace=root, model=model))
+        except Exception:  # noqa: BLE001 — httpx missing etc.
+            pass
+
+    if task_tools is None:
+        task_tools = list(shared_for_task)
 
     if enable_task_tool:
         bundled.append(
@@ -170,6 +242,13 @@ def create_deep_agent(
     if instructions:
         prompt = f"{prompt}\n\nAdditional instructions:\n{instructions.strip()}"
 
+    # Merge offload post-hook with any caller tool_hooks
+    existing_hooks = list(agent_kwargs.pop("tool_hooks", None) or [])
+    if offload_large_tools:
+        existing_hooks.append(
+            make_workspace_offload_hook(root, threshold=offload_threshold)
+        )
+
     kwargs: dict[str, Any] = dict(
         model=model,
         name=name,
@@ -178,15 +257,21 @@ def create_deep_agent(
         instructions=prompt,
         tools=bundled,
         subagents=subagents,
+        skills=skills,
         session_id=session_id,
         session_store=session_store,
         memory_backend=memory_backend,
         note_store=note_store,
         memory_tool=memory_tool,
+        memory=memory,
+        user_id=user_id,
+        scopes=scopes,
         knowledge=knowledge,
         embedder=embedder,
         think_tool=think_tool,
         plan_tool=plan_tool,
+        require_confirmation=require_confirmation,
+        tool_hooks=existing_hooks or None,
         max_tool_iterations=max_tool_iterations,
         memory_window=memory_window,
         compaction_threshold=compaction_threshold,
@@ -204,3 +289,37 @@ def create_deep_agent(
     kwargs.update(agent_kwargs)
     # Drop Nones so Agent defaults apply cleanly
     return Agent(**{k: v for k, v in kwargs.items() if v is not None})
+
+
+def create_research_agent(
+    model: Any,
+    *,
+    workspace: str | Path = "./.deep_workspace",
+    session_id: str | None = "research",
+    memory: Any = None,
+    skills: list[Path] | None = None,
+    **kwargs: Any,
+) -> Agent:
+    """Opinionated research deep agent — search, fetch, cite, vision, memory.
+
+    Thin wrapper around :func:`create_deep_agent` with research-ready defaults.
+    """
+    return create_deep_agent(
+        model,
+        workspace=workspace,
+        session_id=session_id,
+        memory=memory,
+        skills=skills,
+        web_search=kwargs.pop("web_search", True),
+        url_fetch=kwargs.pop("url_fetch", True),
+        citations=kwargs.pop("citations", True),
+        images=kwargs.pop("images", True),
+        modalities=kwargs.pop("modalities", "text+image"),
+        use_llm_summarizer=kwargs.pop("use_llm_summarizer", True),
+        name=kwargs.pop("name", "research-agent"),
+        goal=kwargs.pop(
+            "goal",
+            "Research topics thoroughly: search, fetch, cite, analyze images, deliver briefs",
+        ),
+        **kwargs,
+    )

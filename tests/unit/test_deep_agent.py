@@ -91,9 +91,13 @@ async def test_create_deep_agent_registers_core_tools(tmp_path) -> None:
         ModelSpec(provider="scripted", provider_impl=_Noop()),
         workspace=tmp_path,
         web_search=False,
+        url_fetch=False,
+        citations=True,
+        images=False,
         enable_task_tool=True,
         think_tool=True,
         modalities="text",
+        use_llm_summarizer=False,
     )
     built = agent.build()
     names = set(built.tool_runtime._tools.keys())
@@ -109,9 +113,29 @@ async def test_create_deep_agent_registers_core_tools(tmp_path) -> None:
         "grep",
         "task",
         "think",
+        "register_source",
+        "list_sources",
+        "format_bibliography",
     ):
         assert required in names, f"missing {required} in {sorted(names)}"
     assert built.max_tool_iterations == 40
+
+    # Multimodal research defaults register image tools
+    vision = create_deep_agent(
+        ModelSpec(provider="scripted", provider_impl=_Noop()),
+        workspace=tmp_path / "v",
+        web_search=False,
+        url_fetch=False,
+        citations=False,
+        images=True,
+        enable_task_tool=False,
+        think_tool=False,
+        modalities="text+image",
+        use_llm_summarizer=False,
+    )
+    vnames = set(vision.build().tool_runtime._tools.keys())
+    for required in ("fetch_image", "analyze_image", "list_images"):
+        assert required in vnames, f"missing {required}"
 
 
 @pytest.mark.asyncio
@@ -175,10 +199,14 @@ async def test_deep_agent_scripted_tool_loop(tmp_path) -> None:
         ModelSpec(provider="scripted", provider_impl=_DeepScript()),
         workspace=tmp_path,
         web_search=False,
+        url_fetch=False,
+        citations=False,
+        images=False,
         enable_task_tool=False,
         think_tool=False,
         modalities="text",
         max_tool_iterations=10,
+        use_llm_summarizer=False,
     )
     result = await agent.arun("Write a short brief about deep agents")
     text = result.output.text() or ""
@@ -206,3 +234,64 @@ def test_workspace_store_rejects_traversal() -> None:
     store = WorkspaceStore()
     assert store.write("../etc/passwd", "x") is None
     assert store.read("../etc/passwd") is None
+
+
+@pytest.mark.asyncio
+async def test_task_tool_shares_workspace(tmp_path) -> None:
+    """Specialists receive shared workspace tools and can write files parent can read."""
+
+    class _Writer:
+        def __init__(self) -> None:
+            self.wrote = False
+
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            if not self.wrote:
+                self.wrote = True
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id="w1",
+                            tool_name="write_file",
+                            args={
+                                "path": "notes/from_specialist.md",
+                                "content": "specialist note",
+                            },
+                        )
+                    ],
+                )
+            return ModelResponse(content="wrote notes/from_specialist.md")
+
+    from loomable.toolkits.workspace_tools import WorkspaceTools
+
+    model = ModelSpec(provider="scripted", provider_impl=_Writer())
+    tool = make_task_tool(
+        model=model,
+        tools=[WorkspaceTools(root=tmp_path)],
+        modalities="text",
+    )
+    out = _content(await tool.invoke({"description": "Write the note file", "role": "Writer"}))
+    assert "specialist" in out.lower() or "wrote" in out.lower()
+    assert (tmp_path / "notes" / "from_specialist.md").is_file()
+
+
+def test_create_research_agent_alias(tmp_path) -> None:
+    from loomable.agent.deep import create_research_agent
+
+    class _Noop:
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            return ModelResponse(content="ok")
+
+    agent = create_research_agent(
+        ModelSpec(provider="scripted", provider_impl=_Noop()),
+        workspace=tmp_path,
+        web_search=False,
+        url_fetch=False,
+        think_tool=False,
+        enable_task_tool=False,
+        use_llm_summarizer=False,
+    )
+    assert agent._name == "research-agent"
+    names = set(agent.build().tool_runtime._tools.keys())
+    assert "register_source" in names
+    assert "fetch_image" in names
