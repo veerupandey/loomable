@@ -14,7 +14,8 @@
   <a href="#core-primitives">Primitives</a> ·
   <a href="#ag-ui-sse">AG-UI SSE</a> ·
   <a href="#examples">Examples</a> ·
-  <a href="docs/API.md">API Reference</a>
+  <a href="docs/API.md">API Reference</a> ·
+  <a href="docs/BETA_PLAN.md">Beta plan</a>
 </p>
 
 ## Introduction
