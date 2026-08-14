@@ -9,6 +9,7 @@
 - `CodeIndex` + `CodeTools` + bundled `coding` skill + `create_deep_agent(profile="code")` (Alibaba zvec / pluggable store)
 - `loomable.retrieval`: chunk strategies, multi-doc ingest, `build_retriever` (vector/lexical/hybrid; Alibaba zvec / Postgres / custom)
 - Real **Alibaba zvec** file backend (`loomable[zvec]`), `open_vector_store()`, `InMemoryVectorBackend` for tests; `PgVectorBackend` remains the Postgres option
+- **FAISS** vector backend (`loomable[faiss]` / `faiss-gpu`): `FaissVectorBackend` + `open_vector_store(engine="faiss", device="cpu"|"gpu"|"auto")`
 - Stability policy ([docs/STABILITY.md](docs/STABILITY.md)), SECURITY.md, beta graduation plan
 - `BuiltAgent.cancel()` / `Agent.cancel()` with active `RunContext` tracking
 - SSE / stream client disconnect triggers cooperative cancel

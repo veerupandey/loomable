@@ -46,8 +46,9 @@ url = ["httpx", "beautifulsoup4"]
 web = ["ddgs"]
 postgres = ["asyncpg>=0.29.0"]
 zvec = ["zvec>=0.5.0"]
+faiss = ["faiss-cpu>=1.8.0"]
 toolkits = ["pypdf", "python-pptx", "httpx", "beautifulsoup4", "ddgs"]
-retrieval = ["zvec>=0.5.0"]
+retrieval = ["zvec>=0.5.0", "faiss-cpu>=1.8.0"]
 
 
 [dependency-groups]

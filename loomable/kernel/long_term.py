@@ -1,7 +1,7 @@
 """loomable.kernel.long_term - Long-Term Store with pluggable vector backend.
 
 Default **file** backend is Alibaba **zvec** (``pip install loomable[zvec]``).
-Pass ``backend=`` to use Postgres (:class:`PgVectorBackend`) or any object
+Pass ``backend=`` / ``engine=`` for Postgres, FAISS (CPU/GPU), or any object
 satisfying :class:`~loomable.kernel.contracts.VectorBackend`.
 
 Zero-dependency tests / ephemeral use: :class:`InMemoryVectorBackend`.
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from loomable.kernel.contracts import VectorBackend
 from loomable.kernel.errors import MemoryBackendError
@@ -24,12 +24,16 @@ __all__ = [
     "open_vector_store",
 ]
 
+EngineKind = Literal["zvec", "faiss", "postgres", "memory"]
+FaissDevice = Literal["cpu", "gpu", "auto"]
+
 
 class InMemoryVectorBackend:
     """Simple in-process cosine store (tests / no optional deps).
 
-    Not for production corpora — use :class:`ZvecVectorBackend` (Alibaba zvec)
-    or :class:`~loomable.providers.backends.postgres.PgVectorBackend`.
+    Not for production corpora — use :class:`ZvecVectorBackend` (Alibaba zvec),
+    :class:`~loomable.providers.backends.faiss.FaissVectorBackend`, or
+    :class:`~loomable.providers.backends.postgres.PgVectorBackend`.
     """
 
     def __init__(self) -> None:
@@ -128,18 +132,32 @@ def open_vector_store(
     postgres_url: str | None = None,
     dimensions: int | None = None,
     user_id: str | None = None,
+    engine: EngineKind | None = None,
+    device: FaissDevice = "cpu",
+    gpu_id: int = 0,
 ) -> LongTermStore:
-    """Factory: Alibaba zvec (file), Postgres, or explicit backend.
+    """Factory: Alibaba zvec, FAISS (CPU/GPU), Postgres, or explicit backend.
 
     ::
 
-        open_vector_store(path="./.loomable/vectors")           # Alibaba zvec
-        open_vector_store(postgres_url=DSN, dimensions=1536)    # PgVectorBackend
-        open_vector_store(backend=my_backend)                   # anything VectorBackend
+        open_vector_store(path="./.loomable/vectors")                    # Alibaba zvec
+        open_vector_store(engine="faiss", path="./.loomable/faiss",
+                          dimensions=1536, device="auto")               # FAISS
+        open_vector_store(postgres_url=DSN, dimensions=1536)            # Postgres
+        open_vector_store(backend=my_backend)                           # anything VectorBackend
+
+    ``engine`` selects the store when multiple options could apply. Defaults:
+    ``postgres_url`` → postgres; ``path`` → zvec; else memory. Pass
+    ``engine="faiss"`` to use FAISS (``pip install loomable[faiss]``; for GPU
+    install ``faiss-gpu`` instead of ``faiss-cpu``).
     """
     if backend is not None:
         return LongTermStore(backend=backend, backend_name="custom")
-    if postgres_url:
+
+    eng = (engine or "").strip().lower() or None
+    if eng == "postgres" or (postgres_url and eng is None):
+        if not postgres_url:
+            raise ValueError("engine='postgres' requires postgres_url=")
         from loomable.providers.backends.postgres import PgVectorBackend
 
         dims = int(dimensions or 1536)
@@ -149,7 +167,25 @@ def open_vector_store(
             ),
             backend_name="postgres",
         )
-    if path is not None:
+    if eng == "faiss":
+        from loomable.providers.backends.faiss import FaissVectorBackend
+
+        if dimensions is None:
+            raise ValueError("engine='faiss' requires dimensions=")
+        return LongTermStore(
+            backend=FaissVectorBackend(
+                dimensions=int(dimensions),
+                path=path,
+                device=device,
+                gpu_id=gpu_id,
+            ),
+            backend_name="faiss",
+        )
+    if eng == "memory":
+        return LongTermStore(backend_name="memory")
+    if eng == "zvec" or (path is not None and eng is None):
+        if path is None:
+            raise ValueError("engine='zvec' requires path=")
         return LongTermStore(path=path, dimensions=dimensions, backend_name="zvec")
     return LongTermStore(backend_name="memory")
 
