@@ -269,8 +269,19 @@ def make_task_tools(
     tool_timeout: float | None = None,
     tool_concurrency: int | None = None,
     enable_batch: bool = True,
+    discovery: bool | None = None,
+    discovery_core_tools: Sequence[str] | None = None,
+    defer_local_tools: bool | None = None,
+    lazy_mcp: bool | None = None,
+    activation_allowlist: Sequence[str] | None = None,
+    activation_denylist: Sequence[str] | None = None,
 ) -> list[FunctionTool]:
-    """Build ``task`` (+ optional ``task_batch``) tools for deep agents."""
+    """Build ``task`` (+ optional ``task_batch``) tools for deep agents.
+
+    Passing ``discovery=True`` (as :func:`create_deep_agent` does by default)
+    wires progressive capability discovery into every spawned specialist too,
+    so a large shared toolset doesn't blow the specialist's schema budget.
+    """
 
     registry: dict[str, SpecialistSpec | None] = {"general-purpose": None}
     for key, spec in (specialists or {}).items():
@@ -336,6 +347,12 @@ def make_task_tools(
             max_tool_iterations=use_iters,
             token_budget=token_budget,
             max_run_tokens=max_run_tokens,
+            discovery=discovery,
+            discovery_core_tools=list(discovery_core_tools) if discovery_core_tools else None,
+            defer_local_tools=defer_local_tools,
+            lazy_mcp=lazy_mcp,
+            activation_allowlist=list(activation_allowlist) if activation_allowlist else None,
+            activation_denylist=list(activation_denylist) if activation_denylist else None,
         )
 
     async def task(
@@ -695,6 +712,14 @@ def create_deep_agent(
                 tool_timeout=tool_timeout,
                 tool_concurrency=min(tool_concurrency, 4) if tool_concurrency else None,
                 enable_batch=enable_task_batch,
+                # Specialists share the same (large) research/toolkit surface as
+                # the parent — wire discovery so their schema budget stays small.
+                discovery=discovery if discovery else None,
+                discovery_core_tools=list(DEEP_DISCOVERY_CORE_TOOLS) if discovery else None,
+                defer_local_tools=True if discovery else None,
+                lazy_mcp=agent_kwargs.get("lazy_mcp"),
+                activation_allowlist=agent_kwargs.get("activation_allowlist"),
+                activation_denylist=agent_kwargs.get("activation_denylist"),
             )
         )
 
@@ -737,6 +762,12 @@ def create_deep_agent(
         # Progressive skills: metadata in prompt; load_skill for full body.
         # Callers can pass eager_skills=True via agent_kwargs for legacy behavior.
         eager_skills=agent_kwargs.pop("eager_skills", None),
+        # Lazy MCP / activation policy: Agent already defaults lazy_mcp=True
+        # when discovery is on; these just let callers override explicitly.
+        lazy_mcp=agent_kwargs.pop("lazy_mcp", None),
+        activation_allowlist=agent_kwargs.pop("activation_allowlist", None),
+        activation_denylist=agent_kwargs.pop("activation_denylist", None),
+        tool_namespaces=agent_kwargs.pop("tool_namespaces", None),
         session_id=session_id,
         session_store=session_store,
         memory_backend=memory_backend,

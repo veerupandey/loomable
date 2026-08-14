@@ -403,7 +403,12 @@ _BOOKKEEPING_TOOL_NAMES: frozenset[str] = frozenset(
         "load_skill",
         "search_tools",
         "search_mcp",
+        "search_namespaces",
         "activate_tool",
+        "activate_mcp_server",
+        "refresh_capabilities",
+        "list_skill_resources",
+        "read_skill_resource",
     }
 )
 
@@ -1631,6 +1636,18 @@ class BuiltAgent:
                 missing_required = _missing_require_tool_specs(
                     require_tool_specs, satisfied_require_tools
                 )
+                if missing_required:
+                    discovery_rt = getattr(self, "discovery", None)
+                    if discovery_rt is not None and hasattr(
+                        discovery_rt, "ensure_tools_activated"
+                    ):
+                        missing_tool_names = sorted(
+                            {m.split(":", 1)[0] for m in missing_required if m}
+                        )
+                        try:
+                            discovery_rt.ensure_tools_activated(missing_tool_names)
+                        except Exception:  # noqa: BLE001 — activation is best-effort
+                            pass
                 if (
                     missing_required
                     and require_tools_nudges < max_require_tools_nudges
@@ -2870,6 +2887,10 @@ class Agent:
         defer_local_tools: bool | None = None,
         discovery_core_tools: Sequence[str] | None = None,
         eager_skills: bool | Sequence[str] | None = None,
+        lazy_mcp: bool | None = None,
+        activation_allowlist: Sequence[str] | None = None,
+        activation_denylist: Sequence[str] | None = None,
+        tool_namespaces: list[dict[str, Any]] | None = None,
     ) -> None:
         # --- Resolve model string shorthand (e.g. "openai:gpt-4o-mini") ---
         if isinstance(model, str):
@@ -2907,6 +2928,18 @@ class Agent:
         # None + discovery → progressive (metadata only). True → eager all skills=.
         # Sequence → eager those names only. False → never eager-load bodies.
         self._eager_skills = eager_skills
+        # Lazy MCP: catalog server specs without connecting until activate_mcp_server.
+        # Defaults to True when discovery is on (industry pattern: connect on demand).
+        self._lazy_mcp = bool(discovery) if lazy_mcp is None else bool(lazy_mcp)
+        self._activation_allowlist = (
+            [str(x) for x in activation_allowlist] if activation_allowlist else None
+        )
+        self._activation_denylist = (
+            [str(x) for x in activation_denylist] if activation_denylist else None
+        )
+        self._tool_namespaces = (
+            [dict(ns) for ns in tool_namespaces] if tool_namespaces else None
+        )
         # High-level modality DX: modalities="text" / text_only=True preferred over
         # constructing ModelCapabilities with frozensets.
         from loomable.content.capabilities import capabilities_for
@@ -3100,8 +3133,9 @@ class Agent:
         # --- MCP servers: connect and enumerate tools (Req 5.1–5.4) ---
         # When discovery+defer_mcp: catalog MCP tools without advertising them until
         # activate_tool (progressive disclosure).
-        mcp_tools, mcp_errors, mcp_stubs = self._connect_mcp_servers_sync(
-            defer=self._discovery and self._defer_mcp
+        mcp_tools, mcp_errors, mcp_stubs, mcp_server_stubs = self._connect_mcp_servers_sync(
+            defer=self._discovery and self._defer_mcp,
+            lazy=self._discovery and self._lazy_mcp,
         )
         tool_registry.update(mcp_tools)
         tool_runtime = self._tool_runtime or ToolRuntime(tool_registry)
@@ -3265,7 +3299,9 @@ class Agent:
 
         # --- Progressive discovery (skills / tools / MCP) ---
         if self._discovery:
-            self._wire_discovery(built, mcp_stubs=mcp_stubs)
+            self._wire_discovery(
+                built, mcp_stubs=mcp_stubs, mcp_server_stubs=mcp_server_stubs
+            )
 
         # --- Wire harness knobs from Agent constructor (avoids build() boilerplate) ---
         if self._tool_timeout is not None:
@@ -3721,15 +3757,17 @@ class Agent:
         self,
         *,
         defer: bool = False,
-    ) -> tuple[dict[str, Tool], list[MCPConnectionError], list[Any]]:
+        lazy: bool = False,
+    ) -> tuple[dict[str, Tool], list[MCPConnectionError], list[Any], list[Any]]:
         """Connect to configured MCP servers synchronously (Req 5.1–5.4).
 
         Wraps the async :meth:`_connect_mcp_servers` for use from the synchronous
-        :meth:`build`. Returns the MCP tool registry, connection errors, and
-        catalog stubs (populated when ``defer=True`` or for discovery indexing).
+        :meth:`build`. Returns the MCP tool registry, connection errors, tool
+        catalog stubs (populated when ``defer=True`` or for discovery indexing),
+        and server catalog stubs (:class:`~loomable.agent.discovery.ServerStub`).
         """
         if not self._mcp_servers:
-            return {}, [], []
+            return {}, [], [], []
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -3741,16 +3779,17 @@ class Agent:
 
             with concurrent.futures.ThreadPoolExecutor(1) as pool:
                 future = pool.submit(
-                    asyncio.run, self._connect_mcp_servers(defer=defer)
+                    asyncio.run, self._connect_mcp_servers(defer=defer, lazy=lazy)
                 )
                 return future.result()
-        return asyncio.run(self._connect_mcp_servers(defer=defer))
+        return asyncio.run(self._connect_mcp_servers(defer=defer, lazy=lazy))
 
     async def _connect_mcp_servers(
         self,
         *,
         defer: bool = False,
-    ) -> tuple[dict[str, Tool], list[MCPConnectionError], list[Any]]:
+        lazy: bool = False,
+    ) -> tuple[dict[str, Tool], list[MCPConnectionError], list[Any], list[Any]]:
         """Connect to configured MCP servers and enumerate their tools (Req 5.1–5.4).
 
         For each MCP server specification in ``self._mcp_servers``, the kernel
@@ -3762,68 +3801,131 @@ class Agent:
         When ``defer=True``, tools are returned as catalog stubs only (not
         registered) so the model must ``activate_tool`` before calling them.
 
+        When ``lazy=True`` (industry "search-then-connect" pattern), servers are
+        **not connected at all** during build. Each configured server is
+        catalogued as an unconnected :class:`~loomable.agent.discovery.ServerStub`
+        so the model can discover it via ``search_mcp`` / ``search_namespaces``
+        and connect on demand with ``activate_mcp_server``. ``lazy`` takes
+        precedence over ``defer`` (nothing to defer if nothing connected).
+
         A failed connection yields an :class:`MCPConnectionError` for that server
         while other servers continue (Req 5.3). No kernel code is modified (Req 5.4).
 
         Returns
         -------
-        tuple[dict[str, Tool], list[MCPConnectionError], list]
-            The MCP tool registry, isolated connection errors, and ToolStub list.
+        tuple[dict[str, Tool], list[MCPConnectionError], list, list]
+            The MCP tool registry, isolated connection errors, tool ToolStub
+            list, and server ServerStub list.
         """
-        from .discovery import ToolStub
+        from .discovery import ServerStub, ToolStub
         from .tools import MCPTool
 
         registry: dict[str, Tool] = {}
         errors: list[MCPConnectionError] = []
         stubs: list[Any] = []
-        client = MCPClient()
+        servers: list[Any] = []
 
-        for spec_idx, spec in enumerate(self._mcp_servers):
+        def _resolve_server_id(spec: Any, idx: int) -> str:
             server_id = getattr(spec, "name", None) or getattr(spec, "id", None)
             if not server_id:
                 if isinstance(spec, dict):
-                    server_id = spec.get("name") or spec.get("id")
+                    server_id = (
+                        spec.get("server_id") or spec.get("name") or spec.get("id")
+                    )
                 if not server_id:
-                    server_id = f"mcp-{spec_idx}"
+                    server_id = f"mcp-{idx}"
+            return str(server_id)
+
+        if lazy:
+            # Catalog-only: do not open any transport. activate_mcp_server()
+            # connects on demand from the stored spec.
+            for spec_idx, spec in enumerate(self._mcp_servers):
+                server_id = _resolve_server_id(spec, spec_idx)
+                description = (
+                    spec.get("description", "") if isinstance(spec, dict) else ""
+                )
+                servers.append(
+                    ServerStub(
+                        server_id=server_id,
+                        description=description,
+                        connected=False,
+                        spec=spec,
+                    )
+                )
+            return registry, errors, stubs, servers
+
+        client = MCPClient()
+
+        for spec_idx, spec in enumerate(self._mcp_servers):
+            server_id = _resolve_server_id(spec, spec_idx)
+            description = (
+                spec.get("description", "") if isinstance(spec, dict) else ""
+            )
             try:
                 session = await client.connect(spec)
                 capabilities = await client.list_capabilities(session)
+                server_tool_names: list[str] = []
                 for tool_info in capabilities.tools:
                     tool_name = tool_info.get("name", "")
                     if not tool_name:
                         continue
-                    description = tool_info.get("description", "")
+                    tool_description = tool_info.get("description", "")
                     parameters = tool_info.get("parameters", {
                         "type": "object",
                         "properties": {},
                     })
                     stub = ToolStub(
                         name=tool_name,
-                        description=description,
+                        description=tool_description,
                         source="mcp",
-                        server_id=str(server_id),
+                        server_id=server_id,
                         parameters=parameters if isinstance(parameters, dict) else {},
                         activated=not defer,
                         mcp_client=client,
                         mcp_session=session,
+                        namespace=f"mcp:{server_id}",
                     )
                     stubs.append(stub)
+                    server_tool_names.append(tool_name)
                     if defer:
                         continue
                     mcp_tool = MCPTool(
                         name=tool_name,
-                        description=description,
+                        description=tool_description,
                         parameters=parameters,
                         mcp_client=client,
                         session=session,
                     )
                     registry[tool_name] = mcp_tool
+                servers.append(
+                    ServerStub(
+                        server_id=server_id,
+                        description=description,
+                        connected=True,
+                        spec=spec,
+                        tool_count=len(server_tool_names),
+                    )
+                )
             except MCPConnectionError as err:
                 errors.append(err)
+                servers.append(
+                    ServerStub(
+                        server_id=server_id,
+                        description=description,
+                        connected=False,
+                        spec=spec,
+                    )
+                )
 
-        return registry, errors, stubs
+        return registry, errors, stubs, servers
 
-    def _wire_discovery(self, built: BuiltAgent, *, mcp_stubs: list[Any] | None = None) -> None:
+    def _wire_discovery(
+        self,
+        built: BuiltAgent,
+        *,
+        mcp_stubs: list[Any] | None = None,
+        mcp_server_stubs: list[Any] | None = None,
+    ) -> None:
         """Register search/load/activate meta-tools and build the capability catalog."""
         from loomable.skills import bundled_skills_root, resolve_skills
 
@@ -3832,6 +3934,7 @@ class Agent:
             DISCOVERY_SYSTEM_NOTE,
             CapabilityCatalog,
             DiscoveryRuntime,
+            NamespaceStub,
             SkillStub,
             ToolStub,
             catalog_from_skill_manifests,
@@ -3885,11 +3988,24 @@ class Agent:
             else:
                 built.instructions = block
 
+        # Local tool → namespace map (for tools declared via tool_namespaces=).
+        namespace_by_tool: dict[str, str] = {}
+        for ns_spec in self._tool_namespaces or []:
+            ns_name = str(ns_spec.get("name") or "").strip()
+            if not ns_name:
+                continue
+            for tool_name in ns_spec.get("tools") or []:
+                namespace_by_tool[str(tool_name)] = ns_name
+
         runtime = DiscoveryRuntime(
             catalog,
             skill_loader=loader,
             tool_runtime=built.tool_runtime,
             on_skill_body=_on_skill_body,
+            skill_roots=skill_roots,
+            activation_allowlist=self._activation_allowlist,
+            activation_denylist=self._activation_denylist,
+            lazy_mcp=self._discovery and self._lazy_mcp,
         )
 
         # Schema budget: move non-core local tools into deferred catalog.
@@ -3907,6 +4023,7 @@ class Agent:
                         source="local",
                         activated=False,
                         parameters=getattr(tool_obj, "parameters", None) or {},
+                        namespace=namespace_by_tool.get(name),
                     )
                 )
 
@@ -3924,6 +4041,7 @@ class Agent:
                     source="local",
                     activated=True,
                     parameters=getattr(tool_obj, "parameters", None) or {},
+                    namespace=namespace_by_tool.get(name),
                 )
             )
 
@@ -3938,8 +4056,42 @@ class Agent:
                 existing.parameters = stub.parameters
                 existing.activated = stub.activated
                 existing.description = stub.description or existing.description
+                existing.namespace = existing.namespace or stub.namespace
             else:
                 catalog.tools.append(stub)
+
+        # MCP server catalog (connected or lazily deferred pending activate_mcp_server).
+        for server in mcp_server_stubs or []:
+            if catalog.server_by_id(server.server_id) is None:
+                catalog.servers.append(server)
+
+        # Namespaces: explicit tool_namespaces= groups + one auto mcp:<server_id>
+        # namespace per MCP server (connected or lazy) grouping its tools.
+        for ns_spec in self._tool_namespaces or []:
+            ns_name = str(ns_spec.get("name") or "").strip()
+            if not ns_name or catalog.namespace_by_name(ns_name) is not None:
+                continue
+            catalog.namespaces.append(
+                NamespaceStub(
+                    name=ns_name,
+                    description=str(ns_spec.get("description") or ""),
+                    tools=[str(t) for t in ns_spec.get("tools") or []],
+                )
+            )
+        for server in mcp_server_stubs or []:
+            ns_name = f"mcp:{server.server_id}"
+            if catalog.namespace_by_name(ns_name) is not None:
+                continue
+            tools_in_ns = [
+                t.name for t in catalog.tools if t.server_id == server.server_id
+            ]
+            catalog.namespaces.append(
+                NamespaceStub(
+                    name=ns_name,
+                    description=server.description or f"MCP server {server.server_id}",
+                    tools=tools_in_ns,
+                )
+            )
 
         for meta in make_discovery_tools(runtime):
             built.tool_runtime._tools[meta.name] = meta
@@ -3965,6 +4117,12 @@ class Agent:
                     + ", ".join(sorted(deferred)[:40])
                     + ("…" if len(deferred) > 40 else "")
                 )
+        unconnected_servers = [s.server_id for s in catalog.servers if not s.connected]
+        if unconnected_servers:
+            note_parts.append(
+                "Unconnected MCP servers (activate_mcp_server to connect + catalog "
+                "their tools): " + ", ".join(sorted(unconnected_servers))
+            )
         note = "\n\n".join(note_parts)
         if built.instructions:
             built.instructions = f"{built.instructions.rstrip()}\n\n{note}"

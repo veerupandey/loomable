@@ -62,6 +62,7 @@ agent = create_deep_agent(model, workspace="./.deep_workspace", profile="general
 | File | What it shows |
 |------|----------------|
 | `01_research_brief.py` | Scripted / live `create_deep_agent` |
+| `02_progressive_discovery.py` | `search_skills` / `load_skill` / `search_tools` / `activate_tool` progressive disclosure |
 | `02_case_deep_hard.py` | Deep + Case accept |
 | `03_live_multimodal_research.py` | `profile="research"` live loop |
 
