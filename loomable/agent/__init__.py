@@ -50,6 +50,7 @@ from .deep import (
     make_task_tool,
     make_task_tools,
 )
+from .personalized import build_knowledge_retriever, create_personalized_agent
 
 __all__ = [
     "Agent",
@@ -89,6 +90,8 @@ __all__ = [
     "make_plan_tool",
     "create_deep_agent",
     "create_research_agent",
+    "create_personalized_agent",
+    "build_knowledge_retriever",
     "make_task_tool",
     "make_task_tools",
     "make_research_accept",

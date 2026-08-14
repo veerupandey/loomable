@@ -3806,6 +3806,11 @@ class Agent:
             name = (raw or "").split(":", 1)[0].strip()
             if name:
                 core.add(name)
+        # Knowledge retrievers are the point of a personalized agent — never defer them.
+        for retriever in self._retrievers or []:
+            name = getattr(retriever, "name", "") or ""
+            if name:
+                core.add(name)
         return core
 
     def _connect_mcp_servers_sync(
