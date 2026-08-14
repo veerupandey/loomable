@@ -34,7 +34,8 @@ the declared scope. Breaking changes are rare and require a deprecation note in
 | `loomable.sandbox` / `ShellTools` / Docker sandbox | Soft isolation; Docker experimental |
 | Bundled `browser` skill | Assumes Lightpanda (or compatible) MCP |
 | `loomable.codeindex` / `CodeTools` / `profile="code"` | Deep code; Alibaba zvec file store by default, pluggable `VectorBackend` |
-| `loomable.retrieval` (`build_retriever`, chunk strategies) | Framework RAG; Alibaba zvec / Postgres / custom store |
+| `loomable.retrieval` (`build_retriever`, chunk strategies) | Framework RAG; Alibaba zvec / FAISS / Postgres / custom store |
+| `FaissVectorBackend` / `open_vector_store(engine="faiss")` | Optional FAISS CPU/GPU ANN |
 
 ## Beta limits
 

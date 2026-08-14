@@ -793,9 +793,20 @@ notes = NoteStore(
     embedder=OpenAIEmbedder(),
 )
 
-# Postgres vectors (or pass backend= for FAISS / Pinecone / …)
+# Postgres vectors
 notes = NoteStore(
     long_term=open_vector_store(postgres_url=DSN, dimensions=1536, user_id="alice"),
+    embedder=OpenAIEmbedder(),
+)
+
+# FAISS (CPU by default; device="gpu"|"auto" with faiss-gpu)
+notes = NoteStore(
+    long_term=open_vector_store(
+        engine="faiss",
+        path="./.loomable/notes_faiss",
+        dimensions=1536,
+        device="auto",
+    ),
     embedder=OpenAIEmbedder(),
 )
 ```
@@ -806,6 +817,7 @@ notes = NoteStore(
 |------|--------------|-----------|
 | Local demo | default / file / memory | in-memory `LongTermStore()` |
 | File-backed notes | any | Alibaba zvec via `path=` / `open_vector_store(path=...)` |
+| Local ANN (CPU/GPU) | any | FAISS via `engine="faiss"` / `FaissVectorBackend` |
 | Prod chat + durable notes | postgres | `PgVectorBackend` / `open_vector_store(postgres_url=...)` |
 | Case/Workflow resume | — | `PostgresCheckpointer` (separate) |
 
@@ -1409,8 +1421,10 @@ retriever = await build_retriever(
     mode="hybrid",              # vector | lexical | hybrid
     strategy="auto",            # text | markdown | code | html | pdf | auto
     persist_path="./.loomable/docs_zvec",  # Alibaba zvec on disk (pip install loomable[zvec])
-    # Or Postgres / any VectorBackend:
+    # Or FAISS / Postgres / any VectorBackend:
     # from loomable.kernel.long_term import open_vector_store
+    # store=open_vector_store(engine="faiss", path="./.loomable/docs_faiss",
+    #                         dimensions=384, device="auto")
     # store=open_vector_store(postgres_url=DSN, dimensions=1536),
 )
 agent = Agent(model=provider, retrievers=[retriever])

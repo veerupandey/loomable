@@ -83,7 +83,8 @@ async def build_retriever(
     store / backend / persist_path:
         Pluggable vector storage. ``persist_path`` uses **Alibaba zvec**
         (``pip install loomable[zvec]``). Pass ``store=open_vector_store(
-        postgres_url=...)`` or ``backend=PgVectorBackend(...)`` for Postgres.
+        engine="faiss", ...)`` for FAISS, ``postgres_url=...`` for Postgres,
+        or ``backend=`` for any :class:`~loomable.kernel.contracts.VectorBackend`.
         Omit both for an in-memory store (tests / ephemeral).
 
     Examples
@@ -96,8 +97,10 @@ async def build_retriever(
             mode="hybrid",
             persist_path="./.loomable/docs_zvec",  # Alibaba zvec on disk
         )
-        # Or Postgres:
+        # Or FAISS / Postgres:
         # from loomable.kernel.long_term import open_vector_store
+        # store = open_vector_store(engine="faiss", path="./.loomable/docs_faiss",
+        #                          dimensions=384, device="auto")
         # store = open_vector_store(postgres_url=DSN, dimensions=1536)
         # retriever = await build_retriever([...], store=store)
         agent = Agent(model=..., retrievers=[retriever])
