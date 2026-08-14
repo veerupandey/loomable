@@ -155,6 +155,94 @@ async def test_team_coordinate_fallback_runs_skipped_members() -> None:
 
 
 @pytest.mark.asyncio
+async def test_team_astream_coordinate_fallback_when_no_delegates() -> None:
+    a = Agent(model=_model("alpha-out"), role="Alpha", modalities="text")
+    b = Agent(model=_model("beta-out"), role="Beta", modalities="text")
+    team = Team(
+        members=[a, b],
+        model=_model("coordinator-only"),
+        mode="coordinate",
+    )
+    deltas: list[str] = []
+    async for ev in team.astream_events("task"):
+        data = getattr(ev, "data", None) or {}
+        if isinstance(data, dict) and data.get("delta"):
+            deltas.append(str(data["delta"]))
+    blob = "".join(deltas)
+    assert "alpha-out" in blob
+    assert "beta-out" in blob
+
+
+@pytest.mark.asyncio
+async def test_team_astream_coordinate_skips_fallback_when_delegates_called() -> None:
+    from loomable.kernel.models import ToolCall
+
+    class _CountEcho(_Echo):
+        def __init__(self, text: str = "ok") -> None:
+            super().__init__(text)
+            self.calls = 0
+
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            self.calls += 1
+            return await super().complete(request)
+
+    class _Coord:
+        def __init__(self) -> None:
+            self.n = 0
+
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            self.n += 1
+            if self.n == 1:
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            id="1",
+                            tool_name="delegate_to_alpha",
+                            args={"task": "t"},
+                        ),
+                        ToolCall(
+                            id="2",
+                            tool_name="delegate_to_beta",
+                            args={"task": "t"},
+                        ),
+                    ],
+                    usage={"input_tokens": 1, "output_tokens": 1},
+                )
+            return ModelResponse(
+                content="synth",
+                usage={"input_tokens": 1, "output_tokens": 1},
+            )
+
+    alpha_m = _CountEcho("alpha-out")
+    beta_m = _CountEcho("beta-out")
+    a = Agent(
+        model=ModelSpec(provider="scripted", provider_impl=alpha_m),
+        role="Alpha",
+        modalities="text",
+    )
+    b = Agent(
+        model=ModelSpec(provider="scripted", provider_impl=beta_m),
+        role="Beta",
+        modalities="text",
+    )
+    team = Team(
+        members=[a, b],
+        model=ModelSpec(provider="scripted", provider_impl=_Coord()),
+        mode="coordinate",
+    )
+    deltas: list[str] = []
+    async for ev in team.astream_events("task"):
+        data = getattr(ev, "data", None) or {}
+        if isinstance(data, dict) and data.get("delta"):
+            deltas.append(str(data["delta"]))
+    blob = "".join(deltas)
+    assert "(fallback)" not in blob
+    assert alpha_m.calls == 1
+    assert beta_m.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_agent_mode_case_cancel_reaches_case() -> None:
     agent = Agent(
         model=_model("c"),

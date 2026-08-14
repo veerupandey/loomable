@@ -2887,6 +2887,7 @@ class Agent:
         # tool hooks / HITL:
         tool_hooks: list[Any] | None = None,
         require_confirmation: list[str] | None = None,
+        approver: Any | None = None,
         # harness knobs (avoids needing build() for common config):
         tool_timeout: float | None = None,
         tool_concurrency: int | None = None,
@@ -2923,6 +2924,7 @@ class Agent:
         think_tool: bool = False,
         plan_tool: bool = False,
         memory_tool: bool = False,
+        memory_auto_extract: bool = False,
         # Case mode (plan → dispatch → synthesize → accept):
         mode: str | None = None,
         dispatch: str = "reuse",
@@ -3047,6 +3049,7 @@ class Agent:
         self._knowledge_top_k = knowledge_top_k
         self._tool_hooks = tool_hooks
         self._require_confirmation = require_confirmation
+        self._approver = approver
         self._tool_timeout = tool_timeout
         self._tool_concurrency = tool_concurrency
         self._max_tool_iterations = max_tool_iterations
@@ -3137,6 +3140,7 @@ class Agent:
                 scope = MemoryScope.of(**({**(scopes or {}), **({"user_id": user_id} if user_id else {})}))
                 if scope and not isinstance(note_store, ScopedNoteStore):
                     note_store = ScopedNoteStore(note_store, scope=scope)
+            self._memory_auto_extract = bool(memory_auto_extract)
         self._tool_runtime = tool_runtime
         self._harness = harness
         self._planner = planner
@@ -3440,6 +3444,8 @@ class Agent:
         built.require_final_text = self._require_final_text
         built.require_tools = list(self._require_tools)
         built.strict_require_tools = self._strict_require_tools
+        if self._approver is not None:
+            built.approver = self._approver
 
         # --- Wire debug mode: use a console-friendly tracer ---
         if self._debug and self._events is None:

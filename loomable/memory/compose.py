@@ -348,6 +348,8 @@ class Memory:
             out["note_store"] = note_store
             if self.user and self.user.memory_tool:
                 out["memory_tool"] = True
+            if self.user and self.user.auto_extract:
+                out["memory_auto_extract"] = True
 
         if self.knowledge is not None:
             k = self.knowledge

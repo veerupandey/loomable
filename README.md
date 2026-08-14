@@ -110,6 +110,9 @@ from loomable import Agent, ConversationMemory, Memory, UserMemory, open_session
 from loomable.agent import NoteStore
 
 # UserMemory(memory_tool=/auto_extract=) needs note_store= or embedder=
+from loomable.providers import OpenAIEmbedder  # or GeminiEmbedder / AzureOpenAIEmbedder
+
+embedder = OpenAIEmbedder()
 notes = NoteStore(long_term=open_vector_store(engine="memory"), embedder=embedder)
 memory = Memory.compose(
     conversation=ConversationMemory(store=open_session_store("sqlite", path="sessions.db")),
@@ -146,7 +149,7 @@ result = await agent.arun("What is 7 * 8?")
 ### Workflow (+ SharedState)
 
 ```python
-from loomable import Workflow, JsonFileCheckpointer
+from loomable import Workflow, JsonFileCheckpointer, FlowPaused
 
 cp = JsonFileCheckpointer("./ckpts")  # or PostgresCheckpointer(POSTGRES_URL)
 wf = (
@@ -155,7 +158,11 @@ wf = (
     .parallel(analyst=analyst, visual=visual)
     .step("scribe", scribe, confirm=True)  # HITL
 )
-result = await wf.arun(email)
+try:
+    result = await wf.arun(email)
+except FlowPaused:
+    await wf.approve("scribe")
+    result = await wf.arun(email, resume=True)
 print(wf.state.get("gather"))
 ```
 
@@ -237,7 +244,7 @@ examples/
 ├── deep_agent/           # create_deep_agent(profile=research|code)
 ├── subagents/            # Delegation & Team
 ├── patterns/             # Workflow step / parallel / Team route / map
-├── memory/               # Memory.compose & shared Workflow memory
+├── memory/               # Memory.compose, Agent chaining, callable blackboard
 ├── advanced/             # MCP, Workflow branch, checkpoints, RAG
 ├── simple_use_cases/     # News, research, docs
 └── escalation_war_room/  # Full SEV ladder (Case + SSE)
