@@ -777,7 +777,7 @@ class Case:
             from loomable.memory.compose import is_memory_bundle
 
             if is_memory_bundle(memory):
-                composed = memory.with_user_id(user_id).to_agent_kwargs()
+                composed = memory.with_scopes(user_id=user_id).to_agent_kwargs()
                 for k, v in composed.items():
                     agent_memory.setdefault(k, v)
         # Case session_id is the checkpointer thread; role agents get scoped ids.

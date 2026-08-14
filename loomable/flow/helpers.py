@@ -1,14 +1,8 @@
-"""Convenience constructors for common Flow patterns.
+"""Advanced Flow pattern helpers (prefer ``Workflow`` / ``Team``).
 
-These helpers replace the removed `Pipeline`, `Orchestrator`, and `AutoPlan`
-classes with thin wrappers that build the equivalent `Flow` using the unified
-engine model (Req 2.7, 14.4).
-
-- ``sequential(...)`` — replaces ``Pipeline``: sequential chain via SequentialEngine.
-- ``parallel(...)`` — replaces ``Orchestrator(mode=PARALLEL)``: concurrent execution.
-- ``route(...)`` — replaces ``Orchestrator(mode=ROUTE)``: predicate/model routing.
-- ``coordinate(...)`` — replaces ``Orchestrator(mode=COORDINATE)``: hierarchical delegation.
-- ``plan_and_execute(...)`` — replaces ``AutoPlan``: plan → map → synthesize.
+Thin wrappers that build a ``Flow`` for sequential / parallel / route /
+coordinate / plan-and-execute graphs. ``plan_and_execute`` is also used by
+``Workflow.map``.
 """
 
 from __future__ import annotations

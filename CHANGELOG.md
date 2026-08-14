@@ -39,15 +39,17 @@
 - Shared provider helper adds `make_embedder()` aligned with chat credentials
 - Renamed `memory/03_workflow_shared_memory.py`, `advanced/02_workflow_branch.py`
 
-### Removed
+### Removed (greenfield clean — no compatibility shims)
 
-- Public exports: `create_research_agent`, `Channel` / `ChannelMessage` / `InMemoryChannel`, `DEEP_AGENT_INSTRUCTIONS`
-  - Use `create_deep_agent(..., profile="research")`, `Team` / `Workflow` / subagents
-- Orphan `loomable.agent.channels` module
-
-### Deprecated
-
-- `Agent(multimodal=True)` emits `DeprecationWarning` (no-op; media is default)
+- `Agent(multimodal=...)` — media is default; use `modalities=` / `text_only=`
+- `Memory.compose(short=` / `long=`) — use `conversation=` / `user=`
+- `Memory.with_user_id()` — use `with_scopes(user_id=...)`
+- `ScopedNoteStore(user_id=)` — require `scope=MemoryScope.of(...)`
+- Flat store kwargs overriding `memory=` — conflict raises `AgentConfigError`
+- Top-level `sequential` / `parallel` / `route` / `coordinate` exports — use `Workflow` / `Team` (helpers remain under `loomable.flow.helpers`)
+- `Map` / `Router` aliases — use `MapNode` / `RouterNode`
+- `rank_match` discovery helper — use `rank_bm25`
+- Passing kernel `MemoryManager` as `Agent(memory=...)` — use `Memory.compose`
 
 ### Limits (documented)
 

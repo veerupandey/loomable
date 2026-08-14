@@ -9,9 +9,8 @@ from loomable import (
     InMemoryCheckpointer,
     Step,
     Workflow,
-    parallel,
-    sequential,
 )
+from loomable.flow.helpers import parallel, sequential
 from loomable.content import AgentOutput, Modality, Text, capabilities_for
 from loomable.kernel.models import ModelRequest, ModelResponse
 

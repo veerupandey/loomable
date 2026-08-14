@@ -28,7 +28,6 @@ from loomable.flow.loop import VerdictResult
 from loomable.providers.resilient import RetryPolicy
 
 __all__ = [
-    "DEEP_AGENT_INSTRUCTIONS",
     "DEEP_DISCOVERY_CORE_TOOLS",
     "DEEP_DISCOVERY_CORE_SLIM",
     "DEEP_DISCOVERY_CORE_CODE",
