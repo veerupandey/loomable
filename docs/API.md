@@ -107,7 +107,7 @@ result = await loop.arun("Write an excellent summary of AI trends")
 # Repeats up to 3 times, feeding failure detail forward for self-correction
 ```
 
-The Loop is itself a Runnable — usable standalone or as a node in a Flow.
+The Loop is itself a Runnable — usable standalone or as a step in a Workflow.
 
 ### Level 4: Workflow (preferred high-level process API)
 
