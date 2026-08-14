@@ -17,7 +17,9 @@ from loomable.toolkits._base import Toolkit
 from loomable.toolkits.file_tools import FileTools
 from loomable.toolkits.python_tools import PythonTools
 from loomable.toolkits.sql_tools import SQLTools
+from loomable.toolkits.todo_tools import TodoStore, TodoTools
 from loomable.toolkits.web_search import WebSearchTools
+from loomable.toolkits.workspace_tools import WorkspaceStore, WorkspaceTools
 
 # Conditional imports for toolkits with optional dependencies
 try:
@@ -44,4 +46,8 @@ __all__ = [
     "SQLTools",
     "URLTools",
     "WebSearchTools",
+    "TodoTools",
+    "TodoStore",
+    "WorkspaceTools",
+    "WorkspaceStore",
 ]

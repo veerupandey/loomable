@@ -48,12 +48,15 @@ class TestAgentWithSingleToolkit:
         registry, errors = agent._build_tool_registry()
 
         assert not errors
-        # FileTools registers: read_file, write_file, write_json, list_directory
+        # FileTools registers: read/write/write_json/edit/list/glob/grep
         assert "read_file" in registry
         assert "write_file" in registry
         assert "write_json" in registry
         assert "list_directory" in registry
-        assert len(registry) == 4
+        assert "edit_file" in registry
+        assert "glob_files" in registry
+        assert "grep_files" in registry
+        assert len(registry) == 7
 
         # Each entry is a FunctionTool
         for tool in registry.values():
@@ -102,9 +105,10 @@ class TestAgentWithMixedToolsAndToolkits:
         assert "write_file" in registry
         assert "write_json" in registry
         assert "list_directory" in registry
+        assert "edit_file" in registry
 
-        # Total: 1 standalone + 4 from FileTools
-        assert len(registry) == 5
+        # Total: 1 standalone + 7 from FileTools
+        assert len(registry) == 8
 
     def test_toolkit_before_standalone_tool(self, tmp_path):
         """Order doesn't matter: toolkit first, standalone second."""
@@ -177,8 +181,9 @@ class TestAgentWithExcludeToolsFiltering:
         assert "read_file" in registry
         assert "write_json" in registry
         assert "list_directory" in registry
+        assert "edit_file" in registry
         assert "write_file" not in registry
-        assert len(registry) == 3
+        assert len(registry) == 6
 
     def test_exclude_multiple_tools(self):
         """Multiple tools can be excluded from a toolkit."""
@@ -205,17 +210,18 @@ class TestAgentWithMultipleToolkits:
         registry, errors = agent._build_tool_registry()
 
         assert not errors
-        # FileTools: read_file, write_file, write_json, list_directory
+        # FileTools: read/write/write_json/edit/list/glob/grep
         assert "read_file" in registry
         assert "write_file" in registry
         assert "write_json" in registry
         assert "list_directory" in registry
+        assert "edit_file" in registry
         # SQLTools: run_sql, list_tables, describe_table
         assert "run_sql" in registry
         assert "list_tables" in registry
         assert "describe_table" in registry
 
-        assert len(registry) == 7
+        assert len(registry) == 10
 
     def test_multiple_toolkits_with_filtering(self, tmp_path):
         """Toolkits with different filters combine correctly."""

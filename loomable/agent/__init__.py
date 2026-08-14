@@ -40,6 +40,7 @@ from .run import RunChunk, RunResult
 from .summarize import LLMSummarizer
 from .team import Team
 from .tools import FunctionTool, MCPTool, tool
+from .deep import DEEP_AGENT_INSTRUCTIONS, create_deep_agent, make_task_tool
 
 __all__ = [
     "Agent",
@@ -77,6 +78,9 @@ __all__ = [
     "spawn_specialist",
     "make_think_tool",
     "make_plan_tool",
+    "create_deep_agent",
+    "make_task_tool",
+    "DEEP_AGENT_INSTRUCTIONS",
     "LLMSummarizer",
     "image",
     "video",

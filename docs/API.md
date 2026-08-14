@@ -410,6 +410,30 @@ result.trace               # list of Event objects (when debug=True)
 
 ---
 
+## Deep Agent
+
+LangGraph-style long-horizon harness (`create_deep_agent`) on top of `Agent`:
+
+1. **Planning** — `TodoTools` (`write_todos` / `read_todos` / `update_todo`)
+2. **Workspace FS** — `WorkspaceTools` (`ls` / `read_file` / `write_file` / `edit_file` / `glob` / `grep`)
+3. **Subagents** — `task` tool (plus optional `subagents=` / `mode="case"`)
+4. **Context** — `think_tool`, optional memory, `max_tool_iterations=40`
+
+```python
+from loomable import create_deep_agent
+
+agent = create_deep_agent(
+    model="openai:gpt-4o-mini",
+    workspace="./.deep_workspace",
+    # optional: session_store=..., note_store=..., mode="case", accept=...
+)
+await agent.arun("Research X and write reports/x.md")
+```
+
+See `examples/deep_agent/`.
+
+---
+
 ## Case
 
 Long-running goal work with an optional WorkItems board. Compiles to a `Workflow`
