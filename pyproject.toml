@@ -43,9 +43,9 @@ dev = [
 pdf = ["pypdf"]
 ppt = ["python-pptx"]
 url = ["httpx", "beautifulsoup4"]
-web = ["duckduckgo-search"]
+web = ["ddgs"]
 postgres = ["asyncpg>=0.29.0"]
-toolkits = ["pypdf", "python-pptx", "httpx", "beautifulsoup4", "duckduckgo-search"]
+toolkits = ["pypdf", "python-pptx", "httpx", "beautifulsoup4", "ddgs"]
 
 [dependency-groups]
 dev = [

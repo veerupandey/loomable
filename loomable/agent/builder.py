@@ -374,6 +374,29 @@ def _format_require_tools_nudge(missing: list[str]) -> str:
     )
 
 
+# Todo / private-think tools that do not advance the user-facing deliverable.
+# After require_tools are satisfied, repeated rounds of only these tools are
+# treated as "done — emit final answer" instead of burning max_tool_iterations.
+_BOOKKEEPING_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "write_todos",
+        "read_todos",
+        "update_todo",
+        "think",
+    }
+)
+
+_DELIVERABLE_COMPLETE_NUDGE = (
+    "Required deliverables are already complete (required tools succeeded). "
+    "Stop calling tools now — do not keep updating todos. "
+    "Provide your final answer summarizing what you delivered and where."
+)
+
+
+def _is_bookkeeping_only(tool_names: set[str]) -> bool:
+    return bool(tool_names) and tool_names.issubset(_BOOKKEEPING_TOOL_NAMES)
+
+
 def _extract_json_object(text: str) -> str:
     """Return the first JSON object substring, or the original text."""
     cleaned = _strip_json_fences(text)
@@ -1493,6 +1516,9 @@ class BuiltAgent:
             if has_path_constraints
             else max(1, len(require_tool_specs))
         ) if require_tool_specs else 0
+        bookkeeping_after_deliverable = 0
+        deliverable_complete_nudges = 0
+        deliverable_complete_forced = False
 
         while True:
             # --- Check cooperative cancellation at each loop boundary (Req 4.1) ---
@@ -1895,6 +1921,104 @@ class BuiltAgent:
                         "tool_call_id": tc.id,
                     })
 
+            # Deliverable-complete finish: once require_tools succeed, do not burn
+            # the iteration budget on todo/think spam — nudge once, then force FINAL.
+            if require_tool_specs and not _missing_require_tool_specs(
+                require_tool_specs, satisfied_require_tools
+            ):
+                round_names = {tc.tool_name for tc in calls_to_dispatch}
+                if _is_bookkeeping_only(round_names):
+                    bookkeeping_after_deliverable += 1
+                else:
+                    bookkeeping_after_deliverable = 0
+
+                if (
+                    bookkeeping_after_deliverable >= 1
+                    and deliverable_complete_nudges < 1
+                    and iterations < self.max_tool_iterations
+                    and not ctx.cancelled
+                ):
+                    deliverable_complete_nudges += 1
+                    request.messages.append(
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": _DELIVERABLE_COMPLETE_NUDGE,
+                                }
+                            ],
+                        }
+                    )
+                elif (
+                    bookkeeping_after_deliverable >= 2
+                    and iterations < self.max_tool_iterations
+                    and not ctx.cancelled
+                ):
+                    deliverable_complete_forced = True
+                    stop_reason = StopReason(
+                        kind=StopReason.FINAL,
+                        detail="deliverable_complete",
+                    )
+                    request.messages.append(
+                        {
+                            "role": "system",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": (
+                                        "Required deliverables are complete. "
+                                        "Provide your final answer now. "
+                                        "Do not request any tool calls."
+                                    ),
+                                }
+                            ],
+                        }
+                    )
+                    request.tools = []
+                    if effective_budget is not None:
+                        request.messages = self._bound_messages(
+                            request.messages, effective_budget
+                        )
+                    _done_t0 = time.monotonic()
+                    if self.router is not None:
+                        response, tier_sub = await self.router.route(request)
+                        if tier_sub is not None:
+                            tier_substitutions.append(tier_sub)
+                    else:
+                        response = await self.model_interface.invoke(request)
+                    _done_duration = (time.monotonic() - _done_t0) * 1000
+                    done_usage = (
+                        response.usage
+                        if hasattr(response, "usage") and response.usage
+                        else {}
+                    )
+                    done_tokens = done_usage.get("input_tokens", 0) + done_usage.get(
+                        "output_tokens", 0
+                    )
+                    if done_tokens:
+                        ctx.add_tokens(done_tokens)
+                    ctx.events.emit(
+                        Event(
+                            kind="model_call",
+                            t=time.monotonic(),
+                            duration_ms=_done_duration,
+                            tokens_in=done_usage.get("input_tokens", 0),
+                            tokens_out=done_usage.get("output_tokens", 0),
+                            attributes={
+                                "gen_ai.request.model": self._model_id,
+                                "gen_ai.usage.input_tokens": done_usage.get(
+                                    "input_tokens", 0
+                                ),
+                                "gen_ai.usage.output_tokens": done_usage.get(
+                                    "output_tokens", 0
+                                ),
+                                "loomable.deliverable_complete": True,
+                            },
+                        )
+                    )
+                    break
+
         # If no explicit stop reason was set (shouldn't happen, but defensive).
         if stop_reason is None:
             stop_reason = StopReason(kind=StopReason.FINAL)
@@ -2025,6 +2149,11 @@ class BuiltAgent:
         if require_tools_nudges:
             metadata["require_tools_nudged"] = True
             metadata["require_tools_nudges"] = require_tools_nudges
+        if deliverable_complete_nudges:
+            metadata["deliverable_complete_nudged"] = True
+            metadata["deliverable_complete_nudges"] = deliverable_complete_nudges
+        if deliverable_complete_forced:
+            metadata["deliverable_complete_forced"] = True
         if structured_from_write_json:
             metadata["structured_from_write_json"] = True
         still_missing = _missing_require_tool_specs(

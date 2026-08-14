@@ -414,3 +414,77 @@ async def test_require_tools_path_constraint_renudges() -> None:
         if o.result and o.result.metadata.get("tool_name") == "write_file":
             paths.append(o.result.content)
     assert any("output/brief.md" in (c or "") for c in paths)
+
+
+class _DeliverableThenTodoSpamProvider:
+    """Satisfy write_file, then spam update_todo until forced to finish."""
+
+    def __init__(self) -> None:
+        self.call_count = 0
+        self.saw_force_no_tools = False
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        self.call_count += 1
+
+        if not request.tools:
+            self.saw_force_no_tools = True
+            return ModelResponse(
+                content="Done — wrote out.txt",
+                usage={"input_tokens": 2, "output_tokens": 3},
+            )
+
+        # After write_file tool result is present, only bookkeep.
+        if any(
+            m.get("role") == "tool" for m in request.messages if isinstance(m, dict)
+        ):
+            return ModelResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id=f"u{self.call_count}",
+                        tool_name="update_todo",
+                        args={"index": 0, "status": "completed"},
+                    )
+                ],
+                usage={"input_tokens": 2, "output_tokens": 2},
+            )
+
+        return ModelResponse(
+            content="",
+            tool_calls=[
+                ToolCall(
+                    id="w1",
+                    tool_name="write_file",
+                    args={"path": "out.txt", "content": "hello"},
+                )
+            ],
+            usage={"input_tokens": 2, "output_tokens": 2},
+        )
+
+
+@tool
+def update_todo(index: int = 0, status: str = "completed") -> str:
+    """Bookkeeping todo update."""
+    return f"todo[{index}]={status}"
+
+
+@pytest.mark.asyncio
+async def test_deliverable_complete_forces_final_after_todo_spam() -> None:
+    provider = _DeliverableThenTodoSpamProvider()
+    agent = Agent(
+        model=ModelSpec(provider="scripted", provider_impl=provider),
+        tools=[write_file, update_todo],
+        require_tools=["write_file"],
+        max_tool_iterations=20,
+    )
+
+    result = await agent.arun("write out.txt then finish")
+
+    assert result.metadata.get("stop_reason") == "final"
+    assert result.metadata.get("deliverable_complete_nudged") is True
+    assert result.metadata.get("deliverable_complete_forced") is True
+    assert "required_tools_missing" not in (result.metadata or {})
+    assert provider.saw_force_no_tools is True
+    assert "Done" in (result.output.text() or "")
+    # Must not burn the full iteration budget.
+    assert provider.call_count < 12

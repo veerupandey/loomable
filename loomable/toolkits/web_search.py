@@ -63,15 +63,24 @@ class WebSearchTools(Toolkit):
 
     async def _search_duckduckgo(self, query: str, max_results: int) -> str:
         """Execute a search using DuckDuckGo, with resilient public fallbacks."""
+        import warnings
+
         errors: list[str] = []
 
-        # Prefer the renamed ``ddgs`` package, then legacy ``duckduckgo_search``.
+        # Prefer the renamed ``ddgs`` package; suppress the legacy rename warning
+        # when falling back to ``duckduckgo_search``.
         ddgs_cls = None
         try:
             from ddgs import DDGS as ddgs_cls  # type: ignore[assignment]
         except ImportError:
             try:
-                from duckduckgo_search import DDGS as ddgs_cls  # type: ignore[assignment]
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message=r".*renamed to.*ddgs.*",
+                        category=RuntimeWarning,
+                    )
+                    from duckduckgo_search import DDGS as ddgs_cls  # type: ignore[assignment]
             except ImportError:
                 errors.append("ddgs/duckduckgo-search not installed")
 
