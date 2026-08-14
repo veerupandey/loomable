@@ -101,6 +101,9 @@ class ParallelEngine:
         manager = SubagentManager()
 
         for level in levels:
+            if context.cancelled:
+                break
+
             # 4a. Filter: skip completed nodes and check edge conditions
             ready = [
                 nid for nid in level
@@ -171,6 +174,10 @@ class ParallelEngine:
             plan=getattr(last_result, "plan", None),
             reasoning=list(getattr(last_result, "reasoning", None) or []),
         )
+        if context.cancelled:
+            from loomable.agent.context import StopReason
+
+            final.metadata["stop_reason"] = StopReason.CANCELLED
         return final
 
     # ------------------------------------------------------------------

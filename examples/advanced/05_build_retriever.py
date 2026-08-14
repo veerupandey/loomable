@@ -1,5 +1,9 @@
 """Build pluggable retrievers and attach via ``Agent(retrievers=...)``.
 
+Prefer the Stable path ``Agent(knowledge_base=...)`` when you only need vector-DB
+search (see ``examples/agents/07_knowledge_base.py``). This example uses
+experimental ``loomable.retrieval.build_retriever``.
+
 Live model — the agent calls ``search_docs`` itself.
 Requires a real LLM key — see ``.env.example``.
 

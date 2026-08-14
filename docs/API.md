@@ -67,6 +67,11 @@ result = agent.run("Find the latest AI news")
 With tools attached, runs use the tool loop; without tools, a single model call. Pass
 `complexity_router=` only when you want explicit single-shot / tool-loop / plan routing.
 
+`require_tools=["write_file:output/x.md"]` nudges until those side effects happen.
+`strict_require_tools=True` raises `RequireToolsError` if they never do. The same
+knobs inherit onto Agent steps via `Workflow(require_tools=...)` or
+`.step(..., require_tools=...)`.
+
 ### Level 2: Agent + Verifier (output guardrail)
 
 Add a Verifier to gate outputs against a machine-readable success condition.
@@ -314,6 +319,10 @@ result = await team.arun("Review our API design")
 `hard=True` is only valid with `broadcast` / `sequential` (raises otherwise).
 `hard=False` on those modes opts into soft LLM coordination instead.
 
+`mode="coordinate"` (soft) requires every `delegate_to_*` tool and, if the LLM
+still skips members, runs those members deterministically and appends their
+output (`metadata["team_coordinate_fallback"]`).
+
 Under the hood, soft modes create a parent Agent with auto-generated instructions and `subagents=members`.
 
 ### Running
@@ -398,13 +407,12 @@ Pillars:
 ```python
 built = agent.build()
 # During an in-flight arun / astream_events:
-built.cancel()   # or agent.cancel() — cooperative at tool-loop boundaries
+built.cancel()   # or agent.cancel() / workflow.cancel() / case.cancel() / team.cancel()
 ```
 
-SSE / NDJSON client disconnect on `mount_agent` calls `cancel()` when the target
-exposes it (`BuiltAgent` / normal `Agent`). Case / Workflow / Team do not implement
-cancel yet — disconnect stops reading the stream but does not cooperative-cancel
-the underlying run.
+Cooperative at tool-loop and Workflow step boundaries (not a hard abort of in-flight
+provider HTTP). SSE / NDJSON disconnect on `mount_*` calls `cancel()` on the mounted
+runnable (Agent, Case, Workflow, Team).
 
 See `examples/deep_agent/` and `loomable/skills/research/SKILL.md`.
 

@@ -213,6 +213,11 @@ class Team:
             retrievers=retrievers,
             embedder=embedder,
         )
+        # Soft coordinate: nudge the LLM to call every member (WR-020).
+        if mode == "coordinate" and not self._hard and not self._agent._require_tools:
+            from .delegation import delegation_tool_names
+
+            self._agent._require_tools = [name for _, name in delegation_tool_names(members)]
 
     def bind_session(self, session_id: str | None, *, resume: bool | None = None) -> None:
         """Bind HTTP/stream session id — same semantics as :meth:`Agent.bind_session`."""
@@ -316,7 +321,7 @@ class Team:
             )
             for t in budgeted:
                 built.tool_runtime._tools[t.name] = t
-            return await built.arun(
+            result = await built.arun(
                 input,
                 images=images,
                 videos=videos,
@@ -324,15 +329,73 @@ class Team:
                 output_schema=output_schema,
                 context=context,
             )
+        else:
+            result = await self._agent.arun(
+                input,
+                images=images,
+                videos=videos,
+                audio=audio,
+                output_schema=output_schema,
+                context=context,
+            )
+        if self._mode == "coordinate" and not self._hard:
+            result = await self._coordinate_fallback(_input_as_text(input), result)
+        return result
 
-        return await self._agent.arun(
-            input,
-            images=images,
-            videos=videos,
-            audio=audio,
-            output_schema=output_schema,
-            context=context,
+    async def _coordinate_fallback(self, task: str, result: "RunResult") -> "RunResult":
+        """Run members the coordinator never delegated to (WR-020)."""
+        from .delegation import delegation_tool_names
+
+        roster = delegation_tool_names(self._members)
+        missing = {
+            spec.split(":", 1)[0]
+            for spec in (result.metadata or {}).get("required_tools_missing") or []
+        }
+        skipped = [(member, name) for member, name in roster if name in missing]
+        if not skipped and not (result.tool_activity or []) and roster:
+            skipped = list(roster)
+        if not skipped:
+            return result
+
+        extras: list[tuple[str, str]] = []
+        for index, (member, _name) in enumerate(skipped):
+            label = _member_label(member, index)
+            try:
+                extra = await member.arun(task)
+                extras.append((label, extra.output.text()))
+            except Exception as exc:  # noqa: BLE001
+                extras.append((label, f"ERROR: {exc}"))
+        if not extras:
+            return result
+
+        from loomable.agent.run import RunResult
+        from loomable.content import AgentOutput, Text
+
+        extra_text = "\n\n".join(f"## {label} (fallback)\n{text}" for label, text in extras)
+        merged = (result.output.text() or "").rstrip()
+        if extra_text:
+            merged = f"{merged}\n\n{extra_text}" if merged else extra_text
+        meta = dict(result.metadata or {})
+        meta["team_coordinate_fallback"] = [name for _, name in skipped]
+        return RunResult(
+            output=AgentOutput(parts=[Text(merged)]),
+            session_id=result.session_id,
+            usage=result.usage,
+            tool_activity=list(result.tool_activity or []),
+            structured=result.structured,
+            metadata=meta,
         )
+
+    def cancel(self) -> bool:
+        """Cancel the coordinator and any in-flight members."""
+        hit = False
+        if self._agent.cancel():
+            hit = True
+        for member in self._members:
+            cancel = getattr(member, "cancel", None)
+            if callable(cancel) and cancel():
+                hit = True
+        return hit
 
     def run(
         self,

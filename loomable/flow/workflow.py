@@ -94,6 +94,9 @@ class Workflow:
         already have one (same object as ``Agent(knowledge_base=...)``).
     retrievers / embedder:
         Extra search tools / embedder inherited the same way.
+    require_tools / strict_require_tools:
+        Inherited by Agent steps that do not already set ``require_tools``.
+        Same semantics as ``Agent(require_tools=..., strict_require_tools=...)``.
     deps:
         Shared dependency injection object for all steps.
     """
@@ -111,6 +114,8 @@ class Workflow:
         knowledge_base: Any = None,
         retrievers: Any = None,
         embedder: Any = None,
+        require_tools: list[str] | None = None,
+        strict_require_tools: bool = False,
     ) -> None:
         self._name = name
         self._steps: list[Any] = list(steps) if steps is not None else []
@@ -121,9 +126,12 @@ class Workflow:
         self._knowledge_base = knowledge_base
         self._retrievers = retrievers
         self._embedder = embedder
+        self._require_tools = list(require_tools) if require_tools else []
+        self._strict_require_tools = bool(strict_require_tools)
         self._compiled_flow: Flow | None = None
         self._last_state: SharedState | None = None
         self._step_counter = 0
+        self._active_ctx: RunContext | None = None
 
         # Explicit empty steps=[] still fails fast; steps=None allows fluent .step()
         if steps is not None and not steps:
@@ -154,6 +162,14 @@ class Workflow:
                     retrievers=retrievers,
                     embedder=embedder,
                 )
+            if self._require_tools or self._strict_require_tools:
+                from loomable.agent.memory_opts import apply_require_tools
+
+                apply_require_tools(
+                    self._steps,
+                    require_tools=self._require_tools or None,
+                    strict_require_tools=self._strict_require_tools or None,
+                )
 
     # ------------------------------------------------------------------
     # Fluent builders (return self for chaining)
@@ -168,11 +184,15 @@ class Workflow:
         deps: Any = None,
         require_confirmation: bool = False,
         confirm: bool | None = None,
+        require_tools: list[str] | None = None,
+        strict_require_tools: bool | None = None,
     ) -> "Workflow":
         """Append a named step. ``.step("gather", agent)`` or ``.step(Step(...))``.
 
         Pass ``confirm=True`` (or ``require_confirmation=True``) to pause the
         workflow before the step until ``approve(name)`` + ``arun(resume=True)``.
+        ``require_tools`` / ``strict_require_tools`` apply when ``agent`` is an
+        :class:`~loomable.agent.builder.Agent`.
         """
         from loomable.flow.step import Step
 
@@ -193,6 +213,21 @@ class Workflow:
                 deps=deps,
                 require_confirmation=require_confirmation,
             )
+        inner = getattr(element, "_agent", None)
+        if require_tools is not None or strict_require_tools is True:
+            from loomable.agent.memory_opts import inherit_agent_require_tools
+
+            if inner is not None and hasattr(inner, "_require_tools"):
+                inherit_agent_require_tools(
+                    inner,
+                    require_tools=require_tools,
+                    strict_require_tools=strict_require_tools,
+                    overwrite=True,
+                )
+            elif require_tools:
+                raise TypeError(
+                    "Workflow.step(..., require_tools=) only applies when the step is an Agent"
+                )
         self._steps.append(element)
         self._invalidate()
         return self
@@ -318,6 +353,14 @@ class Workflow:
                 retrievers=self._retrievers,
                 embedder=self._embedder,
             )
+        if self._require_tools or self._strict_require_tools:
+            from loomable.agent.memory_opts import apply_require_tools
+
+            apply_require_tools(
+                self._steps,
+                require_tools=self._require_tools or None,
+                strict_require_tools=self._strict_require_tools or None,
+            )
 
     def build(self) -> "Workflow":
         """Eagerly compile the graph (also happens automatically on arun/explain)."""
@@ -337,6 +380,14 @@ class Workflow:
                 retrievers=self._retrievers,
                 embedder=self._embedder,
             )
+            if self._require_tools or self._strict_require_tools:
+                from loomable.agent.memory_opts import apply_require_tools
+
+                apply_require_tools(
+                    self._steps,
+                    require_tools=self._require_tools or None,
+                    strict_require_tools=self._strict_require_tools or None,
+                )
             self._compiled_flow = WorkflowCompiler.compile(
                 self._steps,
                 name=self._name,
@@ -386,12 +437,29 @@ class Workflow:
         """
         flow = self._ensure_compiled()
         ctx = context or RunContext()
-        result = await flow.arun(input, context=ctx, resume=resume)
+        self._active_ctx = ctx
+        try:
+            result = await flow.arun(input, context=ctx, resume=resume)
+        finally:
+            if self._active_ctx is ctx:
+                self._active_ctx = None
         if ctx.shared_state is not None:
             self._last_state = ctx.shared_state
         else:
             self._last_state = SharedState()
         return result
+
+    def cancel(self) -> bool:
+        """Request cooperative cancellation of the in-flight workflow run."""
+        hit = False
+        ctx = self._active_ctx
+        if ctx is not None:
+            ctx.cancel()
+            hit = True
+        flow = self._compiled_flow
+        if flow is not None and hasattr(flow, "cancel"):
+            hit = flow.cancel() or hit
+        return hit
 
     async def astream_events(
         self,
@@ -405,15 +473,19 @@ class Workflow:
         """Yield AG-UI events (NODE_* lifecycle + nested run frames)."""
         flow = self._ensure_compiled()
         ctx = context or RunContext()
-
-        async for event in flow.astream_events(
-            input,
-            session_id=session_id or self._session_id,
-            run_id=run_id,
-            context=ctx,
-            resume=resume,
-        ):
-            yield event
+        self._active_ctx = ctx
+        try:
+            async for event in flow.astream_events(
+                input,
+                session_id=session_id or self._session_id,
+                run_id=run_id,
+                context=ctx,
+                resume=resume,
+            ):
+                yield event
+        finally:
+            if self._active_ctx is ctx:
+                self._active_ctx = None
 
         if ctx.shared_state is not None:
             self._last_state = ctx.shared_state
