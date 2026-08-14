@@ -1,12 +1,11 @@
-"""Agent knowledge base — a vector store the model can search.
+"""Searchable knowledge base — a vector store the agent queries as tools.
 
-``knowledge_base=`` is a vector DB (optionally ingested from files).
+``knowledge_base=`` is a vector DB (optionally ingested from files/dirs).
 ``retrievers=`` attaches extra search tools on the same Agent.
 ``create_deep_agent`` is Agent, so it takes the same kwargs.
 
-Tough question: company policy allows committed .env tokens; personal notes
-forbid secrets in git. The agent must search both collections and follow the
-stricter personal constraint, while still citing the webhook key.
+This script is offline (scripted model). For a live model, swap in Gemini /
+Azure OpenAI and keep the same ``knowledge_base=``.
 
 Run::
 
@@ -25,24 +24,27 @@ ROOT = Path(__file__).resolve().parent / ".knowledge_base_demo"
 ROOT.mkdir(parents=True, exist_ok=True)
 
 
-def _seed() -> tuple[Path, Path]:
+def _seed() -> dict[str, list[Path]]:
     personal = ROOT / "personal"
     company = ROOT / "company"
     personal.mkdir(exist_ok=True)
     company.mkdir(exist_ok=True)
     (personal / "prefs.md").write_text(
-        "# Avery preferences\n\nNever commit secrets. No API tokens in git.\n",
+        "# Avery preferences\n\n"
+        "Never commit secrets. No API tokens in git, including .env files.\n",
         encoding="utf-8",
     )
     (company / "policy.md").write_text(
-        "# Policy\n\nStaging credentials MAY live in a committed internal .env.\n",
+        "# Credential policy\n\n"
+        "Staging credentials MAY be stored in a committed internal .env file.\n",
         encoding="utf-8",
     )
     (company / "runbook.md").write_text(
-        "# Webhooks\n\nSigning secret KEY-WHSEC-4419. Rotate after leaks.\n",
+        "# Webhooks\n\n"
+        "Current signing secret is DEMO-WH-4419. Rotate after any leak.\n",
         encoding="utf-8",
     )
-    return personal, company
+    return {"personal": [personal], "company": [company]}
 
 
 class _Scripted:
@@ -69,28 +71,38 @@ class _Scripted:
                     ToolCall(
                         id="2",
                         tool_name="search_company",
-                        args={"query": "webhook KEY-WHSEC .env policy", "k": 5},
+                        args={"query": "webhook DEMO-WH .env policy", "k": 5},
                     )
                 ],
             )
         return ModelResponse(
             content=(
-                "Do not commit the staging token (personal notes). "
-                "Webhook key is KEY-WHSEC-4419 (runbook.md)."
+                "Do not commit the staging token (personal notes are stricter "
+                "than company .env policy). Webhook key is DEMO-WH-4419 (runbook.md)."
             )
         )
 
 
+async def _ask(agent: Agent, label: str) -> None:
+    result = await agent.arun(
+        "Can I commit STAGING_TOKEN=demo-not-a-secret per policy? "
+        "What is the webhook signing secret? Cite sources."
+    )
+    print(f"[{label}] {(result.output.text() or '').strip()}")
+
+
 async def main() -> None:
-    personal, company = _seed()
-    kb = {"personal": [personal], "company": [company]}
-    # Same knowledge_base on Agent and create_deep_agent (deep agent is Agent).
-    _agent = Agent(
-        ModelSpec(provider="scripted", provider_impl=_Scripted()),
+    kb = _seed()
+    model = ModelSpec(provider="scripted", provider_impl=_Scripted())
+    agent = Agent(
+        model,
         user_id="avery",
         knowledge_base=kb,
         use_llm_summarizer=False,
+        max_tool_iterations=8,
     )
+    await _ask(agent, "Agent")
+
     deep = create_deep_agent(
         ModelSpec(provider="scripted", provider_impl=_Scripted()),
         user_id="avery",
@@ -102,11 +114,9 @@ async def main() -> None:
         think_tool=False,
         board=False,
         use_llm_summarizer=False,
+        max_tool_iterations=8,
     )
-    result = await deep.arun(
-        "Can I commit STAGING_API_TOKEN per policy? What is the webhook key?"
-    )
-    print(result.output.text())
+    await _ask(deep, "create_deep_agent")
 
 
 if __name__ == "__main__":

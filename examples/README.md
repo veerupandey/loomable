@@ -16,7 +16,8 @@
 | Deep code (repo index + coding) | `profile="code"` / `CodeIndex` | `deep_agent/06_deep_code.py` |
 | Build retrievers (docs/code) | `build_retriever` | `advanced/02_build_retriever.py` |
 | Agentic retriever (pluggable) | `ingest` + `build_agentic_retriever` | `advanced/03_agentic_retriever.py` |
-| RAG | `knowledge_base=` (vector DB) or `knowledge` + embedder | `agents/07_knowledge_base.py`, `agents/05_with_knowledge.py` |
+| RAG (searchable vector DB) | `knowledge_base=` on Agent / create_deep_agent | `agents/07_knowledge_base.py` |
+| RAG (passive snippets) | `knowledge` + embedder | `agents/05_with_knowledge.py` |
 | Production hardening | resilience + hooks | `agents/06_production.py` |
 | Specialists | `Team` / subagents | `subagents/` |
 | Quality gate | `Loop` / verifier | `patterns/01_retry_loop.py` |
@@ -47,11 +48,11 @@ examples/
 ## Running
 
 ```bash
-# .env in repo root
-GEMINI_API_KEY=...
-# or OPENAI_API_KEY / Azure vars
+# Copy .env.example → .env in the repo root (gitignored; never commit .env)
+# GEMINI_API_KEY=...  or OPENAI_API_KEY / Azure vars
 
 python examples/agents/01_hello_world.py
+python examples/agents/07_knowledge_base.py   # offline, no API key
 ```
 
 ## Design principles

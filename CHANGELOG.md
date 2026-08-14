@@ -30,6 +30,7 @@
 
 - Package status: **Beta** (`0.2.0b0`)
 - `create_research_agent` emits `DeprecationWarning` (alias retained)
+- CI installs `.[dev,toolkits]`; README badge pins `main`
 
 ### Limits (documented)
 

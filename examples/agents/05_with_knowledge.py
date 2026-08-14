@@ -1,10 +1,11 @@
-"""Agent with Knowledge (RAG) — Retrieval-augmented generation.
+"""Passive knowledge recall — short strings injected into context.
 
-USE WHEN: Your agent needs to answer questions about specific
-documents or data it wasn't trained on.
+USE WHEN: You have a few FAQ / policy snippets and do not need the model
+to call a search tool. Docs are embedded at build and the top-k snippets
+are prepended each turn.
 
-Knowledge docs are embedded at build time and recalled at runtime
-via vector similarity search.
+For a searchable vector-DB knowledge base (files, PDFs, named collections),
+see ``07_knowledge_base.py`` (``Agent(knowledge_base=...)``).
 """
 
 import asyncio
@@ -19,7 +20,7 @@ from loomable.providers import AzureOpenAIEmbedder
 provider = AzureOpenAIProvider()
 embedder = AzureOpenAIEmbedder()
 
-# Knowledge base: these docs get embedded and indexed at build time
+# Passive snippets — embedded at build, recalled into context (no search tool)
 knowledge_docs = [
     "Loomable is a lightweight Python agent framework. It uses a kernel/agent "
     "architecture where the kernel provides stable contracts and the agent layer "
