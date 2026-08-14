@@ -5,6 +5,10 @@ shared state that persists across the flow execution.
 
 The TieredMemoryStore (memory parameter) is shared across
 all nodes in a Flow, enabling inter-agent communication.
+
+For the productized conversation/user memory API, prefer
+``Memory.compose`` (see ``05_compose_memory.py``) or
+``Workflow(memory=True)``.
 """
 
 import asyncio

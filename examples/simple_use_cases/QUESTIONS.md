@@ -46,7 +46,7 @@ Starter questions for demos and smoke tests. Keep them short.
 
 | Use case | Example question |
 |----------|------------------|
-| FAQ bot | “What is your refund policy?” (with knowledge docs) |
+| FAQ bot | “What is your refund policy?” — see `agents/05_with_knowledge.py` (passive) or `agents/07_knowledge_base.py` (searchable KB) |
 | Lead qualifier | “From this form reply, is the lead hot/warm/cold?” |
 | Meeting notes | “Turn this transcript into decisions + owners.” |
 | Support triage | “Which queue should get this ticket?” |
