@@ -80,6 +80,7 @@ from loomable.retrieval.route import (
     HeuristicModeRouter,
     LLMModeRouter,
 )
+from loomable.retrieval.metadata import matches_filters, shape_hit
 from loomable.retrieval.types import Chunk, Document
 from loomable.retrieval.naming import (
     DEFAULT_SEARCH_DOCS,
@@ -115,6 +116,8 @@ __all__ = [
     "ensure_search_tool_name",
     "DEFAULT_SEARCH_DOCS",
     "DEFAULT_SEARCH_KNOWLEDGE",
+    "matches_filters",
+    "shape_hit",
     # Base retrievers
     "HybridRetriever",
     "LexicalRetriever",

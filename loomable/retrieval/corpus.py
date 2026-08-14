@@ -74,12 +74,17 @@ class Corpus:
         *,
         strategy: str | ChunkStrategy | None = None,
         rebuild: bool = False,
+        metadata: dict | None = None,
     ) -> int:
         """Load sources, chunk, and index. Skips unchanged docs unless ``rebuild``."""
+        from loomable.retrieval.metadata import apply_document_metadata
+
         strat = resolve_strategy(strategy if strategy is not None else self.strategy)
         docs = load_sources(sources)
         if not docs:
             return 0
+        for doc in docs:
+            apply_document_metadata(doc, metadata)
 
         emb = self.embedder or HashingEmbedder()
         self.embedder = emb
@@ -100,10 +105,21 @@ class Corpus:
             self.documents.append(doc)
             self._doc_hashes[doc.id] = digest
             produced = list(strat.chunk(doc))
+            from pathlib import Path as _P
+
+            filename = (doc.metadata or {}).get("filename") or (
+                _P(doc.source).name if doc.source else ""
+            )
             for c in produced:
                 c.metadata.setdefault("source", doc.source or doc.id)
                 c.metadata.setdefault("path", doc.source or doc.id)
+                c.metadata.setdefault("filename", filename)
+                c.metadata.setdefault("media_type", doc.media_type)
+                c.metadata.setdefault("document_id", doc.id)
                 c.metadata["corpus"] = self.name
+                for key, value in (doc.metadata or {}).items():
+                    if value is not None:
+                        c.metadata.setdefault(key, value)
             new_chunks.extend(produced)
             self.chunks.extend(produced)
 
@@ -195,12 +211,15 @@ async def ingest(
     persist_path: str | Path | None = None,
     base_mode: str = "hybrid",
     vector_weight: float = 0.7,
+    metadata: dict | None = None,
 ) -> Corpus:
     """Ingest sources into a named :class:`Corpus` (pluggable store/strategy/mode).
 
     ``strategy="auto"`` (default) is format-aware: PDFs are extracted with page
     markers, then page-chunked (oversized pages split with overlap — never
     truncated). Pass a ``.pdf`` path or directory; chunking is internal.
+
+    ``metadata`` is copied onto every document and chunk (author, title, tags, …).
     """
     corpus = Corpus(
         name=name,
@@ -211,5 +230,7 @@ async def ingest(
         vector_weight=vector_weight,
         strategy=strategy,
     )
-    await corpus.upsert(sources, strategy=strategy, rebuild=True)
+    await corpus.upsert(
+        sources, strategy=strategy, rebuild=True, metadata=metadata
+    )
     return corpus

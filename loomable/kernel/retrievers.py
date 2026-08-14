@@ -28,6 +28,13 @@ _RETRIEVER_PARAMETERS: dict[str, Any] = {
             "description": "Maximum number of results to return (default 5).",
             "default": 5,
         },
+        "filters": {
+            "type": "object",
+            "description": (
+                "Optional metadata filters (equality or list membership), e.g. "
+                '{"media_type": "application/pdf", "page": 3, "tags": ["auth"]}.'
+            ),
+        },
     },
     "required": ["query"],
 }
@@ -55,9 +62,20 @@ class RetrieverTool(Tool):
         """Invoke the wrapped retriever with query and k from args."""
         query: str = args.get("query", "")
         k: int = args.get("k", 5)
+        filters = args.get("filters")
+        if isinstance(filters, str):
+            import json
+
+            try:
+                filters = json.loads(filters)
+            except json.JSONDecodeError:
+                filters = None
 
         try:
-            results = await self._retriever.retrieve(query, k)
+            try:
+                results = await self._retriever.retrieve(query, k, filters=filters)
+            except TypeError:
+                results = await self._retriever.retrieve(query, k)
         except Exception as exc:
             return ToolResult(
                 error=f"Retriever '{self._retriever.name}' failed: {exc}",

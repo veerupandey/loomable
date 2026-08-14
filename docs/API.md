@@ -1471,6 +1471,14 @@ retriever = await build_agentic_retriever(
     # llm=provider,       # needed for multi_query / hyde / llm rerank / llm mode
 )
 agent = Agent(model=provider, retrievers=[retriever])  # LLM calls search_docs(query, k)
+
+# Metadata: attached at ingest, returned on hits, filterable
+corpus = await ingest(
+    ["./handbook.pdf"],
+    metadata={"author": "security", "tags": ["policy"]},
+)
+hits = await retriever.retrieve("OAuth", k=5, filters={"page": 3, "tags": ["policy"]})
+# hit["author"], hit["page"], hit["filename"], hit["source"], …
 ```
 
 Ship **any** custom retriever the same way — implement ``name`` + ``async retrieve``

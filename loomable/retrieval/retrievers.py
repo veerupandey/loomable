@@ -8,6 +8,7 @@ from typing import Any, Sequence
 
 from loomable.kernel.contracts import Retriever
 from loomable.kernel.long_term import LongTermStore
+from loomable.retrieval.metadata import matches_filters, shape_hit
 from loomable.retrieval.types import Chunk
 
 _TOKEN = re.compile(r"[a-z0-9_]+", re.I)
@@ -52,27 +53,23 @@ class VectorRetriever(Retriever):
             n += 1
         return n
 
-    async def retrieve(self, query: str, k: int) -> list[dict[str, Any]]:
+    async def retrieve(
+        self,
+        query: str,
+        k: int,
+        filters: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         vector = await self.embedder.embed(query)
-        rows = await self.store.query(vector, k=max(1, int(k)))
+        fetch = max(1, int(k) * 8) if filters else max(1, int(k))
+        rows = await self.store.query(vector, k=fetch)
         out: list[dict[str, Any]] = []
         for row in rows:
-            content = row.get("content") or row.get("text") or ""
-            out.append(
-                {
-                    "id": row.get("id"),
-                    "content": content,
-                    "score": float(row.get("score") or 0.0),
-                    "source": row.get("source") or row.get("path") or "",
-                    "path": row.get("path") or row.get("source") or "",
-                    "start_line": row.get("start_line"),
-                    "end_line": row.get("end_line"),
-                    "kind": row.get("kind"),
-                    "name": row.get("name"),
-                    "page": row.get("page"),
-                    "corpus": row.get("corpus"),
-                }
-            )
+            hit = shape_hit(row)
+            if not matches_filters(hit, filters):
+                continue
+            out.append(hit)
+            if len(out) >= max(1, int(k)):
+                break
         return out
 
 
@@ -123,17 +120,27 @@ class LexicalRetriever(Retriever):
             score += idf * (freq * (k1 + 1)) / denom
         return score
 
-    async def retrieve(self, query: str, k: int) -> list[dict[str, Any]]:
+    async def retrieve(
+        self,
+        query: str,
+        k: int,
+        filters: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         scored = [
             (self._score(query, tokens), chunk)
             for tokens, chunk in zip(self._docs_tokens, self._chunks)
         ]
         scored.sort(key=lambda x: x[0], reverse=True)
         out: list[dict[str, Any]] = []
-        for score, chunk in scored[: max(1, int(k))]:
+        for score, chunk in scored:
             if score <= 0:
                 continue
-            out.append(chunk.as_result(score=score))
+            hit = chunk.as_result(score=score)
+            if not matches_filters(hit, filters):
+                continue
+            out.append(hit)
+            if len(out) >= max(1, int(k)):
+                break
         return out
 
 
@@ -153,10 +160,17 @@ class HybridRetriever(Retriever):
         self.lexical = lexical
         self.vector_weight = min(1.0, max(0.0, float(vector_weight)))
 
-    async def retrieve(self, query: str, k: int) -> list[dict[str, Any]]:
+    async def retrieve(
+        self,
+        query: str,
+        k: int,
+        filters: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         k_fetch = max(int(k) * 3, int(k))
-        v_hits = await self.vector.retrieve(query, k_fetch)
-        l_hits = await self.lexical.retrieve(query, k_fetch)
+        if filters:
+            k_fetch = max(k_fetch * 3, int(k) * 8)
+        v_hits = await self.vector.retrieve(query, k_fetch, filters=filters)
+        l_hits = await self.lexical.retrieve(query, k_fetch, filters=filters)
         scores: dict[str, float] = {}
         payloads: dict[str, dict[str, Any]] = {}
         vw = self.vector_weight
