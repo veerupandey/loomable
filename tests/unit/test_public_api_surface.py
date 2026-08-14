@@ -5,7 +5,7 @@ from __future__ import annotations
 import loomable
 
 
-# Documented stable exports (docs/STABILITY.md).
+# Documented public exports (loomable.__all__).
 _EXPECTED = {
     "__version__",
     "Agent",
@@ -58,7 +58,7 @@ def test_public_all_matches_stability_surface() -> None:
     missing = _EXPECTED - actual
     extra = actual - _EXPECTED
     assert not missing, f"missing from __all__: {sorted(missing)}"
-    assert not extra, f"unexpected __all__ entries (update STABILITY.md): {sorted(extra)}"
+    assert not extra, f"unexpected __all__ entries (update this freeze): {sorted(extra)}"
 
 
 def test_stable_symbols_importable() -> None:
