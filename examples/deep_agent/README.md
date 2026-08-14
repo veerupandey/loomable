@@ -26,24 +26,13 @@ See ``examples/agents/07_knowledge_base.py`` for a live ``knowledge_base=`` demo
 | Subagents | `task` / `task_batch` + named specialists |
 | Context | `compact_conversation`, Memory, summarizer |
 | Skills | Bundled `research` (any topic) via `loomable.skills` |
-| Discovery | Schema budget: core tools + `search_*` / `load_skill` / `activate_tool` (see `docs/COMPETITIVE.md`) |
+| Discovery | Schema budget: core tools + `search_*` / `load_skill` / `activate_tool` |
 | Hard tasks | accept gates, Case, AG-UI / Team / Workflow |
-
-## Why this beats peer deep agents
-
-| Capability | deepagents | Agno | CrewAI | **loomable** |
-|------------|------------|------|--------|--------------|
-| Pure stack | LangChain+LangGraph | Agno | Crew | **loomable only** |
-| Research specialization | Separate harness ideas | Toolkits | Crew roles | **Skill + profile** |
-| Shared FS offload | Yes | Session | Weak | **Token-aware `.offload/`** |
-| Citations / claims | None | Integrations | Weak | **verify + claim tools** |
-| Parallel fan-out | Multi-task | broadcast | async | **`task_batch`** |
-| Enterprise spine | LangGraph | AgentOS | Flows | **Case / Team / Workflow / AG-UI** |
 
 ## Quick start
 
 ```python
-from loomable import create_deep_agent, Memory, ConversationMemory, UserMemory
+from loomable import create_deep_agent, Memory, ConversationMemory
 
 agent = create_deep_agent(
     model="gemini:gemini-flash-latest",
@@ -51,7 +40,6 @@ agent = create_deep_agent(
     workspace="./.deep_workspace",
     memory=Memory.compose(
         conversation=ConversationMemory(),
-        user=UserMemory(auto_extract=True),
     ),
 )
 await agent.arun("Research X; write reports/x.md with citations")

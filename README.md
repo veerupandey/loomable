@@ -162,7 +162,7 @@ try:
     result = await wf.arun(email)
 except FlowPaused:
     await wf.approve("scribe")
-    result = await wf.arun(email, resume=True)
+    result = await wf.arun(resume=True)
 print(wf.state.get("gather"))
 ```
 
@@ -196,7 +196,7 @@ result = await team.arun(brief)
 
 ## AG-UI SSE
 
-First-class CopilotKit / AG-UI-compatible events — no hard CopilotKit dependency.
+First-class AG-UI events over `text/event-stream`.
 
 ```python
 from fastapi import FastAPI
@@ -244,7 +244,7 @@ examples/
 ├── deep_agent/           # create_deep_agent(profile=research|code)
 ├── subagents/            # Delegation & Team
 ├── patterns/             # Workflow step / parallel / Team route / map
-├── memory/               # Memory.compose, Agent chaining, callable blackboard
+├── memory/               # Memory.compose, Workflow chaining, callable blackboard
 ├── advanced/             # MCP, Workflow branch, checkpoints, RAG
 ├── simple_use_cases/     # News, research, docs
 └── escalation_war_room/  # Full SEV ladder (Case + SSE)

@@ -1,10 +1,9 @@
-"""Subagents with Memory Sharing — Parent context flows to children.
+"""Subagents sharing a conversation session.
 
-USE WHEN: Your subagents need access to the same conversation
-history or shared context as the parent.
+USE WHEN: Parent and specialists should see the same L1/L2 turns.
 
-Subagents inherit the parent's session context by default,
-so they can reference what was discussed earlier.
+Give them the same ``session_id`` (or a shared ``Memory.compose`` bundle).
+Delegation does not copy session context by itself.
 """
 
 import asyncio

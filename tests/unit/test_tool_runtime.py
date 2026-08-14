@@ -191,3 +191,10 @@ class TestToolRuntimeDispatch:
         outcomes = await runtime.dispatch(calls)
 
         assert [o.call_id for o in outcomes] == ["first", "second", "third"]
+
+
+def test_tool_runtime_names_and_contains() -> None:
+    runtime = ToolRuntime({"echo": EchoTool()})
+    assert "echo" in runtime
+    assert "missing" not in runtime
+    assert runtime.names == ("echo",)

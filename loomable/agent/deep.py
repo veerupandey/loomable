@@ -1,13 +1,7 @@
 """Deep Agent harness — loomable-native long-horizon agent.
 
-Built **solely on loomable** (no LangGraph / deepagents dependency). Designed to
-beat other deep-agent stacks on research and hard long-horizon work:
-
-1. **Planning** — ``TodoTools`` (``write_todos`` / ``read_todos`` / ``update_todo``)
-2. **Workspace FS** — ``WorkspaceTools`` + token-aware offload (not truncate)
-3. **Subagents** — ``task`` / ``task_batch`` + named ``specialists`` + Case spawn
-4. **Context engineering** — think/plan, compact_conversation, Memory, summarizer
-5. **Research** — search, fetch, citations (verify/claim), vision, accept gates
+Planning, workspace files, subagents, and research tools on the same Agent
+surface (TodoTools, WorkspaceTools, task/task_batch, citations, accept gates).
 """
 
 from __future__ import annotations
@@ -993,8 +987,6 @@ def create_deep_agent(
         case_only = []
         if dispatch != "reuse":
             case_only.append("dispatch")
-        if board is not True:
-            case_only.append("board")
         if max_rounds is not None:
             case_only.append("max_rounds")
         if max_plan_steps != 8:

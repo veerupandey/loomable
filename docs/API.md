@@ -7,7 +7,7 @@ Workflows, and Cases with SharedState, HITL, checkpoints, and AG-UI SSE.
 
 ## Table of Contents
 
-- [Progressive Disclosure (Levels 0–7)](#progressive-disclosure-levels-07)
+- [Progressive Disclosure (Levels 0–6)](#progressive-disclosure-levels-06)
 - [Quick Start](#quick-start)
 - [Agent](#agent)
 - [Case](#case)
@@ -30,7 +30,7 @@ Workflows, and Cases with SharedState, HITL, checkpoints, and AG-UI SSE.
 
 ---
 
-## Progressive Disclosure (Levels 0–7)
+## Progressive Disclosure (Levels 0–6)
 
 The API is designed so you start simple and add capabilities incrementally — never rewrite into a new DSL. Each level adds configuration to the level below.
 
@@ -154,19 +154,7 @@ Declarative style: `Workflow("pipe", steps=[Step("a", a), Step("b", b)])`.
 Low-level `Flow` / `Edge` remain available as an advanced escape hatch
 (see [Flow Engine](#flow-engine)). Prefer the `Workflow` builders above.
 
-### Level 5: Workflow parallel + branch (same object)
-
-```python
-wf = (
-    Workflow("sev1", session_id="inc-1")
-    .step("gather", gatherer)
-    .parallel(analyst=analyst, visual=visual)
-    .branch(when=needs_human, then=approver, else_=auto)
-    .step("publish", publisher)
-)
-```
-
-### Level 6: Workflow with checkpointer
+### Level 5: Workflow with checkpointer
 
 Prefer `Workflow` for production processes. Agent-to-Agent sharing is sequential
 output chaining via SharedState. ``memory=True`` attaches a blackboard on
@@ -194,7 +182,7 @@ print(wf.explain())  # inspect topology
 Low-level `Flow(optimizer=..., memory=TieredMemoryStore(), ...)` remains an
 advanced escape hatch; teaching demos and new code should use `Workflow`.
 
-### Level 7: Workflow HITL + observability
+### Level 6: Workflow HITL + observability
 
 Human-in-the-loop and durable resume stay on `Workflow` — mark a step with
 `confirm=True`, catch pause, then `approve()` + `arun(resume=True)`.
@@ -1199,7 +1187,7 @@ async for ev in workflow.astream_events(prompt):
 
 ## AG-UI SSE
 
-CopilotKit-compatible event types over `text/event-stream`. No hard CopilotKit dependency.
+AG-UI event types over `text/event-stream`.
 
 | Type family | Events |
 |-------------|--------|
@@ -1248,17 +1236,9 @@ compiled graph escape hatch underneath.
 ### Advanced Flow helpers
 
 Prefer `Workflow.step` / `.parallel` / `.branch` / `.map` and `Team(mode=...)`.
-Low-level Flow helpers live under `loomable.flow.helpers` if you need them:
-
-```python
-from loomable.flow.helpers import sequential, parallel, route, coordinate, plan_and_execute
-
-flow = sequential(step_a, step_b, step_c)
-flow = parallel(researcher, analyst, writer)
-flow = route(chooser_fn, {"research": researcher, "write": writer})
-flow = coordinate(workers=[researcher, analyst], manager=synthesizer)
-flow = plan_and_execute(planner, worker, synthesizer)  # also used by Workflow.map
-```
+Low-level helpers remain at `loomable.flow.helpers` (`sequential`, `parallel`,
+`route`, `coordinate`, `plan_and_execute`) as an escape hatch — `Workflow.map`
+uses `plan_and_execute` internally.
 
 ### Engines
 
@@ -1309,7 +1289,7 @@ from loomable.flow import (
 
 Two layers — both on `Agent` (and therefore `create_deep_agent`, Team, Case, Workflow):
 
-**Searchable knowledge base** (vector DB, like Agno Knowledge / a VectorStoreIndex):
+**Searchable knowledge base** (vector DB with ingest + `search_*` tools):
 
 ```python
 from loomable.providers.vector_store import open_vector_store

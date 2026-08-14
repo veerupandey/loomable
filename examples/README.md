@@ -77,8 +77,9 @@ python examples/advanced/03_checkpointing.py       # live Workflow + checkpointe
 2. **Run it, see one clear output**
 3. **Docstring says when to use the pattern**
 4. **Progressive** — unique numeric prefixes; `01` is simplest in each folder
-5. **Live models** — examples call a real provider via `examples/_provider.py`
+5. **Live models** — most examples call a real provider via `examples/_provider.py`
    (`GEMINI_API_KEY` / OpenAI / Azure). Copy `.env.example` → `.env`.
+   `deep_agent/` is scripted by default for CI; set `DEEP_AGENT_LIVE=1` for live runs.
 6. **Agents understand prior output** — put `Agent`s on `Workflow.step` / `Team`.
    Do **not** add glue functions that parse `AgentOutput` between steps; the
    framework already passes the previous output as the next input.
