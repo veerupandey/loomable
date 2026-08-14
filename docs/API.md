@@ -1416,37 +1416,47 @@ agent = Agent(
 
 ## Retrieval (docs, code, mixed corpora)
 
-High-level API to ingest heterogeneous sources, chunk them, and build a
-:class:`~loomable.kernel.contracts.Retriever` for ``Agent(retrievers=[...])``.
+Ingest → chunk → pluggable base retrieve → **agentic** rewrite / route / rerank.
 
 ```python
 from loomable import Agent
-from loomable.retrieval import build_retriever, list_strategies
+from loomable.kernel.long_term import open_vector_store
+from loomable.retrieval import ingest, build_agentic_retriever
 
-retriever = await build_retriever(
-    [
-        "./docs",                 # directory
-        "./README.md",            # file
-        {"id": "note", "text": "Inline knowledge"},
-    ],
+corpus = await ingest(
+    ["./docs", "./README.md", {"id": "note", "text": "Inline knowledge"}],
     name="docs",
-    mode="hybrid",              # vector | lexical | hybrid
-    strategy="auto",            # text | markdown | code | html | pdf | auto
-    persist_path="./.loomable/docs_zvec",  # Alibaba zvec on disk (pip install loomable[zvec])
-    # Or FAISS / Postgres / any VectorBackend:
-    # from loomable.kernel.long_term import open_vector_store
-    # store=open_vector_store(engine="faiss", path="./.loomable/docs_faiss",
-    #                         dimensions=384, device="auto")
-    # store=open_vector_store(postgres_url=DSN, dimensions=1536),
+    store=open_vector_store(path="./.loomable/docs_zvec"),  # or faiss / postgres / memory
+    strategy="auto",       # text | markdown | code | html | pdf | auto | custom
+    base_mode="hybrid",    # vector | lexical | hybrid
+)
+
+retriever = await build_agentic_retriever(
+    corpus,
+    mode="auto",           # chunks | file | auto | custom ModeRouter
+    rewrite="off",         # off | multi_query | hyde | custom QueryRewriter
+    rerank="score",        # off | score | llm | custom Reranker
+    compress="off",        # off | llm | custom HitCompressor
+    # llm=provider,       # needed for multi_query / hyde / llm rerank / llm mode
 )
 agent = Agent(model=provider, retrievers=[retriever])
 ```
 
-Chunk strategies are pluggable via ``register_strategy``. Deep code
-(``CodeIndex`` / ``profile="code"``) uses the same ``code`` strategy and the
-same pluggable store (Alibaba zvec by path, or Postgres / custom backend).
+**Multi-corpus** (routed composite)::
 
-See ``examples/advanced/02_build_retriever.py``.
+```python
+retriever = await build_agentic_retriever(
+    [auth_corpus, billing_corpus],
+    name="knowledge",
+    corpus_router="all",       # or "description" + llm= for LI-style routing
+)
+```
+
+Legacy one-shot: ``build_retriever(..., mode="hybrid")`` still works.
+Chunk strategies remain pluggable via ``register_strategy``.
+Deep code (``CodeIndex``) shares the same chunk/store stack.
+
+See ``examples/advanced/03_agentic_retriever.py``.
 
 ## MCP Integration
 
