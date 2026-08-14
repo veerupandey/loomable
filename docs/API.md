@@ -445,6 +445,9 @@ Pillars:
    `"research-slim"` (experimental slim allowlist); see `docs/COMPETITIVE.md`
    and `docs/STABILITY.md`.
 6. **Gates** — research profile requires `reports/` + `register_source` + accept verifier
+7. **Sandbox / shell** — `code_exec=True` / `shell=True` attach Python/Shell tools on
+   `loomable.sandbox` (subprocess default; optional Docker). Browser via MCP +
+   bundled skill `browser` (Lightpanda), not a built-in CDP client.
 
 ### Cancel
 

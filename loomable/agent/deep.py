@@ -541,6 +541,9 @@ def create_deep_agent(
     images: bool | None = None,
     documents: bool = False,
     code_exec: bool = False,
+    shell: bool = False,
+    sandbox: Any | None = None,
+    sandbox_backend: str = "subprocess",
     offload_large_tools: bool = True,
     offload_threshold: int | None = None,
     offload_threshold_tokens: int = 3_000,
@@ -587,6 +590,13 @@ def create_deep_agent(
     ``discovery=True`` (default): ``"research"`` (correctness-first),
     ``"research-slim"`` (smaller schema budget), or an explicit name sequence.
     Workspace FS is local-only in the beta cut.
+
+    ``code_exec`` / ``shell`` attach :class:`~loomable.toolkits.PythonTools` /
+    :class:`~loomable.toolkits.ShellTools` on a shared sandbox (default
+    subprocess under ``workspace/.sandbox``). Pass ``sandbox=`` or
+    ``sandbox_backend="docker"`` for stronger isolation. Browser automation is
+    via MCP (e.g. Lightpanda) + the bundled ``browser`` skill — not a built-in
+    CDP client.
     """
     from loomable.skills import resolve_skills
     from loomable.toolkits.citation_tools import CitationTools
@@ -687,19 +697,53 @@ def create_deep_agent(
             logger.warning("create_deep_agent: PDFTools unavailable: %s", exc)
 
     hitl = list(require_confirmation) if require_confirmation else []
+
+    # Shared execution sandbox for Python / shell (soft isolation by default).
+    exec_sandbox = sandbox
+    if exec_sandbox is None and (code_exec or shell):
+        from loomable.sandbox import make_sandbox
+
+        try:
+            exec_sandbox = make_sandbox(
+                str(root / ".sandbox"),
+                timeout=30.0,
+                backend=sandbox_backend,
+            )
+        except Exception as exc:  # noqa: BLE001
+            missing.append(f"sandbox ({exc})")
+            logger.warning("create_deep_agent: sandbox unavailable: %s", exc)
+            exec_sandbox = None
+
     if code_exec:
         try:
             from loomable.toolkits.python_tools import PythonTools
 
-            py_kit = PythonTools(working_dir=str(root), timeout=30)
+            py_kit = PythonTools(sandbox=exec_sandbox, working_dir=str(root), timeout=30)
             bundled.append(py_kit)
-            shared_for_task.append(PythonTools(working_dir=str(root), timeout=30))
+            shared_for_task.append(
+                PythonTools(sandbox=exec_sandbox, working_dir=str(root), timeout=30)
+            )
             for name_ in ("run_python", "run_python_file"):
                 if name_ not in hitl:
                     hitl.append(name_)
         except Exception as exc:  # noqa: BLE001
             missing.append(f"code_exec ({exc})")
             logger.warning("create_deep_agent: PythonTools unavailable: %s", exc)
+
+    if shell:
+        try:
+            from loomable.toolkits.shell_tools import ShellTools
+
+            sh_kit = ShellTools(sandbox=exec_sandbox, working_dir=str(root), timeout=30)
+            bundled.append(sh_kit)
+            shared_for_task.append(
+                ShellTools(sandbox=exec_sandbox, working_dir=str(root), timeout=30)
+            )
+            if "run_shell" not in hitl:
+                hitl.append("run_shell")
+        except Exception as exc:  # noqa: BLE001
+            missing.append(f"shell ({exc})")
+            logger.warning("create_deep_agent: ShellTools unavailable: %s", exc)
 
     if task_tools is None:
         task_tools = list(shared_for_task)

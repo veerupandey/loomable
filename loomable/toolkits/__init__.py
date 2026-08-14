@@ -18,6 +18,7 @@ from loomable.toolkits.citation_tools import CitationStore, CitationTools
 from loomable.toolkits.file_tools import FileTools
 from loomable.toolkits.image_tools import ImageTools
 from loomable.toolkits.python_tools import PythonTools
+from loomable.toolkits.shell_tools import ShellTools
 from loomable.toolkits.sql_tools import SQLTools
 from loomable.toolkits.todo_tools import TodoStore, TodoTools
 from loomable.toolkits.web_search import WebSearchTools
@@ -48,6 +49,7 @@ __all__ = [
     "PDFTools",
     "PPTTools",
     "PythonTools",
+    "ShellTools",
     "SQLTools",
     "URLTools",
     "WebSearchTools",
