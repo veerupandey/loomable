@@ -2858,6 +2858,7 @@ class Agent:
         response_model: type | None = None,
         # knowledge / RAG:
         retrievers: list[Retriever] | None = None,
+        knowledge_base: Any = None,
         knowledge: list[str] | None = None,
         embedder: Any = None,
         knowledge_top_k: int = 3,
@@ -3013,6 +3014,8 @@ class Agent:
         self._compaction_threshold = compaction_threshold
         self._input_schema = input_schema
         self._retrievers = retrievers
+        self._knowledge_base = knowledge_base
+        self._knowledge_retrievers: list[Retriever] | None = None
         self._knowledge = knowledge
         self._embedder = embedder
         self._knowledge_top_k = knowledge_top_k
@@ -3052,6 +3055,10 @@ class Agent:
                 memory_tool = True
             if knowledge is None and "knowledge" in composed:
                 knowledge = composed["knowledge"]
+            if knowledge_base is None and composed.get("knowledge_base") is not None:
+                knowledge_base = composed["knowledge_base"]
+            if retrievers is None and composed.get("retrievers") is not None:
+                retrievers = composed["retrievers"]
             if embedder is None and "embedder" in composed:
                 embedder = composed["embedder"]
             if "knowledge_top_k" in composed and knowledge_top_k == 3:
@@ -3103,6 +3110,8 @@ class Agent:
         self._memory_window = memory_window
         self._compaction_threshold = compaction_threshold
         self._knowledge = knowledge
+        self._knowledge_base = knowledge_base
+        self._retrievers = retrievers
         self._embedder = embedder
         self._knowledge_top_k = knowledge_top_k
         self._mode = (mode or "").strip().lower() or None
@@ -3163,6 +3172,7 @@ class Agent:
         # --- Construct or reuse subsystems (Req 1.2 defaults, 2.2/2.3 overrides) ---
         context_manager = self._context_manager or ContextManager(self._token_budget)
         memory = self._memory or MemoryManager()
+        self._materialize_knowledge_base()
         tool_registry, skill_errors = self._build_tool_registry()
         # --- MCP servers: connect and enumerate tools (Req 5.1–5.4) ---
         # When discovery+defer_mcp: catalog MCP tools without advertising them until
@@ -3604,13 +3614,14 @@ class Agent:
                 title = skill_name or "skill"
                 parts.append(f"## Skill: {title}\n{body.strip()}")
         # Ship-any-retriever: tell the model which search tools are attached.
-        if self._retrievers:
+        attached = self._attached_retrievers()
+        if attached:
             if parts:
                 parts.append("")
             lines = [
                 "Knowledge search tools (call when facts from the knowledge base are needed):"
             ]
-            for r in self._retrievers:
+            for r in attached:
                 desc = (getattr(r, "description", None) or "").strip()
                 if desc:
                     lines.append(f"- `{r.name}`: {desc}")
@@ -3764,8 +3775,8 @@ class Agent:
                     skill_errors.append(err)
         self._skill_bodies = skill_bodies
 
-        if self._retrievers:
-            for retriever in self._retrievers:
+        if self._attached_retrievers():
+            for retriever in self._attached_retrievers():
                 if retriever.name in registry:
                     raise AgentConfigError(
                         f"retrievers[{retriever.name!r}] "
@@ -3806,8 +3817,8 @@ class Agent:
             name = (raw or "").split(":", 1)[0].strip()
             if name:
                 core.add(name)
-        # Knowledge retrievers are the point of a personalized agent — never defer them.
-        for retriever in self._retrievers or []:
+        # Knowledge-base / retriever tools must stay advertised — never defer them.
+        for retriever in self._attached_retrievers():
             name = getattr(retriever, "name", "") or ""
             if name:
                 core.add(name)
@@ -4219,6 +4230,39 @@ class Agent:
         return Session(
             session_id=session_id,
             agent_config_ref=config.model.get("provider", "default"),
+        )
+
+    def _attached_retrievers(self) -> list[Retriever]:
+        """Explicit ``retrievers=`` plus tools materialized from ``knowledge_base=``."""
+        out: list[Retriever] = []
+        seen: set[str] = set()
+        for retriever in list(self._retrievers or []) + list(self._knowledge_retrievers or []):
+            name = getattr(retriever, "name", "") or ""
+            if name in seen:
+                raise AgentConfigError(
+                    f"retrievers[{name!r}] (duplicate knowledge_base/retrievers name)"
+                )
+            if name:
+                seen.add(name)
+            out.append(retriever)
+        return out
+
+    def _materialize_knowledge_base(self) -> None:
+        """Resolve ``knowledge_base=`` (vector DB / sources) into retriever tools."""
+        if self._knowledge_retrievers is not None:
+            return
+        spec = self._knowledge_base
+        if not spec:
+            self._knowledge_retrievers = []
+            return
+        from loomable.retrieval.knowledge import resolve_knowledge_base, run_sync
+
+        self._knowledge_retrievers = list(
+            run_sync(
+                resolve_knowledge_base(
+                    spec, embedder=self._embedder, user_id=self._user_id
+                )
+            )
         )
 
     # ------------------------------------------------------------------

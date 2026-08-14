@@ -281,6 +281,8 @@ async def map_specialists(
     note_store: Any | None = None,
     memory_tool: bool = False,
     knowledge: list[str] | None = None,
+    knowledge_base: Any = None,
+    retrievers: list[Any] | None = None,
     embedder: Any = None,
     max_tool_iterations: int | None = None,
     token_budget: int | None = None,
@@ -306,6 +308,8 @@ async def map_specialists(
                 note_store=note_store,
                 memory_tool=memory_tool,
                 knowledge=knowledge,
+                knowledge_base=knowledge_base,
+                retrievers=retrievers,
                 embedder=embedder,
                 max_tool_iterations=max_tool_iterations,
                 token_budget=token_budget,
@@ -527,6 +531,8 @@ def build_case_workflow(
                 note_store=mem.get("note_store"),
                 memory_tool=bool(mem.get("memory_tool", False)),
                 knowledge=mem.get("knowledge"),
+                knowledge_base=mem.get("knowledge_base"),
+                retrievers=mem.get("retrievers"),
                 embedder=mem.get("embedder"),
                 max_tool_iterations=rt.get("max_tool_iterations"),
                 token_budget=rt.get("token_budget"),
@@ -728,8 +734,10 @@ class Case:
         compaction_threshold: int = 16,
         use_llm_summarizer: bool = False,
         knowledge: list[str] | None = None,
+        knowledge_base: Any = None,
         embedder: Any = None,
         knowledge_top_k: int = 3,
+        retrievers: list[Any] | None = None,
         user_id: str | None = None,
         memory: Any | None = None,
         agent_runtime: dict[str, Any] | None = None,
@@ -758,8 +766,10 @@ class Case:
                 "compaction_threshold": compaction_threshold,
                 "use_llm_summarizer": use_llm_summarizer,
                 "knowledge": knowledge,
+                "knowledge_base": knowledge_base,
                 "embedder": embedder,
                 "knowledge_top_k": knowledge_top_k,
+                "retrievers": retrievers,
             }
         )
         # If a Memory bundle was provided, expand it into agent_memory for roles.
@@ -794,6 +804,14 @@ class Case:
         )
         self._workflow: Workflow | None = None
         self.session_id = session_id or ""
+        from loomable.agent.memory_opts import apply_knowledge_base
+
+        apply_knowledge_base(
+            [planner, worker, synthesizer],
+            knowledge_base=knowledge_base,
+            retrievers=retrievers,
+            embedder=embedder,
+        )
 
     def bind_session(self, session_id: str | None) -> None:
         """Bind HTTP/stream session id into Case + compiled Workflow checkpoints.
@@ -867,6 +885,8 @@ class Case:
             knowledge=mem.get("knowledge"),
             embedder=mem.get("embedder"),
             knowledge_top_k=int(mem.get("knowledge_top_k", 3) or 3),
+            knowledge_base=mem.get("knowledge_base"),
+            retrievers=mem.get("retrievers"),
             user_id=mem.get("user_id"),
             memory=getattr(agent, "_memory_bundle", None) or mem.get("memory"),
             agent_runtime=runtime,

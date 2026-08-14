@@ -23,6 +23,12 @@ Ship any :class:`~loomable.kernel.contracts.Retriever` to the agent::
     )
     agent = Agent(model=..., retrievers=[retriever])  # LLM calls search_docs
 
+Or attach a vector DB directly (the knowledge base *is* the store)::
+
+    agent = Agent(model=..., knowledge_base=store)          # search_knowledge
+    agent = Agent(model=..., knowledge_base={"policy": store, "notes": ["./notes"]})
+    create_deep_agent(model, knowledge_base=store, retrievers=[custom])
+
 Custom retrievers work the same — implement ``name`` + ``async retrieve`` and
 pass ``Agent(retrievers=[my_retriever])``.
 """
@@ -82,6 +88,11 @@ from loomable.retrieval.route import (
 )
 from loomable.retrieval.metadata import matches_filters, shape_hit
 from loomable.retrieval.types import Chunk, Document
+from loomable.retrieval.knowledge import (
+    KnowledgeBase,
+    build_knowledge_retriever,
+    resolve_knowledge_base,
+)
 from loomable.retrieval.naming import (
     DEFAULT_SEARCH_DOCS,
     DEFAULT_SEARCH_KNOWLEDGE,
@@ -95,9 +106,12 @@ __all__ = [
     "ChunkStrategy",
     "Document",
     "Corpus",
+    "KnowledgeBase",
     "open_vector_store",
     # Ingest / build
     "ingest",
+    "build_knowledge_retriever",
+    "resolve_knowledge_base",
     "build_corpus",
     "build_retriever",
     "build_retriever_sync",

@@ -5,6 +5,8 @@ window / compaction knobs.
 
 Long-term (L3): ``note_store``, ``memory_tool``, ``knowledge`` / ``embedder``.
 
+Searchable knowledge: ``knowledge_base`` (vector DB) and ``retrievers``.
+
 Flow/Workflow ``memory=`` (TieredMemoryStore) and ``checkpointer`` are separate
 concerns and are intentionally not in this set.
 """
@@ -29,6 +31,7 @@ MEMORY_KEYS: tuple[str, ...] = (
     "note_store",
     "memory_tool",
     "knowledge",
+    "knowledge_base",
     "embedder",
     "knowledge_top_k",
     "retrievers",
@@ -50,6 +53,7 @@ _AGENT_ATTR: dict[str, str] = {
     "note_store": "_note_store",
     "memory_tool": "_memory_tool",
     "knowledge": "_knowledge",
+    "knowledge_base": "_knowledge_base",
     "embedder": "_embedder",
     "knowledge_top_k": "_knowledge_top_k",
     "retrievers": "_retrievers",
@@ -60,6 +64,8 @@ __all__ = [
     "filter_memory_kwargs",
     "memory_kwargs_from_agent",
     "role_scoped_memory",
+    "inherit_agent_knowledge",
+    "apply_knowledge_base",
 ]
 
 
@@ -77,8 +83,6 @@ def memory_kwargs_from_agent(agent: Any) -> dict[str, Any]:
         val = getattr(agent, attr)
         if val is None:
             continue
-        # Skip False resume / memory_tool noise only when False is default-ish;
-        # still forward explicit False for resume/use_memory/memory_tool.
         out[key] = val
     return out
 
@@ -91,9 +95,9 @@ def role_scoped_memory(
 ) -> dict[str, Any]:
     """Copy memory kwargs for a Case/Team role without colliding L1/L2 threads.
 
-    Shared ``note_store`` / knowledge stay the same object. Conversation
-    ``session_id`` becomes ``{base}:{role}`` so planner/worker/synth do not
-    overwrite each other's chat turns on one store key.
+    Shared ``note_store`` / knowledge / knowledge_base stay the same object.
+    Conversation ``session_id`` becomes ``{base}:{role}`` so planner/worker/synth
+    do not overwrite each other's chat turns on one store key.
     """
     out = dict(memory)
     base = session_id or out.get("session_id")
@@ -101,3 +105,89 @@ def role_scoped_memory(
         out["session_id"] = f"{base}:{role}"
         out.pop("resume", None)
     return out
+
+
+def inherit_agent_knowledge(
+    agent: Any,
+    *,
+    knowledge_base: Any = None,
+    retrievers: Any = None,
+    embedder: Any = None,
+) -> None:
+    """Fill missing knowledge_base / retrievers / embedder on an Agent builder."""
+    if agent is None:
+        return
+    changed = False
+    if knowledge_base is not None and getattr(agent, "_knowledge_base", None) is None:
+        if hasattr(agent, "_knowledge_base"):
+            agent._knowledge_base = knowledge_base
+            changed = True
+    if retrievers is not None and getattr(agent, "_retrievers", None) is None:
+        if hasattr(agent, "_retrievers"):
+            agent._retrievers = list(retrievers)
+            changed = True
+    if embedder is not None and getattr(agent, "_embedder", None) is None:
+        if hasattr(agent, "_embedder"):
+            agent._embedder = embedder
+            changed = True
+    if changed and hasattr(agent, "_built"):
+        agent._built = None
+        if hasattr(agent, "_knowledge_retrievers"):
+            agent._knowledge_retrievers = None
+
+
+def apply_knowledge_base(
+    obj: Any,
+    *,
+    knowledge_base: Any = None,
+    retrievers: Any = None,
+    embedder: Any = None,
+    _seen: set[int] | None = None,
+) -> None:
+    """Walk Agent / Team / Step / Workflow / Flow graphs and inherit a shared KB."""
+    if obj is None or (
+        knowledge_base is None and retrievers is None and embedder is None
+    ):
+        return
+    seen = _seen if _seen is not None else set()
+    if isinstance(obj, (list, tuple)):
+        for item in obj:
+            apply_knowledge_base(
+                item,
+                knowledge_base=knowledge_base,
+                retrievers=retrievers,
+                embedder=embedder,
+                _seen=seen,
+            )
+        return
+    oid = id(obj)
+    if oid in seen:
+        return
+    seen.add(oid)
+    kwargs = dict(
+        knowledge_base=knowledge_base, retrievers=retrievers, embedder=embedder
+    )
+    if hasattr(obj, "_knowledge_base") and callable(getattr(obj, "build", None)):
+        inherit_agent_knowledge(obj, **kwargs)
+        for member in getattr(obj, "_subagents", None) or []:
+            apply_knowledge_base(member, _seen=seen, **kwargs)
+        for member in getattr(obj, "_members", None) or []:
+            apply_knowledge_base(member, _seen=seen, **kwargs)
+        return
+    inner = getattr(obj, "_agent", None)
+    if inner is not None and inner is not obj:
+        apply_knowledge_base(inner, _seen=seen, **kwargs)
+    runnable = getattr(obj, "runnable", None)
+    if runnable is not None and runnable is not obj:
+        apply_knowledge_base(runnable, _seen=seen, **kwargs)
+    for attr in ("_members", "_steps", "_then_steps", "_else_steps"):
+        child = getattr(obj, attr, None)
+        if child:
+            apply_knowledge_base(child, _seen=seen, **kwargs)
+    nodes = getattr(obj, "_nodes", None)
+    if isinstance(nodes, dict):
+        apply_knowledge_base(list(nodes.values()), _seen=seen, **kwargs)
+    for attr in ("_body", "_true", "_false"):
+        child = getattr(obj, attr, None)
+        if child is not None and child is not obj:
+            apply_knowledge_base(child, _seen=seen, **kwargs)

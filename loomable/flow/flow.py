@@ -132,6 +132,9 @@ class Flow:
         session_id: str | None = None,
         deps: Any = None,
         reducers: dict[str, Reducer] | None = None,
+        knowledge_base: Any = None,
+        retrievers: Any = None,
+        embedder: Any = None,
     ) -> None:
         # Store configuration parameters
         self._engine = engine
@@ -142,6 +145,9 @@ class Flow:
         self._session_id = session_id
         self._deps = deps
         self._reducers = reducers
+        self._knowledge_base = knowledge_base
+        self._retrievers = retrievers
+        self._embedder = embedder
 
         # Build internal node dict and edge list from the input
         if isinstance(nodes, list):
@@ -159,6 +165,15 @@ class Flow:
         self._validate_no_duplicate_nodes()
         # Validate: all edge endpoints reference existing nodes
         self._validate_edge_endpoints()
+        if knowledge_base is not None or retrievers is not None or embedder is not None:
+            from loomable.agent.memory_opts import apply_knowledge_base
+
+            apply_knowledge_base(
+                list(self._nodes.values()),
+                knowledge_base=knowledge_base,
+                retrievers=retrievers,
+                embedder=embedder,
+            )
 
     # ------------------------------------------------------------------
     # Construction helpers

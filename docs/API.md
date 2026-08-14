@@ -424,6 +424,7 @@ agent = create_deep_agent(
     model="openai:gpt-4o-mini",
     profile="research",  # = skills=["research"] + report/citation gates
     workspace="./.deep_workspace",
+    knowledge_base=store,  # same Agent kwarg — vector DB → search_* tools
     # discovery_core="research" (default, correctness-first)
     # discovery_core="research-slim"  # smaller schema budget (≥50% target)
 )
@@ -1371,6 +1372,38 @@ from loomable.flow import (
 
 ## Knowledge / RAG
 
+Two layers — both on `Agent` (and therefore `create_deep_agent`, Team, Case, Workflow):
+
+**Searchable knowledge base** (vector DB, like Agno Knowledge / a VectorStoreIndex):
+
+```python
+from loomable.providers.vector_store import open_vector_store
+from loomable.retrieval import KnowledgeBase
+
+store = open_vector_store(engine="faiss", path="./.loomable/kb", dimensions=384)
+
+agent = Agent(
+    model="openai:gpt-4o-mini",
+    knowledge_base=KnowledgeBase(store=store, sources=["./handbook.pdf", "./runbooks"]),
+)
+# LLM calls search_knowledge(query, k)
+
+# Named collections → search_personal, search_company
+agent = Agent(
+    model=...,
+    knowledge_base={"personal": ["./notes"], "company": store},
+)
+
+# Extra retrievers on the same agent
+agent = Agent(model=..., knowledge_base=store, retrievers=[custom_retriever])
+
+create_deep_agent(model, knowledge_base=store, embedder=embedder)
+```
+
+`knowledge_base` accepts a vector store (`open_vector_store` / URI), sources to ingest, a `KnowledgeBase`, a `Corpus`, a retriever, or a name→collection mapping. Team, Case, Workflow, and Flow take the same kwarg and inherit it onto Agent members that do not already have one.
+
+**Passive recall** (short strings injected into context — no tool call):
+
 ```python
 from loomable.providers import AzureOpenAIEmbedder
 
@@ -1471,6 +1504,11 @@ retriever = await build_agentic_retriever(
     # llm=provider,       # needed for multi_query / hyde / llm rerank / llm mode
 )
 agent = Agent(model=provider, retrievers=[retriever])  # LLM calls search_docs(query, k)
+
+# Simpler: the knowledge base *is* the vector store
+agent = Agent(model=provider, knowledge_base=store)  # search_knowledge
+# Named collections, extra retrievers, deep agent — same kwargs
+create_deep_agent(model, knowledge_base={"policy": store}, retrievers=[retriever])
 
 # Metadata: attached at ingest, returned on hits, filterable
 corpus = await ingest(

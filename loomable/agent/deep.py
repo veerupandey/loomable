@@ -555,6 +555,7 @@ def create_deep_agent(
     memory: Any = None,
     knowledge: list[str] | None = None,
     retrievers: Sequence[Any] | None = None,
+    knowledge_base: Any = None,
     embedder: Any = None,
     skills: Sequence[str | Path] | None = None,
     profile: str = "general",
@@ -634,6 +635,10 @@ def create_deep_agent(
     ``sandbox_backend="docker"`` for stronger isolation. Browser automation is
     via MCP (e.g. Lightpanda) + the bundled ``browser`` skill — not a built-in
     CDP client.
+
+    ``knowledge_base`` is a vector store (or sources ingested into one) and
+    becomes ``search_*`` tools on this Agent. ``retrievers=`` attaches extra
+    search tools. Same kwargs as :class:`~loomable.agent.builder.Agent`.
     """
     from loomable.skills import resolve_skills
     from loomable.toolkits.citation_tools import CitationTools
@@ -962,6 +967,7 @@ def create_deep_agent(
         scopes=scopes,
         knowledge=knowledge,
         retrievers=list(retrievers) if retrievers else None,
+        knowledge_base=knowledge_base,
         embedder=embedder,
         think_tool=think_tool,
         plan_tool=plan_tool,
