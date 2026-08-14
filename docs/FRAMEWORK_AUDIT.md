@@ -1,49 +1,42 @@
-# Framework audit — main (post Case + AG-UI SSE)
+# Framework audit
 
-Date: 2026-08-13. Rigorous review after merging Case/SSE onto `main`.
+Date: 2026-08-13. Case + AG-UI + Postgres pass.
 
-## Test results (this pass)
+## Gates
 
-| Suite | Result |
-|-------|--------|
-| Case / stream / FastAPI SSE / MCP adapter | **26 passed** |
-| Core enterprise + require_tools (earlier) | **82 passed** |
-| Live Gemini Agent SSE (`12_agent_agui_sse.py`) | **passed** |
-| Live Gemini Case SSE (`11_case_sse.py`) | **passed** (board STATE_DELTA + coerced text input) |
+| Gate | Result |
+|------|--------|
+| `tests/unit/` | 1496+ passed |
+| Gemini Case / Case SSE | verified |
+| Docker Postgres 16 live E2E | 4/4 passed |
 
-## Bugs found & fixed (this branch)
+## Fixed
 
-| Sev | Issue | Fix |
-|-----|-------|-----|
-| P0 | `Agent(mode="case")` rebuilt Case every call → empty board | Cache `_case` via `_get_case()` |
-| P0 | FastAPI/`Case` got `AgentInput` without text coercion | Coerce via `_input_text` / `Case._coerce_task_text` |
-| P1 | `session_id` accepted but unused in FastAPI | Apply session to agent/case; pass into `astream_events` |
-| P1 | `Workflow.state` empty unless caller passed `RunContext` | Always create/capture context SharedState |
-| P1 | `BuiltAgent.astream_events` did not cancel on consumer break | Cancel runner task like Case/Flow |
-| P1 | MCP SDK drift: `isError`/`mimeType`/`Server.list_tools` | `is_error` / `mime_type` / `MCPServer.add_tool` |
+| Sev | Issue |
+|-----|-------|
+| P0 | Case SSE emptied board on resume → hydrate before snapshot |
+| P0 | FastAPI `session_id` missed Case checkpoint thread → `bind_session` |
+| P1 | Tool AG-UI ARGS/RESULT, engine `state_updates` / node durations |
+| P1 | `require_tools` path substring → exact/suffix |
+| P1 | Team SSE, Agent checkpointer → Case, board tools, ERROR→blocked |
+| P1 | Board hydrate skipped `complete=True` checkpoints |
+| P2 | `pytest.mark.unit` registered |
 
-## Still open (improvement backlog)
+## Postgres + Agent memory
 
-| Sev | Issue | Suggested fix |
-|-----|-------|---------------|
-| P1 | Tool AG-UI: `TOOL_CALL_ARGS` / `TOOL_CALL_RESULT` documented but not emitted | Emit around real tool dispatch with call ids |
-| P1 | Case board not rehydrated from checkpoint SharedState | `Board.from_dict` on resume |
-| P1 | Flow stream `session_id` labels events only (checkpoints use Flow's id) | Bind thread id for stream runs |
-| P2 | Parallel/hierarchical node durations = superstep wall time | Emit start/end inside each worker |
-| P2 | Parallel/hierarchical ignore `metadata["state_updates"]` | Share sequential merge logic |
-| P2 | `require_tools` path match is substring | Normalize + sandbox equality/suffix |
-| P2 | Team has no `astream_events` | Bridge hard-mode member events |
-| P2 | Unknown `pytest.mark.unit` warnings | Register mark in `pyproject.toml` |
+`pip install 'loomable[postgres]'` · `docker compose up -d`
 
-## Mistakes / risks to watch
+| API | Role |
+|-----|------|
+| `open_session_store("sqlite"\|"file"\|"postgres"\|"memory")` | L1/L2 via `session_store=` |
+| `Agent(..., memory_backend=...)` | L1/L2 via any `MemoryBackend` |
+| `PostgresCheckpointer` | Workflow/Case resume |
+| `PgVectorBackend` | L3 vectors for `NoteStore` / `LongTermStore` |
 
-1. **Docs ahead of code** — AG-UI ARGS/RESULT and “session routing” were advertised before fully wired (session now partially fixed).
-2. **Case via Agent vs bare Case** — must keep cached Case; never `from_agent` per request.
-3. **Engine asymmetry** — Case Workflow is sequential today; plan glue breaks if someone forces parallel engine.
-4. **Env test deps** — `pytest-httpx`, `beautifulsoup4` needed for full unit green; declare in `[project.optional-dependencies] dev` (already listed — install with `pip install -e ".[dev]"`).
+Custom backends: implement `MemoryBackend` (`read`/`write`/`delete`/`exists`).
 
-## Architecture confirmation
+## Notes
 
-- Agent / Flow / Case / Workflow share **Runnable** (`arun` → `RunResult`) and AG-UI **SSE** vocabulary.
-- **SharedState** is the Workflow/Flow blackboard (plan_steps, map, board dict, node outputs).
-- Standalone Agent tool-loops do not create SharedState unless nested in a Flow.
+- Accept loop re-runs synthesizer only (by design).
+- Case Workflow is sequential (plan → act → accept).
+- `Agent.user_id` + `scopes=` (e.g. `claim_id`) isolate long-term notes via `MemoryScope` / `ScopedNoteStore`. Postgres backends still take their own `user_id=` tenant for L1/L2 KV rows.

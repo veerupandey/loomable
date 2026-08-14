@@ -22,8 +22,9 @@ class MemoryManager:
     L1 stores raw recent conversation turns for immediate context.
     L2 stores compressed summaries and entity representations derived from
     conversation history (produced by checkpoint summarization).
-    L3 is a vector-indexed episodic memory store for long-term recall,
-    backed by a pluggable LongTermStore.
+    L3 is a vector-indexed episodic memory store for long-term recall.
+    Default backend is Alibaba zvec (``.loomable/memory_zvec``); pass an
+    explicit ``LongTermStore`` for FAISS, Postgres, or in-memory.
 
     Key methods:
     - record_turn(): appends a turn to L1.

@@ -82,6 +82,8 @@ def _mock_httpx_client(status_code: int, text: str) -> MagicMock:
     mock_response = MagicMock()
     mock_response.status_code = status_code
     mock_response.text = text
+    mock_response.is_redirect = False
+    mock_response.headers = {}
 
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_response)

@@ -12,6 +12,7 @@ and SHALL mark exactly the parameters without defaults as required.
 from __future__ import annotations
 
 import inspect
+import keyword
 from typing import Any
 
 import pytest
@@ -39,7 +40,9 @@ ANNOTATION_MAP: dict[type, str] = {
 annotation_types = st.sampled_from(list(ANNOTATION_MAP.keys()))
 
 # Strategy: valid Python identifier names for parameter names
-param_names = st.from_regex(r"[a-z][a-z0-9_]{0,14}", fullmatch=True)
+param_names = st.from_regex(r"[a-z][a-z0-9_]{0,14}", fullmatch=True).filter(
+    lambda n: n.isidentifier() and not keyword.iskeyword(n)
+)
 
 # Strategy: a parameter spec — (name, annotation, has_default)
 param_spec = st.tuples(param_names, annotation_types, st.booleans())

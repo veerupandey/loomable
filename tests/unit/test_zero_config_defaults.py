@@ -1,6 +1,8 @@
 """Tests for zero-configuration defaults on all toolkit classes."""
 from pathlib import Path
 
+import pytest
+
 from loomable.toolkits import FileTools, PythonTools, SQLTools, WebSearchTools, PDFTools, URLTools
 
 
@@ -16,10 +18,18 @@ class TestZeroConfigDefaults:
     def test_file_tools_defaults_to_cwd(self):
         tools = FileTools()
         assert tools._base_dir == Path.cwd().resolve()
-        # Should have 4 tools
-        assert len(tools.tools()) == 4
+        # Should have 7 tools (edit/glob/grep added for deep-agent parity)
+        assert len(tools.tools()) == 7
         names = {t.name for t in tools.tools()}
-        assert names == {"read_file", "write_file", "write_json", "list_directory"}
+        assert names == {
+            "read_file",
+            "write_file",
+            "write_json",
+            "list_directory",
+            "edit_file",
+            "glob_files",
+            "grep_files",
+        }
 
     def test_python_tools_default_timeout(self):
         tools = PythonTools()
@@ -39,14 +49,14 @@ class TestZeroConfigDefaults:
         assert names == {"run_sql", "list_tables", "describe_table"}
 
     def test_pdf_tools_instantiates_no_args(self):
-        # pypdf should be installed in the dev env
+        pytest.importorskip("pypdf")
         tools = PDFTools()
         assert len(tools.tools()) == 2
         names = {t.name for t in tools.tools()}
         assert names == {"read_pdf", "search_pdf"}
 
     def test_url_tools_default_timeout(self):
-        # httpx and bs4 should be installed in the dev env
+        pytest.importorskip("bs4")
         tools = URLTools()
         assert tools._timeout == 30
         assert tools._max_length is None

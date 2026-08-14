@@ -1,59 +1,70 @@
-"""User Memory with Postgres — Cross-session persistence.
+"""User / conversation memory via Memory.compose (preferred) or session_store.
 
-USE WHEN: You need the agent to remember user preferences and
-facts across completely separate sessions (restarts, deployments).
-
-Requires: pip install asyncpg
-Requires: A running PostgreSQL instance.
-
-The user_id scopes memory per user so the same agent serves
-multiple users with isolated long-term memory.
+Requires for postgres: pip install 'loomable[postgres]' && docker compose up -d
 """
 
+from __future__ import annotations
+
 import asyncio
+import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from loomable.agent import Agent
+from loomable import Agent, ConversationMemory, Memory, UserMemory, open_session_store
+from loomable.agent import NoteStore
+from loomable.kernel.long_term import LongTermStore
 from loomable.providers.openai import AzureOpenAIProvider
 
-# NOTE: This example requires a PostgreSQL database.
-# Uncomment and configure the connection URL for your environment.
-#
-# from loomable.providers.backends.postgres import PostgresMemoryBackend
-#
-# memory_backend = PostgresMemoryBackend(
-#     url="postgresql://user:password@localhost/agentdb",
-#     user_id="alice",
-# )
-
 provider = AzureOpenAIProvider()
+DSN = os.environ.get("POSTGRES_URL") or os.environ.get("DATABASE_URL")
+ROOT = Path(__file__).resolve().parent / ".sessions_demo"
+ROOT.mkdir(exist_ok=True)
 
-# With Postgres backend (production):
-# agent = Agent(
-#     model=provider,
-#     role="Personal Assistant",
-#     goal="Remember user preferences across sessions",
-#     session_id="session-abc",
-#     user_id="alice",
-#     memory=memory_backend,
-# )
+if DSN:
+    store = open_session_store("postgres", url=DSN, user_id="alice")
+    label = "postgres"
+else:
+    store = open_session_store("file", path=str(ROOT))
+    label = f"file:{ROOT}"
 
-# Demo without Postgres (in-memory):
-agent = Agent(
-    model=provider,
-    role="Personal Assistant",
-    goal="Remember user preferences across sessions",
-    instructions="Remember everything the user tells you about their preferences.",
-    session_id="demo-session",
-    user_id="alice",
-)
 
-# Session 1: User tells the agent something
-result = asyncio.run(agent.arun("I prefer dark mode and Python over JavaScript."))
-print(f"Session 1: {result.output.text()}\n")
+class _FakeEmbedder:
+    async def embed(self, text: str) -> list[float]:
+        return [float(len(text) % 7), 1.0, 0.0]
 
-# Session 2 (simulated): Agent recalls
-result = asyncio.run(agent.arun("What are my preferences?"))
-print(f"Session 2: {result.output.text()}")
+
+async def main() -> None:
+    print(f"Using conversation store: {label}")
+    # L3 default = Alibaba zvec (.loomable/memory_zvec); pip install loomable[zvec]
+    notes = NoteStore(long_term=LongTermStore(), embedder=_FakeEmbedder())
+    memory = Memory.compose(
+        conversation=ConversationMemory(store=store, window=8),
+        user=UserMemory(note_store=notes, memory_tool=True, auto_extract=True),
+    )
+
+    a1 = Agent(
+        model=provider,
+        memory=memory,
+        session_id="demo-session",
+        user_id="alice",
+        # Extra isolation keys when needed, e.g. insurance:
+        # scopes={"claim_id": "CLM-4421"},
+        instructions="Remember user preferences.",
+    )
+    print((await a1.arun("I prefer dark mode and Python.")).output.text())
+
+    a2 = Agent(
+        model=provider,
+        memory=memory,
+        session_id="demo-session",
+        user_id="alice",
+        resume=True,
+        instructions="Remember user preferences.",
+    )
+    print((await a2.arun("What are my preferences?")).output.text())
+
+
+asyncio.run(main())

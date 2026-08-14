@@ -74,6 +74,8 @@ async def test_require_final_text_false_skips_nudge() -> None:
 
     result = await agent.arun("please do the side effect")
 
-    assert (result.output.text() or "").strip() == ""
+    text = (result.output.text() or "").strip()
+    assert "Completed tool actions" in text
+    assert "wrote:1" in text
     assert result.metadata.get("final_text_reprompted") is not True
     assert all(r.tools for r in provider.requests)

@@ -25,7 +25,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 from loomable.content import (
     AgentInput,
@@ -153,6 +153,14 @@ def _input_text(agent_input: AgentInput) -> str:
     return "".join(pieces)
 
 
+def _is_run_context(value: Any) -> bool:
+    """True when ``value`` is a Flow/Workflow :class:`~loomable.agent.context.RunContext`."""
+    if value is None or isinstance(value, dict):
+        return False
+    # Duck-type to avoid import cycles with flow engines.
+    return hasattr(value, "shared_state") and hasattr(value, "memory")
+
+
 # ---------------------------------------------------------------------------
 # Media coercion dispatch (Req 3.1–3.5, 4.1–4.2)
 # ---------------------------------------------------------------------------
@@ -234,6 +242,30 @@ def _coerce_media_item(item: "Any", target_modality: str) -> "MediaPart":
     )
 
 
+def _synthesize_tool_activity_summary(tool_activity: list[Any]) -> str:
+    """Build a short user-facing summary when the model ends with empty text."""
+    lines: list[str] = ["Completed tool actions:"]
+    for outcome in tool_activity[-12:]:
+        name = ""
+        detail = ""
+        if getattr(outcome, "result", None) is not None:
+            name = str((outcome.result.metadata or {}).get("tool_name") or "")
+            content = outcome.result.content
+            if isinstance(content, str) and content.strip():
+                detail = content.strip().replace("\n", " ")
+                if len(detail) > 160:
+                    detail = detail[:157] + "..."
+        if not name:
+            name = "tool"
+        if detail:
+            lines.append(f"- {name}: {detail}")
+        else:
+            lines.append(f"- {name}")
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines)
+
+
 def _schema_instruction(output_schema: type) -> str:
     """Build a lightweight, provider-agnostic instruction asking for JSON output.
 
@@ -272,8 +304,42 @@ def _strip_json_fences(text: str) -> str:
     return cleaned
 
 
+def _path_constraint_met(path_arg: str, required: str) -> bool:
+    """Return True when ``path_arg`` satisfies a require_tools path constraint.
+
+    Matches:
+    - exact path
+    - path ending with ``/<required>``
+    - directory / prefix constraints when *required* ends with ``/``
+      (``reports/`` matches ``reports/brief.md``)
+    - bare directory name without slash (``reports`` matches ``reports/x.md``)
+
+    Substring matches (e.g. ``myoutput/brief.md`` for ``output/brief.md``)
+    do **not** count.
+    """
+    from pathlib import Path
+
+    a = Path(str(path_arg).replace("\\", "/")).as_posix().lstrip("./")
+    r = str(required).replace("\\", "/").lstrip("./")
+    if not r:
+        return True
+    # Directory prefix: "reports/" → reports/brief.md
+    if r.endswith("/"):
+        prefix = r.rstrip("/")
+        return a == prefix or a.startswith(prefix + "/")
+    r_norm = Path(r).as_posix().lstrip("./")
+    if a == r_norm:
+        return True
+    if a.endswith("/" + r_norm):
+        return True
+    # Bare directory name: "reports" → reports/x.md
+    if "/" not in r_norm and a.startswith(r_norm + "/"):
+        return True
+    return False
+
+
 def _parse_require_tool_specs(specs: list[str]) -> list[tuple[str, str | None]]:
-    """Parse ``require_tools`` entries into ``(name, path_substr|None)``.
+    """Parse ``require_tools`` entries into ``(name, path_constraint|None)``.
 
     Supports plain names (``\"write_file\"``) and path constraints
     (``\"write_file:output/brief.md\"``) so scribes cannot "satisfy" the
@@ -313,7 +379,7 @@ def _format_require_tools_nudge(missing: list[str]) -> str:
         if ":" in item:
             name, _, path = item.partition(":")
             parts.append(
-                f"call {name} with path containing {path!r}"
+                f"call {name} with path matching {path!r} (exact or ending with /{path})"
             )
         else:
             parts.append(f"call {item}")
@@ -322,6 +388,39 @@ def _format_require_tools_nudge(missing: list[str]) -> str:
         + "; ".join(parts)
         + ". Do those tool calls now (exact required paths), then give your final answer."
     )
+
+
+# Todo / private-think tools that do not advance the user-facing deliverable.
+# After require_tools are satisfied, repeated rounds of only these tools are
+# treated as "done — emit final answer" instead of burning max_tool_iterations.
+_BOOKKEEPING_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "write_todos",
+        "read_todos",
+        "update_todo",
+        "think",
+        "search_skills",
+        "load_skill",
+        "search_tools",
+        "search_mcp",
+        "search_namespaces",
+        "activate_tool",
+        "activate_mcp_server",
+        "refresh_capabilities",
+        "list_skill_resources",
+        "read_skill_resource",
+    }
+)
+
+_DELIVERABLE_COMPLETE_NUDGE = (
+    "Required deliverables are already complete (required tools succeeded). "
+    "Stop calling tools now — do not keep updating todos. "
+    "Provide your final answer summarizing what you delivered and where."
+)
+
+
+def _is_bookkeeping_only(tool_names: set[str]) -> bool:
+    return bool(tool_names) and tool_names.issubset(_BOOKKEEPING_TOOL_NAMES)
 
 
 def _extract_json_object(text: str) -> str:
@@ -546,6 +645,14 @@ class BuiltAgent:
     # Durable note store for the memory tool (Req 7 notes).
     note_store: "NoteStore | None" = None
 
+    # Composable Memory(auto_extract=...) — heuristic fact write after each turn.
+    memory_auto_extract: bool = False
+    # Inject recalled / cached user facts into the prompt prefix.
+    memory_auto_recall: bool = True
+    _cached_user_facts: list[str] = field(default_factory=list)
+    _memory_user_id: str | None = None
+    _memory_scope: Any | None = None
+
     # Loop-repeat threshold for no-progress detection (Req 3.1/3.2).
     loop_repeat_threshold: int = 3
 
@@ -564,6 +671,8 @@ class BuiltAgent:
     # Token budget for context bounding (Req 13.1–13.4): when set, _bound_messages
     # applies evict-then-admit against this budget before each model call.
     _token_budget: int | None = None
+    # Cumulative spend stop for the run (0 = unbounded; None = fall back to token_budget).
+    _max_run_tokens: int | None = None
 
     # Skill load errors: isolated failures from skill loading (Req 4.3). Each
     # entry identifies a Skill that failed to load while others succeeded.
@@ -573,6 +682,10 @@ class BuiltAgent:
     # Each entry identifies a server that failed to connect while others succeeded.
     mcp_errors: list["MCPConnectionError"] = field(default_factory=list)
 
+    # Runtime capability discovery (search_skills / load_skill / search_tools /
+    # search_mcp / activate_tool). None when discovery is disabled.
+    discovery: Any | None = None
+
     # Pinned facts (Req 6.1–6.4): steps whose turns are never eligible for compaction
     # and are always replayed in the memory prefix regardless of the rolling window.
     pinned_steps: set[int] = field(default_factory=set)
@@ -580,6 +693,9 @@ class BuiltAgent:
     # Multimodal feedback (Req 7.5): when True, tool-generated media is injected
     # into the conversation so the model can reason about it in subsequent turns.
     _feedback_media: bool = True
+
+    # Active RunContext for cooperative cancel (BuiltAgent.cancel / SSE disconnect).
+    _active_ctx: Any | None = field(default=None, init=False, repr=False)
 
     @property
     def _model_id(self) -> str:
@@ -655,6 +771,10 @@ class BuiltAgent:
 
         agent_input = self._coerce_input(input, images=images, videos=videos, audio=audio)
 
+        # Warm user long-term facts into the conversation prefix (Memory.compose).
+        if self.note_store is not None and self.memory_auto_recall:
+            await self._refresh_user_memory_context(_input_text(agent_input))
+
         # --- Build a RunContext per run (Req 4.5, 11.1) ---
         # When a context is supplied externally (flow-engine integration), use it
         # so deps/shared_state propagate. Otherwise create a fresh one internally.
@@ -665,9 +785,41 @@ class BuiltAgent:
                 events=self.events,
                 max_steps=self.max_tool_iterations,
                 token_budget=self._token_budget,
+                max_run_tokens=self._max_run_tokens,
                 loop_repeat_threshold=self.loop_repeat_threshold,
             )
 
+        self._active_ctx = ctx
+        try:
+            return await self._arun_with_context(
+                agent_input,
+                output_schema=output_schema,
+                ctx=ctx,
+            )
+        finally:
+            if self._active_ctx is ctx:
+                self._active_ctx = None
+
+    def cancel(self) -> bool:
+        """Request cooperative cancellation of the in-flight run.
+
+        Returns True if an active :class:`RunContext` was marked cancelled.
+        Cancellation is observed at tool-loop / step boundaries (not a hard
+        abort of an in-flight provider HTTP call).
+        """
+        ctx = self._active_ctx
+        if ctx is None:
+            return False
+        ctx.cancel()
+        return True
+
+    async def _arun_with_context(
+        self,
+        agent_input: AgentInput,
+        *,
+        output_schema: type | None,
+        ctx: RunContext,
+    ) -> RunResult:
         # --- Emit run_start event (Req 11.1) ---
         ctx.events.emit(Event(
             kind="run_start",
@@ -880,6 +1032,21 @@ class BuiltAgent:
         for summary in self.session.l2:
             messages.append(
                 {"role": "system", "content": [{"type": "text", "text": summary.text}]}
+            )
+
+        # User-scoped long-term facts (from Memory.compose / NoteStore cache).
+        if self.memory_auto_recall and self._cached_user_facts:
+            blob = "\n".join(f"- {f}" for f in self._cached_user_facts[:12])
+            messages.append(
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"Known facts about this user:\n{blob}",
+                        }
+                    ],
+                }
             )
 
         # Append the retained recent raw turns from L1.
@@ -1355,21 +1522,30 @@ class BuiltAgent:
             if modality not in self.capabilities.input:
                 raise UnsupportedModalityError(modality.value, self._model_id)
 
-        # (2) Build tool schemas to advertise to the model.
-        tool_schemas: list[dict] = []
-        for tool_obj in self.tool_runtime._tools.values():
-            if isinstance(tool_obj, (FunctionTool, MCPTool)):
-                tool_schemas.append(tool_obj.schema())
-            else:
-                # Generic schema for non-FunctionTool tools (e.g. RetrieverTool).
-                tool_schemas.append({
-                    "type": "function",
-                    "function": {
-                        "name": tool_obj.name,
-                        "description": getattr(tool_obj, "description", ""),
-                        "parameters": getattr(tool_obj, "parameters", {"type": "object", "properties": {}}),
-                    },
-                })
+        def _collect_tool_schemas() -> list[dict]:
+            schemas: list[dict] = []
+            for tool_obj in self.tool_runtime._tools.values():
+                if isinstance(tool_obj, (FunctionTool, MCPTool)):
+                    schemas.append(tool_obj.schema())
+                else:
+                    schemas.append({
+                        "type": "function",
+                        "function": {
+                            "name": tool_obj.name,
+                            "description": getattr(tool_obj, "description", ""),
+                            "parameters": getattr(
+                                tool_obj,
+                                "parameters",
+                                {"type": "object", "properties": {}},
+                            ),
+                        },
+                    })
+            return schemas
+
+        # (2) Build tool schemas to advertise to the model (refreshed each iteration
+        # so activate_tool / load_skill can extend the surface mid-run).
+        tool_schemas = _collect_tool_schemas()
+        tools_enabled = True
 
         # (3) Assemble the initial request: [system] + [knowledge] + [memory] + [input] + tools.
         request = to_model_request(agent_input)
@@ -1413,8 +1589,15 @@ class BuiltAgent:
             if has_path_constraints
             else max(1, len(require_tool_specs))
         ) if require_tool_specs else 0
+        bookkeeping_after_deliverable = 0
+        deliverable_complete_nudges = 0
+        deliverable_complete_forced = False
 
         while True:
+            # Refresh advertised tools each turn (discovery activate/load).
+            if tools_enabled:
+                request.tools = _collect_tool_schemas()
+
             # --- Check cooperative cancellation at each loop boundary (Req 4.1) ---
             if ctx.cancelled:
                 stop_reason = StopReason(kind=StopReason.CANCELLED)
@@ -1487,6 +1670,18 @@ class BuiltAgent:
                 missing_required = _missing_require_tool_specs(
                     require_tool_specs, satisfied_require_tools
                 )
+                if missing_required:
+                    discovery_rt = getattr(self, "discovery", None)
+                    if discovery_rt is not None and hasattr(
+                        discovery_rt, "ensure_tools_activated"
+                    ):
+                        missing_tool_names = sorted(
+                            {m.split(":", 1)[0] for m in missing_required if m}
+                        )
+                        try:
+                            discovery_rt.ensure_tools_activated(missing_tool_names)
+                        except Exception:  # noqa: BLE001 — activation is best-effort
+                            pass
                 if (
                     missing_required
                     and require_tools_nudges < max_require_tools_nudges
@@ -1536,6 +1731,7 @@ class BuiltAgent:
                     )}],
                 })
                 request.tools = []  # Remove tools so model cannot call them.
+                tools_enabled = False
                 # Context bounding before the nudge call (Req 13.1–13.4).
                 if effective_budget is not None:
                     request.messages = self._bound_messages(request.messages, effective_budget)
@@ -1596,6 +1792,28 @@ class BuiltAgent:
                         continue  # Skip re-dispatch of non-idempotent tool
                 calls_to_dispatch.append(tc)
 
+            # Emit AG-UI tool frames around the actual dispatch (START/ARGS before,
+            # RESULT/END after) when the event sink supports publish().
+            _agui = getattr(ctx.events, "publish", None)
+            if callable(_agui):
+                from loomable.stream import (
+                    TOOL_CALL_ARGS,
+                    TOOL_CALL_END,
+                    TOOL_CALL_RESULT,
+                    TOOL_CALL_START,
+                )
+
+                for tc in calls_to_dispatch:
+                    _agui(TOOL_CALL_START, {"tool_call_id": tc.id, "tool_name": tc.tool_name})
+                    _agui(
+                        TOOL_CALL_ARGS,
+                        {
+                            "tool_call_id": tc.id,
+                            "tool_name": tc.tool_name,
+                            "args": dict(tc.args or {}),
+                        },
+                    )
+
             # Dispatch tool calls through the gated path (hooks/guardrails, Req 3.5/3.7).
             _tool_dispatch_t0 = time.monotonic()
             gated_result = await self.dispatch_tools_gated(calls_to_dispatch)
@@ -1608,24 +1826,25 @@ class BuiltAgent:
                     outcome.result.metadata["tool_name"] = call_name_map.get(outcome.call_id, "")
 
             tool_activity.extend(gated_result.outcomes)
+            outcome_by_id = {o.call_id: o for o in gated_result.outcomes}
             for tc in calls_to_dispatch:
                 called_tool_names.add(tc.tool_name)
                 path_arg = str(tc.args.get("path") or "")
+                outcome = outcome_by_id.get(tc.id)
+                ok = (
+                    outcome is not None
+                    and outcome.result is not None
+                    and not outcome.result.is_error
+                    and not str(outcome.result.content or "").startswith("Error:")
+                )
                 for name, path_sub in require_tool_specs:
                     if tc.tool_name != name:
                         continue
-                    if path_sub is None or path_sub in path_arg:
+                    if not ok:
+                        continue
+                    if path_sub is None or _path_constraint_met(path_arg, path_sub):
                         satisfied_require_tools.add((name, path_sub))
                 if tc.tool_name == "write_json":
-                    outcome = next(
-                        (o for o in gated_result.outcomes if o.call_id == tc.id),
-                        None,
-                    )
-                    ok = (
-                        outcome is not None
-                        and outcome.result is not None
-                        and not outcome.result.is_error
-                    )
                     raw = tc.args.get("content")
                     if ok and raw is not None:
                         if isinstance(raw, str):
@@ -1633,7 +1852,43 @@ class BuiltAgent:
                         else:
                             write_json_payloads.append(json.dumps(raw))
 
-            # Emit tool_call event (Req 11.3).
+            if callable(_agui):
+                from loomable.stream import TOOL_CALL_END, TOOL_CALL_RESULT
+
+                outcome_by_id = {o.call_id: o for o in gated_result.outcomes}
+                for tc in calls_to_dispatch:
+                    outcome = outcome_by_id.get(tc.id)
+                    content = ""
+                    is_error = False
+                    if outcome is not None and outcome.result is not None:
+                        is_error = bool(outcome.result.is_error)
+                        if is_error:
+                            content = outcome.result.error or ""
+                        else:
+                            content = (
+                                str(outcome.result.content)
+                                if outcome.result.content is not None
+                                else ""
+                            )
+                    _agui(
+                        TOOL_CALL_RESULT,
+                        {
+                            "tool_call_id": tc.id,
+                            "tool_name": tc.tool_name,
+                            "content": content[:4000],
+                            "is_error": is_error,
+                        },
+                    )
+                    _agui(
+                        TOOL_CALL_END,
+                        {
+                            "tool_call_id": tc.id,
+                            "tool_name": tc.tool_name,
+                            "duration_ms": _tool_dispatch_duration,
+                        },
+                    )
+
+            # Emit tool_call event (Req 11.3) for observability; AG-UI already published.
             tool_names = [tc.tool_name for tc in calls_to_dispatch]
             ctx.events.emit(Event(
                 kind="tool_call",
@@ -1642,6 +1897,7 @@ class BuiltAgent:
                 attributes={
                     "gen_ai.tool.name": ",".join(tool_names) if tool_names else "",
                     "tool_count": len(calls_to_dispatch),
+                    "agui_skip": bool(callable(_agui)),
                 },
             ))
 
@@ -1661,7 +1917,11 @@ class BuiltAgent:
                 assistant_tool_calls.append(entry)
             request.messages.append({
                 "role": "assistant",
-                "content": [],
+                "content": (
+                    [{"type": "text", "text": str(response.content)}]
+                    if (getattr(response, "content", None) or "").strip()
+                    else []
+                ),
                 "tool_calls": assistant_tool_calls,
             })
 
@@ -1685,6 +1945,25 @@ class BuiltAgent:
                     "content": [{"type": "text", "text": result_content}],
                     "tool_call_id": outcome.call_id,
                 })
+
+            # Mid-run skill loads: inject skill bodies as system messages so later
+            # turns follow the skill without relying only on the tool result text.
+            discovery_rt = getattr(self, "discovery", None)
+            if discovery_rt is not None and hasattr(discovery_rt, "drain_prompt_injections"):
+                for skill_name, body in discovery_rt.drain_prompt_injections():
+                    if not (body or "").strip():
+                        continue
+                    request.messages.append(
+                        {
+                            "role": "system",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": f"## Skill: {skill_name}\n{body.strip()}",
+                                }
+                            ],
+                        }
+                    )
 
             # --- Feedback injection: inject tool-generated media into the
             # conversation so the model can reason about it (Req 7.1–7.5). ---
@@ -1751,6 +2030,105 @@ class BuiltAgent:
                         "tool_call_id": tc.id,
                     })
 
+            # Deliverable-complete finish: once require_tools succeed, do not burn
+            # the iteration budget on todo/think spam — nudge once, then force FINAL.
+            if require_tool_specs and not _missing_require_tool_specs(
+                require_tool_specs, satisfied_require_tools
+            ):
+                round_names = {tc.tool_name for tc in calls_to_dispatch}
+                if _is_bookkeeping_only(round_names):
+                    bookkeeping_after_deliverable += 1
+                else:
+                    bookkeeping_after_deliverable = 0
+
+                if (
+                    bookkeeping_after_deliverable >= 1
+                    and deliverable_complete_nudges < 1
+                    and iterations < self.max_tool_iterations
+                    and not ctx.cancelled
+                ):
+                    deliverable_complete_nudges += 1
+                    request.messages.append(
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": _DELIVERABLE_COMPLETE_NUDGE,
+                                }
+                            ],
+                        }
+                    )
+                elif (
+                    bookkeeping_after_deliverable >= 2
+                    and iterations < self.max_tool_iterations
+                    and not ctx.cancelled
+                ):
+                    deliverable_complete_forced = True
+                    stop_reason = StopReason(
+                        kind=StopReason.FINAL,
+                        detail="deliverable_complete",
+                    )
+                    request.messages.append(
+                        {
+                            "role": "system",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": (
+                                        "Required deliverables are complete. "
+                                        "Provide your final answer now. "
+                                        "Do not request any tool calls."
+                                    ),
+                                }
+                            ],
+                        }
+                    )
+                    request.tools = []
+                    tools_enabled = False
+                    if effective_budget is not None:
+                        request.messages = self._bound_messages(
+                            request.messages, effective_budget
+                        )
+                    _done_t0 = time.monotonic()
+                    if self.router is not None:
+                        response, tier_sub = await self.router.route(request)
+                        if tier_sub is not None:
+                            tier_substitutions.append(tier_sub)
+                    else:
+                        response = await self.model_interface.invoke(request)
+                    _done_duration = (time.monotonic() - _done_t0) * 1000
+                    done_usage = (
+                        response.usage
+                        if hasattr(response, "usage") and response.usage
+                        else {}
+                    )
+                    done_tokens = done_usage.get("input_tokens", 0) + done_usage.get(
+                        "output_tokens", 0
+                    )
+                    if done_tokens:
+                        ctx.add_tokens(done_tokens)
+                    ctx.events.emit(
+                        Event(
+                            kind="model_call",
+                            t=time.monotonic(),
+                            duration_ms=_done_duration,
+                            tokens_in=done_usage.get("input_tokens", 0),
+                            tokens_out=done_usage.get("output_tokens", 0),
+                            attributes={
+                                "gen_ai.request.model": self._model_id,
+                                "gen_ai.usage.input_tokens": done_usage.get(
+                                    "input_tokens", 0
+                                ),
+                                "gen_ai.usage.output_tokens": done_usage.get(
+                                    "output_tokens", 0
+                                ),
+                                "loomable.deliverable_complete": True,
+                            },
+                        )
+                    )
+                    break
+
         # If no explicit stop reason was set (shouldn't happen, but defensive).
         if stop_reason is None:
             stop_reason = StopReason(kind=StopReason.FINAL)
@@ -1804,9 +2182,30 @@ class BuiltAgent:
                 )
             request.messages.append({"role": "user", "content": nudge})
             request.tools = []
-            response = await self.model_interface.invoke(request)
-            output = from_model_response(response)
+            try:
+                response = await self.model_interface.invoke(request)
+                output = from_model_response(response)
+            except Exception:  # noqa: BLE001 — provider may reject tool-free nudge
+                pass
             final_text_reprompted = True
+
+        # If the model still produced no text after tools (common with some Gemini
+        # OpenAI-compat turns), synthesize a short confirmation from tool activity
+        # so callers aren't left with an empty RunResult.
+        if not (output.text() or "").strip() and tool_activity:
+            summary = _synthesize_tool_activity_summary(tool_activity)
+            if summary:
+                from loomable.content.parts import MediaPart as _MP
+
+                output = AgentOutput(
+                    parts=[
+                        _MP(
+                            modality=Modality.TEXT,
+                            media_type="text/plain",
+                            data=summary.encode("utf-8"),
+                        )
+                    ]
+                )
 
         # (6) Output capability gating (Req 5.4).
         for modality in output.modalities():
@@ -1860,6 +2259,11 @@ class BuiltAgent:
         if require_tools_nudges:
             metadata["require_tools_nudged"] = True
             metadata["require_tools_nudges"] = require_tools_nudges
+        if deliverable_complete_nudges:
+            metadata["deliverable_complete_nudged"] = True
+            metadata["deliverable_complete_nudges"] = deliverable_complete_nudges
+        if deliverable_complete_forced:
+            metadata["deliverable_complete_forced"] = True
         if structured_from_write_json:
             metadata["structured_from_write_json"] = True
         still_missing = _missing_require_tool_specs(
@@ -1946,6 +2350,39 @@ class BuiltAgent:
                 ))
 
         self.session_store.save(self.session)
+
+        # Passive Always-mode lite: heuristic user-fact extraction into NoteStore.
+        if self.memory_auto_extract and self.note_store is not None and input_text:
+            try:
+                from loomable.kernel.stores import _run_sync
+                from loomable.memory.compose import auto_extract_into_notes
+
+                written = _run_sync(
+                    auto_extract_into_notes(
+                        self.note_store,
+                        input_text,
+                        user_id=self._memory_user_id,
+                        scope=self._memory_scope,
+                    )
+                )
+                if written:
+                    merged = list(dict.fromkeys([*written, *self._cached_user_facts]))
+                    self._cached_user_facts = merged[:20]
+            except Exception:  # noqa: BLE001 — never break the run for memory hygiene
+                pass
+
+    async def _refresh_user_memory_context(self, query: str) -> None:
+        """Recall user notes into ``_cached_user_facts`` for the next prompt prefix."""
+        if not self.memory_auto_recall or self.note_store is None:
+            return
+        try:
+            hits = await self.note_store.recall(query or "user preferences identity", k=5)
+            if hits:
+                self._cached_user_facts = list(
+                    dict.fromkeys([*(h.text for h in hits), *self._cached_user_facts])
+                )[:20]
+        except Exception:  # noqa: BLE001
+            pass
 
     async def astream(
         self,
@@ -2401,16 +2838,18 @@ class Agent:
         instructions: str | None = None,
         tools: "list[Tool | Toolkit] | None" = None,
         subagents: "list[Agent] | None" = None,
-        skills: list[Path] | None = None,
+        skills: list[Path] | list[str] | list[Path | str] | None = None,
         mcp_servers: list[Any] | None = None,
         capabilities: ModelCapabilities | str | list[str] | None = None,
         modalities: str | list[str] | None = None,
         text_only: bool = False,
         multimodal: bool = False,
         token_budget: int = 8192,
+        max_run_tokens: int | None = None,
         checkpoint_interval: int = 5,
         session_id: str | None = None,
         user_id: str | None = None,
+        scopes: dict[str, Any] | None = None,
         resume: bool = False,
         use_memory: bool = True,
         memory_window: int = 8,
@@ -2419,6 +2858,7 @@ class Agent:
         response_model: type | None = None,
         # knowledge / RAG:
         retrievers: list[Retriever] | None = None,
+        knowledge_base: Any = None,
         knowledge: list[str] | None = None,
         embedder: Any = None,
         knowledge_top_k: int = 3,
@@ -2431,17 +2871,21 @@ class Agent:
         max_tool_iterations: int | None = None,
         require_final_text: bool = True,
         require_tools: list[str] | None = None,
+        max_delegations: int | None = None,
+        max_depth: int = 4,
         # Tiered model routing:
         tiers: dict[str, Any] | None = None,
         tier_policy: dict[str, Any] | None = None,
         fallback_tiers: dict[str, str] | None = None,
         # low-level overrides:
         context_manager: ContextManager | None = None,
-        memory: MemoryManager | None = None,
+        memory: Any = None,
+        kernel_memory: MemoryManager | None = None,
         tool_runtime: ToolRuntime | None = None,
         harness: GuardrailHarness | None = None,
         planner: Planner | None = None,
-        session_store: SessionStore | None = None,
+        session_store: Any | None = None,
+        memory_backend: Any | None = None,
         # Harness features:
         events: AgentEvents | None = None,
         complexity_router: "ComplexityRouter | None" = None,
@@ -2463,6 +2907,7 @@ class Agent:
         board: bool = True,
         max_rounds: int | None = None,
         max_plan_steps: int = 5,
+        checkpointer: Any = None,
         # Multimodal feedback (Req 7.5):
         feedback_media: bool = True,
         # Developer experience:
@@ -2470,6 +2915,17 @@ class Agent:
         # Lifecycle callbacks:
         on_tool_call: Any = None,
         on_complete: Any = None,
+        # Progressive capability discovery (skills / tools / MCP):
+        discovery: bool = False,
+        skill_catalog: list[Path] | list[str] | list[Path | str] | None = None,
+        defer_mcp: bool | None = None,
+        defer_local_tools: bool | None = None,
+        discovery_core_tools: Sequence[str] | None = None,
+        eager_skills: bool | Sequence[str] | None = None,
+        lazy_mcp: bool | None = None,
+        activation_allowlist: Sequence[str] | None = None,
+        activation_denylist: Sequence[str] | None = None,
+        tool_namespaces: list[dict[str, Any]] | None = None,
     ) -> None:
         # --- Resolve model string shorthand (e.g. "openai:gpt-4o-mini") ---
         if isinstance(model, str):
@@ -2491,7 +2947,34 @@ class Agent:
         self._tools = tools
         self._subagents = subagents
         self._skills = skills
+        self._skill_bodies: list[tuple[str, str]] = []
         self._mcp_servers = mcp_servers
+        self._discovery = bool(discovery)
+        self._skill_catalog = skill_catalog
+        # Default: defer MCP tool advertisement when discovery is on.
+        self._defer_mcp = bool(discovery) if defer_mcp is None else bool(defer_mcp)
+        # Default: defer non-core local tools when discovery is on (schema budget).
+        self._defer_local_tools = (
+            bool(discovery) if defer_local_tools is None else bool(defer_local_tools)
+        )
+        self._discovery_core_tools = (
+            [str(x) for x in discovery_core_tools] if discovery_core_tools else None
+        )
+        # None + discovery → progressive (metadata only). True → eager all skills=.
+        # Sequence → eager those names only. False → never eager-load bodies.
+        self._eager_skills = eager_skills
+        # Lazy MCP: catalog server specs without connecting until activate_mcp_server.
+        # Defaults to True when discovery is on (industry pattern: connect on demand).
+        self._lazy_mcp = bool(discovery) if lazy_mcp is None else bool(lazy_mcp)
+        self._activation_allowlist = (
+            [str(x) for x in activation_allowlist] if activation_allowlist else None
+        )
+        self._activation_denylist = (
+            [str(x) for x in activation_denylist] if activation_denylist else None
+        )
+        self._tool_namespaces = (
+            [dict(ns) for ns in tool_namespaces] if tool_namespaces else None
+        )
         # High-level modality DX: modalities="text" / text_only=True preferred over
         # constructing ModelCapabilities with frozensets.
         from loomable.content.capabilities import capabilities_for
@@ -2517,9 +3000,12 @@ class Agent:
         # multimodal=True is a deprecated no-op alias: media is allowed by default.
         _ = multimodal  # retained for back-compat; default capabilities already include media
         self._token_budget = token_budget
+        # None → spend uses token_budget (legacy). Deep agents pass 0 for unbounded.
+        self._max_run_tokens = max_run_tokens
         self._checkpoint_interval = checkpoint_interval
         self._session_id = session_id
         self._user_id = user_id
+        self._scopes = dict(scopes) if scopes else {}
         self._resume = resume
         self._response_model = response_model
 
@@ -2528,6 +3014,8 @@ class Agent:
         self._compaction_threshold = compaction_threshold
         self._input_schema = input_schema
         self._retrievers = retrievers
+        self._knowledge_base = knowledge_base
+        self._knowledge_retrievers: list[Retriever] | None = None
         self._knowledge = knowledge
         self._embedder = embedder
         self._knowledge_top_k = knowledge_top_k
@@ -2538,6 +3026,8 @@ class Agent:
         self._max_tool_iterations = max_tool_iterations
         self._require_final_text = require_final_text
         self._require_tools = list(require_tools) if require_tools else []
+        self._max_delegations = max_delegations
+        self._max_depth = max_depth
 
         # Tiered model routing.
         self._tiers = tiers
@@ -2546,11 +3036,61 @@ class Agent:
 
         # Low-level overrides.
         self._context_manager = context_manager
-        self._memory = memory
+        self._memory_bundle = None
+        self._memory_auto_extract = False
+        # ``memory=`` accepts composable Memory OR legacy MemoryManager.
+        from loomable.memory.compose import is_kernel_memory_manager, is_memory_bundle
+
+        if is_memory_bundle(memory):
+            bundle = memory.with_scopes(user_id=user_id, scopes=scopes)
+            self._memory_bundle = bundle
+            composed = bundle.to_agent_kwargs()
+            if session_store is None and "session_store" in composed:
+                session_store = composed["session_store"]
+            if memory_backend is None and "memory_backend" in composed:
+                memory_backend = composed["memory_backend"]
+            if note_store is None and "note_store" in composed:
+                note_store = composed["note_store"]
+            if not memory_tool and composed.get("memory_tool"):
+                memory_tool = True
+            if knowledge is None and "knowledge" in composed:
+                knowledge = composed["knowledge"]
+            if knowledge_base is None and composed.get("knowledge_base") is not None:
+                knowledge_base = composed["knowledge_base"]
+            if retrievers is None and composed.get("retrievers") is not None:
+                retrievers = composed["retrievers"]
+            if embedder is None and "embedder" in composed:
+                embedder = composed["embedder"]
+            if "knowledge_top_k" in composed and knowledge_top_k == 3:
+                knowledge_top_k = composed["knowledge_top_k"]
+            if "memory_window" in composed and memory_window == 8:
+                memory_window = composed["memory_window"]
+            if "compaction_threshold" in composed and compaction_threshold == 16:
+                compaction_threshold = composed["compaction_threshold"]
+            if composed.get("use_llm_summarizer"):
+                use_llm_summarizer = True
+            if composed.get("use_memory") is False:
+                use_memory = False
+            self._memory_auto_extract = bool(
+                bundle.user is not None and bundle.user.auto_extract
+            )
+            self._memory = kernel_memory
+        elif is_kernel_memory_manager(memory):
+            self._memory = memory
+        else:
+            self._memory = kernel_memory or memory
+            # Even without a Memory bundle, scopes+user_id can wrap an explicit note_store.
+            if note_store is not None and (user_id or scopes):
+                from loomable.memory.compose import MemoryScope, ScopedNoteStore
+
+                scope = MemoryScope.of(**({**(scopes or {}), **({"user_id": user_id} if user_id else {})}))
+                if scope and not isinstance(note_store, ScopedNoteStore):
+                    note_store = ScopedNoteStore(note_store, scope=scope)
         self._tool_runtime = tool_runtime
         self._harness = harness
         self._planner = planner
         self._session_store = session_store
+        self._memory_backend = memory_backend
 
         # Harness features.
         self._events = events
@@ -2565,12 +3105,22 @@ class Agent:
         self._think_tool = think_tool
         self._plan_tool = plan_tool
         self._memory_tool = memory_tool
+        # Re-apply knobs that Memory.compose may have updated above
+        self._use_memory = use_memory
+        self._memory_window = memory_window
+        self._compaction_threshold = compaction_threshold
+        self._knowledge = knowledge
+        self._knowledge_base = knowledge_base
+        self._retrievers = retrievers
+        self._embedder = embedder
+        self._knowledge_top_k = knowledge_top_k
         self._mode = (mode or "").strip().lower() or None
         self._dispatch = dispatch if dispatch in ("reuse", "spawn") else "reuse"
         self._accept = accept
         self._board = board
         self._max_rounds = max_rounds
         self._max_plan_steps = max_plan_steps
+        self._checkpointer = checkpointer
         self._feedback_media = feedback_media
         if accept is not None and self._verifier is None:
             self._verifier = accept
@@ -2622,14 +3172,20 @@ class Agent:
         # --- Construct or reuse subsystems (Req 1.2 defaults, 2.2/2.3 overrides) ---
         context_manager = self._context_manager or ContextManager(self._token_budget)
         memory = self._memory or MemoryManager()
+        self._materialize_knowledge_base()
         tool_registry, skill_errors = self._build_tool_registry()
         # --- MCP servers: connect and enumerate tools (Req 5.1–5.4) ---
-        mcp_tools, mcp_errors = self._connect_mcp_servers_sync()
+        # When discovery+defer_mcp: catalog MCP tools without advertising them until
+        # activate_tool (progressive disclosure).
+        mcp_tools, mcp_errors, mcp_stubs, mcp_server_stubs = self._connect_mcp_servers_sync(
+            defer=self._discovery and self._defer_mcp,
+            lazy=self._discovery and self._lazy_mcp,
+        )
         tool_registry.update(mcp_tools)
         tool_runtime = self._tool_runtime or ToolRuntime(tool_registry)
         harness = self._harness or GuardrailHarness([])
         planner = self._planner or Planner(model_interface)
-        session_store = self._session_store or SessionStore()
+        session_store = self._resolve_session_store()
 
         # Summarizer is used for compaction (memory management) in the high-level
         # run path.  The kernel AgentLoop is NOT constructed here — the high-level
@@ -2683,7 +3239,11 @@ class Agent:
         if self._subagents:
             from .delegation import make_delegation_tools
 
-            delegation_tools = make_delegation_tools(self._subagents)
+            delegation_tools = make_delegation_tools(
+                self._subagents,
+                max_delegations=self._max_delegations,
+                max_depth=self._max_depth,
+            )
             for dt in delegation_tools:
                 tool_registry[dt.name] = dt
             if self._tool_runtime is None:
@@ -2710,6 +3270,23 @@ class Agent:
         if self._knowledge and self._embedder is not None:
             long_term = LongTermStore()
             self._index_knowledge_sync(long_term, self._knowledge, self._embedder)
+
+        from loomable.memory.compose import MemoryScope
+
+        if (
+            self._memory_bundle is not None
+            and self._memory_bundle.user is not None
+        ):
+            _resolved_memory_scope = self._memory_bundle.user.resolve_scope() or None
+        elif self._scopes or self._user_id:
+            _resolved_memory_scope = MemoryScope.of(
+                **{
+                    **self._scopes,
+                    **({"user_id": self._user_id} if self._user_id else {}),
+                }
+            )
+        else:
+            _resolved_memory_scope = None
 
         built = BuiltAgent(
             loop=None,
@@ -2740,9 +3317,14 @@ class Agent:
             embedder=embedder_instance,
             knowledge_top_k=self._knowledge_top_k,
             _token_budget=self._token_budget,
+            _max_run_tokens=self._max_run_tokens,
             events=events,
             complexity_router=self._complexity_router,
             note_store=self._note_store,
+            memory_auto_extract=self._memory_auto_extract,
+            memory_auto_recall=True,
+            _memory_user_id=self._user_id,
+            _memory_scope=_resolved_memory_scope,
             loop_repeat_threshold=self._loop_repeat_threshold,
             resilience=self._resilience,
             verifier=self._verifier,
@@ -2758,6 +3340,12 @@ class Agent:
             compaction_threshold=self._compaction_threshold,
             token_budget=self._token_budget,
         )
+
+        # --- Progressive discovery (skills / tools / MCP) ---
+        if self._discovery:
+            self._wire_discovery(
+                built, mcp_stubs=mcp_stubs, mcp_server_stubs=mcp_server_stubs
+            )
 
         # --- Wire harness knobs from Agent constructor (avoids build() boilerplate) ---
         if self._tool_timeout is not None:
@@ -2803,6 +3391,39 @@ class Agent:
     # Run flow (high-level wrappers delegating to BuiltAgent)
     # ------------------------------------------------------------------
 
+    def bind_session(self, session_id: str | None, *, resume: bool | None = None) -> None:
+        """Bind a client ``session_id`` for L1/L2 (and Case checkpoints).
+
+        Same idea as :meth:`loomable.case.Case.bind_session`: HTTP/stream callers
+        change the conversation thread without reconstructing the Agent.
+
+        When ``resume`` is omitted, auto-resumes if ``session_store`` /
+        ``memory_backend`` already has that id; otherwise starts a fresh session
+        on the next :meth:`build`. Requires an explicit durable store for chat
+        history to survive across process requests (default in-memory SQLite is
+        per build).
+        """
+        if not session_id:
+            return
+        changed = session_id != self._session_id
+        self._session_id = session_id
+        if self._case is not None and hasattr(self._case, "bind_session"):
+            self._case.bind_session(session_id)
+
+        if resume is not None:
+            self._resume = bool(resume)
+        else:
+            self._resume = False
+            try:
+                store = self._resolve_session_store()
+                store.resume(session_id)
+                self._resume = True
+            except Exception:  # noqa: BLE001 — missing session → create on build
+                self._resume = False
+
+        if changed or self._built is not None:
+            self._built = None
+
     def _get_built(self) -> BuiltAgent:
         """Build the agent once and cache it for subsequent runs."""
         if self._built is None:
@@ -2817,7 +3438,7 @@ class Agent:
         videos: "list[str | Path | Any] | None" = None,
         audio: "list[str | Path | Any] | None" = None,
         output_schema: type | None = None,
-        context: dict[str, Any] | None = None,
+        context: "Any | None" = None,
     ) -> RunResult:
         """Build (once) and run the agent, returning a :class:`RunResult` (Req 1.4).
 
@@ -2834,7 +3455,9 @@ class Agent:
         output_schema:
             Optional per-call structured output schema (overrides response_model).
         context:
-            Optional runtime context dict accessible during the run.
+            Optional :class:`~loomable.agent.context.RunContext` (Flow/Workflow)
+            or a plain dict. RunContext is forwarded so Agent-in-Flow behaves
+            like a standalone BuiltAgent run.
         """
         # Case mode: plan → dispatch → synthesize → accept.
         if self._mode == "case":
@@ -2848,11 +3471,25 @@ class Agent:
         built = self._get_built()
         # Use response_model as default output_schema when not overridden per-call
         schema = output_schema or self._response_model
-        result = await built.arun(input, images=images, videos=videos, audio=audio, output_schema=schema)
+        run_ctx = context if _is_run_context(context) else None
+        result = await built.arun(
+            input,
+            images=images,
+            videos=videos,
+            audio=audio,
+            output_schema=schema,
+            context=run_ctx,
+        )
         # Lifecycle callback: on_complete
         if self._on_complete is not None:
             self._on_complete(result)
         return result
+
+    def cancel(self) -> bool:
+        """Request cooperative cancellation of the active built-agent run."""
+        if self._built is not None:
+            return self._built.cancel()
+        return False
 
     def run(
         self,
@@ -2890,28 +3527,38 @@ class Agent:
         videos: "list[str | Path | Any] | None" = None,
         audio: "list[str | Path | Any] | None" = None,
         output_schema: type | None = None,
-        context: dict[str, Any] | None = None,
+        context: "Any | None" = None,
+        session_id: str | None = None,
     ) -> "AsyncIterator[Any]":
         """Yield AG-UI-compatible stream events (lifecycle, tools, text).
 
         When ``mode="case"``, streams Case pipeline events.
         """
+        if session_id:
+            self.bind_session(session_id)
+
         if self._mode == "case":
             case = self._get_case()
             text = self._coerce_run_text(input)
-            async for event in case.astream_events(text):
+            async for event in case.astream_events(text, session_id=session_id):
                 yield event
             return
 
         built = self._get_built()
         schema = output_schema or self._response_model
-        async for event in built.astream_events(
-            input,
-            images=images,
-            videos=videos,
-            audio=audio,
-            output_schema=schema,
-        ):
+        kwargs: dict[str, Any] = {
+            "images": images,
+            "videos": videos,
+            "audio": audio,
+            "output_schema": schema,
+        }
+        # BuiltAgent.astream_events may not take context yet — only pass if supported.
+        import inspect
+
+        params = inspect.signature(built.astream_events).parameters
+        if "context" in params and _is_run_context(context):
+            kwargs["context"] = context
+        async for event in built.astream_events(input, **kwargs):
             yield event
 
     def _coerce_run_text(self, value: Any) -> str:
@@ -2959,6 +3606,28 @@ class Agent:
             if parts:
                 parts.append("")  # blank line separator
             parts.append(self._instructions)
+        # Progressive skills: inject loaded SKILL.md bodies into the prompt.
+        if self._skill_bodies:
+            if parts:
+                parts.append("")
+            for skill_name, body in self._skill_bodies:
+                title = skill_name or "skill"
+                parts.append(f"## Skill: {title}\n{body.strip()}")
+        # Ship-any-retriever: tell the model which search tools are attached.
+        attached = self._attached_retrievers()
+        if attached:
+            if parts:
+                parts.append("")
+            lines = [
+                "Knowledge search tools (call when facts from the knowledge base are needed):"
+            ]
+            for r in attached:
+                desc = (getattr(r, "description", None) or "").strip()
+                if desc:
+                    lines.append(f"- `{r.name}`: {desc}")
+                else:
+                    lines.append(f"- `{r.name}`: search this knowledge base")
+            parts.append("\n".join(lines))
         if not parts:
             return None
         return "\n".join(parts)
@@ -3057,43 +3726,119 @@ class Agent:
             for item in self._tools:
                 if isinstance(item, Toolkit):
                     for ft in item.tools():
+                        if ft.name in registry:
+                            import warnings
+
+                            warnings.warn(
+                                f"Tool name {ft.name!r} already registered; "
+                                "later registration wins (check toolkit collisions).",
+                                stacklevel=2,
+                            )
                         registry[ft.name] = ft
                 else:
+                    if item.name in registry:
+                        import warnings
+
+                        warnings.warn(
+                            f"Tool name {item.name!r} already registered; "
+                            "later registration wins (check toolkit collisions).",
+                            stacklevel=2,
+                        )
                     registry[item.name] = item
 
         # --- Skills: discover + load via the kernel SkillLoader (Req 4.1–4.4) ---
+        skill_bodies: list[tuple[str, str]] = []
         if self._skills:
+            from loomable.skills import resolve_skills
+
             loader = SkillLoader()
-            manifests = loader.discover(self._skills)
+            skill_roots = resolve_skills(self._skills)
+            manifests = loader.discover(skill_roots)
+            eager_names = self._resolve_eager_skill_names(
+                [m.name for m in manifests]
+            )
             for manifest in manifests:
+                # Progressive disclosure: under discovery, skip full body/script
+                # registration unless the skill is in the eager set.
+                if self._discovery and manifest.name not in eager_names:
+                    continue
                 try:
                     loaded_skill = loader.load(manifest)
+                    body = (getattr(loaded_skill, "body", None) or "").strip()
+                    if body:
+                        skill_bodies.append(
+                            (getattr(loaded_skill, "name", None) or manifest.name, body)
+                        )
                     for script_tool in loaded_skill.get_tools():
                         registry[script_tool.name] = script_tool
                 except SkillLoadError as err:
                     skill_errors.append(err)
+        self._skill_bodies = skill_bodies
 
-        if self._retrievers:
-            for retriever in self._retrievers:
+        if self._attached_retrievers():
+            for retriever in self._attached_retrievers():
                 if retriever.name in registry:
                     raise AgentConfigError(
                         f"retrievers[{retriever.name!r}] "
                         f"(name collides with an existing tool)"
                     )
-                registry[retriever.name] = RetrieverTool(retriever)
+                desc = (getattr(retriever, "description", None) or "").strip() or None
+                registry[retriever.name] = RetrieverTool(retriever, description=desc)
 
         return registry, skill_errors
 
+    def _resolve_eager_skill_names(self, discovered_names: list[str]) -> set[str]:
+        """Which configured skills get full body injection at build time.
+
+        Under ``discovery=True`` the default is progressive (empty eager set):
+        only metadata is catalogued and the model calls ``load_skill``. Pass
+        ``eager_skills=True`` to restore legacy full injection, or a name list
+        for selective eagerness (e.g. research profile can opt in).
+        """
+        if not self._discovery:
+            return set(discovered_names)
+        policy = self._eager_skills
+        if policy is True:
+            return set(discovered_names)
+        if policy is False or policy is None:
+            return set()
+        wanted = {str(x).strip().lower() for x in policy if str(x).strip()}
+        return {n for n in discovered_names if n.lower() in wanted}
+
+    def _discovery_core_name_set(self) -> set[str]:
+        """Always-advertised tool names when local deferral is on."""
+        from .discovery import DISCOVERY_META_TOOL_NAMES
+
+        core: set[str] = set(DISCOVERY_META_TOOL_NAMES)
+        if self._discovery_core_tools:
+            core.update(self._discovery_core_tools)
+        # require_tools must remain callable without activate
+        for raw in self._require_tools or []:
+            name = (raw or "").split(":", 1)[0].strip()
+            if name:
+                core.add(name)
+        # Knowledge-base / retriever tools must stay advertised — never defer them.
+        for retriever in self._attached_retrievers():
+            name = getattr(retriever, "name", "") or ""
+            if name:
+                core.add(name)
+        return core
+
     def _connect_mcp_servers_sync(
         self,
-    ) -> tuple[dict[str, Tool], list[MCPConnectionError]]:
+        *,
+        defer: bool = False,
+        lazy: bool = False,
+    ) -> tuple[dict[str, Tool], list[MCPConnectionError], list[Any], list[Any]]:
         """Connect to configured MCP servers synchronously (Req 5.1–5.4).
 
         Wraps the async :meth:`_connect_mcp_servers` for use from the synchronous
-        :meth:`build`. Returns the MCP tool registry and any connection errors.
+        :meth:`build`. Returns the MCP tool registry, connection errors, tool
+        catalog stubs (populated when ``defer=True`` or for discovery indexing),
+        and server catalog stubs (:class:`~loomable.agent.discovery.ServerStub`).
         """
         if not self._mcp_servers:
-            return {}, []
+            return {}, [], [], []
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -3104,13 +3849,18 @@ class Agent:
             import concurrent.futures
 
             with concurrent.futures.ThreadPoolExecutor(1) as pool:
-                future = pool.submit(asyncio.run, self._connect_mcp_servers())
+                future = pool.submit(
+                    asyncio.run, self._connect_mcp_servers(defer=defer, lazy=lazy)
+                )
                 return future.result()
-        return asyncio.run(self._connect_mcp_servers())
+        return asyncio.run(self._connect_mcp_servers(defer=defer, lazy=lazy))
 
     async def _connect_mcp_servers(
         self,
-    ) -> tuple[dict[str, Tool], list[MCPConnectionError]]:
+        *,
+        defer: bool = False,
+        lazy: bool = False,
+    ) -> tuple[dict[str, Tool], list[MCPConnectionError], list[Any], list[Any]]:
         """Connect to configured MCP servers and enumerate their tools (Req 5.1–5.4).
 
         For each MCP server specification in ``self._mcp_servers``, the kernel
@@ -3119,45 +3869,347 @@ class Agent:
         (a kernel :class:`Tool`) whose ``invoke`` delegates to
         ``MCPClient.call_tool``.
 
+        When ``defer=True``, tools are returned as catalog stubs only (not
+        registered) so the model must ``activate_tool`` before calling them.
+
+        When ``lazy=True`` (industry "search-then-connect" pattern), servers are
+        **not connected at all** during build. Each configured server is
+        catalogued as an unconnected :class:`~loomable.agent.discovery.ServerStub`
+        so the model can discover it via ``search_mcp`` / ``search_namespaces``
+        and connect on demand with ``activate_mcp_server``. ``lazy`` takes
+        precedence over ``defer`` (nothing to defer if nothing connected).
+
         A failed connection yields an :class:`MCPConnectionError` for that server
         while other servers continue (Req 5.3). No kernel code is modified (Req 5.4).
 
         Returns
         -------
-        tuple[dict[str, Tool], list[MCPConnectionError]]
-            The MCP tool registry and any connection errors that were isolated.
+        tuple[dict[str, Tool], list[MCPConnectionError], list, list]
+            The MCP tool registry, isolated connection errors, tool ToolStub
+            list, and server ServerStub list.
         """
+        from .discovery import ServerStub, ToolStub
         from .tools import MCPTool
 
         registry: dict[str, Tool] = {}
         errors: list[MCPConnectionError] = []
+        stubs: list[Any] = []
+        servers: list[Any] = []
+
+        def _resolve_server_id(spec: Any, idx: int) -> str:
+            server_id = getattr(spec, "name", None) or getattr(spec, "id", None)
+            if not server_id:
+                if isinstance(spec, dict):
+                    server_id = (
+                        spec.get("server_id") or spec.get("name") or spec.get("id")
+                    )
+                if not server_id:
+                    server_id = f"mcp-{idx}"
+            return str(server_id)
+
+        if lazy:
+            # Catalog-only: do not open any transport. activate_mcp_server()
+            # connects on demand from the stored spec.
+            for spec_idx, spec in enumerate(self._mcp_servers):
+                server_id = _resolve_server_id(spec, spec_idx)
+                description = (
+                    spec.get("description", "") if isinstance(spec, dict) else ""
+                )
+                servers.append(
+                    ServerStub(
+                        server_id=server_id,
+                        description=description,
+                        connected=False,
+                        spec=spec,
+                    )
+                )
+            return registry, errors, stubs, servers
+
         client = MCPClient()
 
-        for spec in self._mcp_servers:
+        for spec_idx, spec in enumerate(self._mcp_servers):
+            server_id = _resolve_server_id(spec, spec_idx)
+            description = (
+                spec.get("description", "") if isinstance(spec, dict) else ""
+            )
             try:
                 session = await client.connect(spec)
                 capabilities = await client.list_capabilities(session)
+                server_tool_names: list[str] = []
                 for tool_info in capabilities.tools:
                     tool_name = tool_info.get("name", "")
                     if not tool_name:
                         continue
-                    description = tool_info.get("description", "")
+                    tool_description = tool_info.get("description", "")
                     parameters = tool_info.get("parameters", {
                         "type": "object",
                         "properties": {},
                     })
+                    stub = ToolStub(
+                        name=tool_name,
+                        description=tool_description,
+                        source="mcp",
+                        server_id=server_id,
+                        parameters=parameters if isinstance(parameters, dict) else {},
+                        activated=not defer,
+                        mcp_client=client,
+                        mcp_session=session,
+                        namespace=f"mcp:{server_id}",
+                    )
+                    stubs.append(stub)
+                    server_tool_names.append(tool_name)
+                    if defer:
+                        continue
                     mcp_tool = MCPTool(
                         name=tool_name,
-                        description=description,
+                        description=tool_description,
                         parameters=parameters,
                         mcp_client=client,
                         session=session,
                     )
                     registry[tool_name] = mcp_tool
+                servers.append(
+                    ServerStub(
+                        server_id=server_id,
+                        description=description,
+                        connected=True,
+                        spec=spec,
+                        tool_count=len(server_tool_names),
+                    )
+                )
             except MCPConnectionError as err:
                 errors.append(err)
+                servers.append(
+                    ServerStub(
+                        server_id=server_id,
+                        description=description,
+                        connected=False,
+                        spec=spec,
+                    )
+                )
 
-        return registry, errors
+        return registry, errors, stubs, servers
+
+    def _wire_discovery(
+        self,
+        built: BuiltAgent,
+        *,
+        mcp_stubs: list[Any] | None = None,
+        mcp_server_stubs: list[Any] | None = None,
+    ) -> None:
+        """Register search/load/activate meta-tools and build the capability catalog."""
+        from loomable.skills import bundled_skills_root, resolve_skills
+
+        from .discovery import (
+            DISCOVERY_META_TOOL_NAMES,
+            DISCOVERY_SYSTEM_NOTE,
+            CapabilityCatalog,
+            DiscoveryRuntime,
+            NamespaceStub,
+            SkillStub,
+            ToolStub,
+            catalog_from_skill_manifests,
+            format_skill_catalog_for_prompt,
+            make_discovery_tools,
+        )
+
+        catalog = CapabilityCatalog()
+        loader = SkillLoader()
+
+        # Skills already eagerly loaded via skills=
+        loaded_names: set[str] = set()
+        for name, _body in self._skill_bodies:
+            loaded_names.add(name)
+
+        skill_roots: list[Path] = []
+        if self._skills:
+            skill_roots.extend(resolve_skills(self._skills))
+        if self._skill_catalog:
+            skill_roots.extend(resolve_skills(self._skill_catalog))
+        # Always index bundled package skills for search_skills.
+        bundled = bundled_skills_root()
+        if bundled not in skill_roots:
+            skill_roots.append(bundled)
+
+        seen_skill: set[str] = set()
+        for root in skill_roots:
+            try:
+                manifests = loader.discover([root])
+            except Exception:  # noqa: BLE001
+                continue
+            for stub in catalog_from_skill_manifests(manifests):
+                if stub.name in seen_skill:
+                    continue
+                seen_skill.add(stub.name)
+                stub.loaded = stub.name in loaded_names
+                catalog.skills.append(stub)
+
+        # Also mark loaded skills that may not have been rediscovered
+        for name in loaded_names:
+            if name not in seen_skill:
+                catalog.skills.append(
+                    SkillStub(name=name, description="", path=Path("."), loaded=True)
+                )
+                seen_skill.add(name)
+
+        def _on_skill_body(skill_name: str, body: str) -> None:
+            block = f"## Skill: {skill_name}\n{body.strip()}"
+            if built.instructions:
+                built.instructions = f"{built.instructions.rstrip()}\n\n{block}"
+            else:
+                built.instructions = block
+
+        # Local tool → namespace map (for tools declared via tool_namespaces=).
+        namespace_by_tool: dict[str, str] = {}
+        for ns_spec in self._tool_namespaces or []:
+            ns_name = str(ns_spec.get("name") or "").strip()
+            if not ns_name:
+                continue
+            for tool_name in ns_spec.get("tools") or []:
+                namespace_by_tool[str(tool_name)] = ns_name
+
+        runtime = DiscoveryRuntime(
+            catalog,
+            skill_loader=loader,
+            tool_runtime=built.tool_runtime,
+            on_skill_body=_on_skill_body,
+            skill_roots=skill_roots,
+            activation_allowlist=self._activation_allowlist,
+            activation_denylist=self._activation_denylist,
+            lazy_mcp=self._discovery and self._lazy_mcp,
+        )
+
+        # Schema budget: move non-core local tools into deferred catalog.
+        core_names = self._discovery_core_name_set()
+        if self._defer_local_tools:
+            for name, tool_obj in list(built.tool_runtime._tools.items()):
+                if name in core_names or name in DISCOVERY_META_TOOL_NAMES:
+                    continue
+                runtime.register_pending_local(name, tool_obj)
+                del built.tool_runtime._tools[name]
+                catalog.tools.append(
+                    ToolStub(
+                        name=name,
+                        description=getattr(tool_obj, "description", "") or "",
+                        source="local",
+                        activated=False,
+                        parameters=getattr(tool_obj, "parameters", None) or {},
+                        namespace=namespace_by_tool.get(name),
+                    )
+                )
+
+        # Remaining (core) tools — searchable and already activated
+        for tool_obj in built.tool_runtime._tools.values():
+            name = getattr(tool_obj, "name", "") or ""
+            if not name:
+                continue
+            if catalog.tool_by_name(name) is not None:
+                continue
+            catalog.tools.append(
+                ToolStub(
+                    name=name,
+                    description=getattr(tool_obj, "description", "") or "",
+                    source="local",
+                    activated=True,
+                    parameters=getattr(tool_obj, "parameters", None) or {},
+                    namespace=namespace_by_tool.get(name),
+                )
+            )
+
+        # Deferred / eager MCP stubs
+        for stub in mcp_stubs or []:
+            existing = catalog.tool_by_name(stub.name)
+            if existing:
+                existing.source = "mcp"
+                existing.server_id = stub.server_id
+                existing.mcp_client = stub.mcp_client
+                existing.mcp_session = stub.mcp_session
+                existing.parameters = stub.parameters
+                existing.activated = stub.activated
+                existing.description = stub.description or existing.description
+                existing.namespace = existing.namespace or stub.namespace
+            else:
+                catalog.tools.append(stub)
+
+        # MCP server catalog (connected or lazily deferred pending activate_mcp_server).
+        for server in mcp_server_stubs or []:
+            if catalog.server_by_id(server.server_id) is None:
+                catalog.servers.append(server)
+
+        # Namespaces: explicit tool_namespaces= groups + one auto mcp:<server_id>
+        # namespace per MCP server (connected or lazy) grouping its tools.
+        for ns_spec in self._tool_namespaces or []:
+            ns_name = str(ns_spec.get("name") or "").strip()
+            if not ns_name or catalog.namespace_by_name(ns_name) is not None:
+                continue
+            catalog.namespaces.append(
+                NamespaceStub(
+                    name=ns_name,
+                    description=str(ns_spec.get("description") or ""),
+                    tools=[str(t) for t in ns_spec.get("tools") or []],
+                )
+            )
+        for server in mcp_server_stubs or []:
+            ns_name = f"mcp:{server.server_id}"
+            if catalog.namespace_by_name(ns_name) is not None:
+                continue
+            tools_in_ns = [
+                t.name for t in catalog.tools if t.server_id == server.server_id
+            ]
+            catalog.namespaces.append(
+                NamespaceStub(
+                    name=ns_name,
+                    description=server.description or f"MCP server {server.server_id}",
+                    tools=tools_in_ns,
+                )
+            )
+
+        for meta in make_discovery_tools(runtime):
+            built.tool_runtime._tools[meta.name] = meta
+            if catalog.tool_by_name(meta.name) is None:
+                catalog.tools.append(
+                    ToolStub(
+                        name=meta.name,
+                        description=meta.description or "",
+                        source="local",
+                        activated=True,
+                    )
+                )
+
+        note_parts = [DISCOVERY_SYSTEM_NOTE.strip()]
+        skill_note = format_skill_catalog_for_prompt(catalog.skills)
+        if skill_note:
+            note_parts.append(skill_note)
+        if self._defer_local_tools:
+            deferred = [t.name for t in catalog.tools if not t.activated]
+            if deferred:
+                note_parts.append(
+                    "Deferred tools (search_tools / activate_tool): "
+                    + ", ".join(sorted(deferred)[:40])
+                    + ("…" if len(deferred) > 40 else "")
+                )
+        unconnected_servers = [s.server_id for s in catalog.servers if not s.connected]
+        if unconnected_servers:
+            note_parts.append(
+                "Unconnected MCP servers (activate_mcp_server to connect + catalog "
+                "their tools): " + ", ".join(sorted(unconnected_servers))
+            )
+        note = "\n\n".join(note_parts)
+        if built.instructions:
+            built.instructions = f"{built.instructions.rstrip()}\n\n{note}"
+        else:
+            built.instructions = note
+        built.discovery = runtime
+
+    def _resolve_session_store(self) -> Any:
+        """Resolve L1/L2 persistence: ``session_store`` or ``memory_backend`` wrap."""
+        if self._session_store is not None:
+            return self._session_store
+        if self._memory_backend is not None:
+            from loomable.kernel.stores import BackendSessionStore
+
+            return BackendSessionStore(self._memory_backend)
+        return SessionStore()
 
     def _build_session(
         self, config: AgentConfig, session_store: SessionStore
@@ -3178,6 +4230,39 @@ class Agent:
         return Session(
             session_id=session_id,
             agent_config_ref=config.model.get("provider", "default"),
+        )
+
+    def _attached_retrievers(self) -> list[Retriever]:
+        """Explicit ``retrievers=`` plus tools materialized from ``knowledge_base=``."""
+        out: list[Retriever] = []
+        seen: set[str] = set()
+        for retriever in list(self._retrievers or []) + list(self._knowledge_retrievers or []):
+            name = getattr(retriever, "name", "") or ""
+            if name in seen:
+                raise AgentConfigError(
+                    f"retrievers[{name!r}] (duplicate knowledge_base/retrievers name)"
+                )
+            if name:
+                seen.add(name)
+            out.append(retriever)
+        return out
+
+    def _materialize_knowledge_base(self) -> None:
+        """Resolve ``knowledge_base=`` (vector DB / sources) into retriever tools."""
+        if self._knowledge_retrievers is not None:
+            return
+        spec = self._knowledge_base
+        if not spec:
+            self._knowledge_retrievers = []
+            return
+        from loomable.retrieval.knowledge import resolve_knowledge_base, run_sync
+
+        self._knowledge_retrievers = list(
+            run_sync(
+                resolve_knowledge_base(
+                    spec, embedder=self._embedder, user_id=self._user_id
+                )
+            )
         )
 
     # ------------------------------------------------------------------

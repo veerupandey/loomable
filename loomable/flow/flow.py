@@ -132,6 +132,9 @@ class Flow:
         session_id: str | None = None,
         deps: Any = None,
         reducers: dict[str, Reducer] | None = None,
+        knowledge_base: Any = None,
+        retrievers: Any = None,
+        embedder: Any = None,
     ) -> None:
         # Store configuration parameters
         self._engine = engine
@@ -142,6 +145,9 @@ class Flow:
         self._session_id = session_id
         self._deps = deps
         self._reducers = reducers
+        self._knowledge_base = knowledge_base
+        self._retrievers = retrievers
+        self._embedder = embedder
 
         # Build internal node dict and edge list from the input
         if isinstance(nodes, list):
@@ -159,6 +165,15 @@ class Flow:
         self._validate_no_duplicate_nodes()
         # Validate: all edge endpoints reference existing nodes
         self._validate_edge_endpoints()
+        if knowledge_base is not None or retrievers is not None or embedder is not None:
+            from loomable.agent.memory_opts import apply_knowledge_base
+
+            apply_knowledge_base(
+                list(self._nodes.values()),
+                knowledge_base=knowledge_base,
+                retrievers=retrievers,
+                embedder=embedder,
+            )
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -470,6 +485,11 @@ class Flow:
         ctx = context or RunContext()
         ctx.events = bridge
 
+        # Bind checkpoint thread to the stream session_id for this run.
+        prev_session = self._session_id
+        if session_id:
+            self._session_id = session_id
+
         async def _runner() -> None:
             try:
                 bridge.publish(RUN_STARTED, {"input": str(input)[:500] if input is not None else ""})
@@ -481,6 +501,7 @@ class Flow:
             except Exception as exc:  # noqa: BLE001
                 bridge.publish(RUN_ERROR, {"message": str(exc), "error_type": type(exc).__name__})
             finally:
+                self._session_id = prev_session
                 await bus.close()
 
         task = asyncio.create_task(_runner())
@@ -494,6 +515,7 @@ class Flow:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
+            self._session_id = prev_session
 
     def _resolve_engine(self) -> Any:
         """Resolve which engine to use for this flow run.

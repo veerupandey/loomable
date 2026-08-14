@@ -55,7 +55,10 @@ class FileTools(Toolkit):
             FunctionTool(self._read_file, name="read_file"),
             FunctionTool(self._write_file, name="write_file", idempotent=False),
             FunctionTool(self._write_json, name="write_json", idempotent=False),
+            FunctionTool(self._edit_file, name="edit_file", idempotent=False),
             FunctionTool(self._list_directory, name="list_directory"),
+            FunctionTool(self._glob_files, name="glob_files"),
+            FunctionTool(self._grep_files, name="grep_files"),
         ]
 
     def _resolve_safe_path(self, path: str) -> Path | str:
@@ -156,6 +159,77 @@ class FileTools(Toolkit):
             return f"Error: Permission denied: {path}"
 
         return "\n".join(entries)
+
+    async def _edit_file(
+        self,
+        path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> str:
+        """Replace ``old_string`` with ``new_string`` inside an existing file."""
+        safe = self._resolve_safe_path(path)
+        if isinstance(safe, str):
+            return safe
+        try:
+            content = await asyncio.to_thread(safe.read_text, encoding="utf-8")
+        except FileNotFoundError:
+            return f"Error: File not found: {path}"
+        except PermissionError:
+            return f"Error: Permission denied: {path}"
+        if old_string not in content:
+            return f"Error: old_string not found in {path}"
+        count = content.count(old_string)
+        if count > 1 and not replace_all:
+            return (
+                f"Error: old_string matched {count} times in {path}; "
+                "set replace_all=true or make old_string unique"
+            )
+        updated = (
+            content.replace(old_string, new_string)
+            if replace_all
+            else content.replace(old_string, new_string, 1)
+        )
+        try:
+            await asyncio.to_thread(self._do_write, safe, updated)
+        except PermissionError:
+            return f"Error: Permission denied: {path}"
+        return f"Successfully edited {path}"
+
+    async def _glob_files(self, pattern: str = "**/*") -> str:
+        """Find files under base_dir matching a glob pattern."""
+        import fnmatch
+
+        matches: list[str] = []
+        base = self._base_dir
+        for p in base.rglob("*"):
+            if not p.is_file():
+                continue
+            rel = str(p.relative_to(base)).replace("\\", "/")
+            if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(p.name, pattern):
+                matches.append(rel)
+        return "\n".join(sorted(matches)) if matches else "(no matches)"
+
+    async def _grep_files(self, query: str, path: str = ".", max_hits: int = 40) -> str:
+        """Search file contents under ``path`` (substring match)."""
+        safe = self._resolve_safe_path(path)
+        if isinstance(safe, str):
+            return safe
+        hits: list[str] = []
+        root = safe if safe.is_dir() else safe.parent
+        files = [safe] if safe.is_file() else [p for p in root.rglob("*") if p.is_file()]
+        for fp in files:
+            try:
+                text = fp.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            for i, line in enumerate(text.splitlines(), start=1):
+                if query in line:
+                    rel = str(fp.relative_to(self._base_dir)).replace("\\", "/")
+                    hits.append(f"{rel}:{i}:{line[:240]}")
+                    if len(hits) >= max_hits:
+                        return "\n".join(hits)
+        return "\n".join(hits) if hits else "(no matches)"
 
     @staticmethod
     def _do_write(resolved_path: Path, content: str) -> None:

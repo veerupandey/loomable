@@ -23,6 +23,17 @@ from loomable.flow.state import SharedState
 from loomable.kernel.subagents import DelegatedTask, SubagentManager, SubagentOutcome
 
 
+def _apply_state_updates(result: RunResult, state: SharedState) -> None:
+    """Merge planner/callable state_updates (and structured dict) into SharedState."""
+    updates = (result.metadata or {}).get("state_updates")
+    if isinstance(updates, dict):
+        for key, value in updates.items():
+            state.write(key, value)
+    elif isinstance(getattr(result, "structured", None), dict):
+        for key, value in result.structured.items():
+            state.write(key, value)
+
+
 class ParallelEngine:
     """Execute a Flow using Bulk Synchronous Parallel supersteps (Req 8.3).
 
@@ -100,13 +111,8 @@ class ParallelEngine:
             if not ready:
                 continue
 
-            from loomable.flow.observability import emit_node_start, emit_node_end
-
-            start_times: dict[str, float] = {
-                nid: emit_node_start(context.events, nid) for nid in ready
-            }
-
             # 4b. Build delegated tasks for concurrent execution
+            # NODE_* events fire inside each factory so duration is per-node.
             tasks = [
                 DelegatedTask(
                     task_id=nid,
@@ -121,11 +127,6 @@ class ParallelEngine:
 
             # 4c. Run all concurrently via SubagentManager (fault-isolated)
             outcomes: list[SubagentOutcome] = await manager.run_all(tasks)
-
-            for outcome in outcomes:
-                st = start_times.get(outcome.task_id)
-                if st is not None:
-                    emit_node_end(context.events, outcome.task_id, st)
 
             # 4d. Barrier: buffer writes and commit in node_id order (Req 7.2)
             self._barrier_commit(outcomes, state, sub_results)
@@ -228,7 +229,13 @@ class ParallelEngine:
         )
 
         async def _run() -> RunResult:
-            return await node.runnable.arun(node_input, context=context)
+            from loomable.flow.observability import emit_node_end, emit_node_start
+
+            start_t = emit_node_start(context.events, node_id)
+            try:
+                return await node.runnable.arun(node_input, context=context)
+            finally:
+                emit_node_end(context.events, node_id, start_t)
 
         return _run
 
@@ -302,6 +309,7 @@ class ParallelEngine:
 
                 # Write to SharedState (applies the key's reducer)
                 state.write(node_id, result.output)
+                _apply_state_updates(result, state)
 
     # ------------------------------------------------------------------
     # Checkpoint helper

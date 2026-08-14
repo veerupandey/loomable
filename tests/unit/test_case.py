@@ -230,3 +230,138 @@ async def test_workflow_state_without_caller_context() -> None:
     wf = Workflow("s").step("a", step_a)
     await wf.arun("x")
     assert wf.state.get("a") is not None
+
+
+@pytest.mark.asyncio
+async def test_case_board_rehydrates_from_checkpoint() -> None:
+    from loomable.persist.checkpoint import Checkpoint, InMemoryCheckpointer
+
+    board = Board()
+    item = board.add("Resume triage INC-1")
+    board.update(item.id, status="in_progress")
+    cp = InMemoryCheckpointer()
+    await cp.put(
+        Checkpoint(
+            thread_id="case-sess-1",
+            step=1,
+            session_state={"shared_state": {"board": board.to_dict()}},
+            complete=False,
+        )
+    )
+    case = Case(
+        model=_model(),
+        board=True,
+        checkpointer=cp,
+        session_id="case-sess-1",
+        dispatch="reuse",
+        accept=_sev_accept,
+        max_rounds=2,
+        max_steps=2,
+        modalities="text",
+    )
+    assert case.board is not None
+    assert case.board.list() == []
+    await case._hydrate_board_from_checkpoint(resume=True)
+    items = case.board.list()
+    assert len(items) == 1
+    assert items[0].title == "Resume triage INC-1"
+    assert items[0].status == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_case_astream_events_hydrates_board_before_snapshot() -> None:
+    from loomable.persist.checkpoint import Checkpoint, InMemoryCheckpointer
+    from loomable.stream import STATE_SNAPSHOT
+
+    board = Board()
+    item = board.add("Keep this card")
+    board.update(item.id, status="in_progress")
+    cp = InMemoryCheckpointer()
+    await cp.put(
+        Checkpoint(
+            thread_id="sse-sess",
+            step=1,
+            session_state={
+                "shared_state": {
+                    "board": board.to_dict(),
+                    "plan_steps": ["Keep this card"],
+                    "completed_node_ids": ["plan", "act"],
+                },
+                "completed_node_ids": ["plan", "act"],
+            },
+            complete=False,
+        )
+    )
+    case = Case(
+        model=_model(),
+        board=True,
+        checkpointer=cp,
+        session_id="sse-sess",
+        dispatch="reuse",
+        accept=_sev_accept,
+        max_rounds=2,
+        max_steps=2,
+        modalities="text",
+    )
+    snapshots = []
+    async for ev in case.astream_events("continue", session_id="sse-sess", resume=True):
+        if ev.type == STATE_SNAPSHOT:
+            snapshots.append(ev.data.get("board") or {})
+    assert snapshots
+    assert snapshots[0].get("items")
+    assert snapshots[0]["items"][0]["title"] == "Keep this card"
+
+
+@pytest.mark.asyncio
+async def test_case_board_rehydrates_from_complete_checkpoint() -> None:
+    """Board should restore even when the latest checkpoint is complete=True."""
+    from loomable.persist.checkpoint import Checkpoint, InMemoryCheckpointer
+
+    board = Board()
+    item = board.add("Closed card")
+    board.update(item.id, status="done")
+    cp = InMemoryCheckpointer()
+    await cp.put(
+        Checkpoint(
+            thread_id="done-sess",
+            step=9,
+            session_state={"shared_state": {"board": board.to_dict()}},
+            complete=True,
+        )
+    )
+    case = Case(
+        model=_model(),
+        board=True,
+        checkpointer=cp,
+        session_id="done-sess",
+        dispatch="reuse",
+        accept=_sev_accept,
+        max_rounds=2,
+        max_steps=2,
+        modalities="text",
+    )
+    await case._hydrate_board_from_checkpoint(resume=True)
+    assert case.board is not None
+    assert len(case.board.list()) == 1
+    assert case.board.list()[0].status == "done"
+
+    from loomable.persist.checkpoint import InMemoryCheckpointer
+
+    cp = InMemoryCheckpointer()
+    case = Case(
+        model=_model(),
+        board=True,
+        checkpointer=cp,
+        dispatch="reuse",
+        accept=_sev_accept,
+        max_rounds=2,
+        max_steps=2,
+        modalities="text",
+    )
+    case.bind_session("http-sess-9")
+    wf = case.as_workflow()
+    assert case._kwargs["session_id"] == "http-sess-9"
+    assert wf._session_id == "http-sess-9"
+    await case.arun("Escalate INC-88421 with SEV-1")
+    saved = await cp.get("http-sess-9")
+    assert saved is not None

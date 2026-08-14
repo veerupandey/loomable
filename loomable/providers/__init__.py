@@ -25,13 +25,21 @@ Example
 """
 
 from .anthropic import AnthropicProvider
-from .embedders import AzureOpenAIEmbedder, Embedder, OpenAIEmbedder
+from .embedders import (
+    AzureOpenAIEmbedder,
+    Embedder,
+    GeminiEmbedder,
+    HuggingFaceEmbedder,
+    OpenAIEmbedder,
+    embed_many,
+)
 from .errors import PermanentProviderError, TransientProviderError
 from .gemini import GeminiProvider
 from .groq import GroqProvider
 from .ollama import OllamaProvider
 from .openai import AzureOpenAIProvider, OpenAIProvider
 from .resilient import ResilientModel, RetryPolicy
+from .vector_store import open_vector_store, parse_vector_uri
 
 __all__ = [
     "OpenAIProvider",
@@ -43,8 +51,13 @@ __all__ = [
     "Embedder",
     "OpenAIEmbedder",
     "AzureOpenAIEmbedder",
+    "GeminiEmbedder",
+    "HuggingFaceEmbedder",
+    "embed_many",
     "TransientProviderError",
     "PermanentProviderError",
     "ResilientModel",
     "RetryPolicy",
+    "open_vector_store",
+    "parse_vector_uri",
 ]

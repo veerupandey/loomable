@@ -1,0 +1,160 @@
+"""Workspace-aware tool-result offload for deep agents.
+
+Unlike :meth:`~loomable.agent.context_policy.ContextPolicy.trim_tool_payloads`
+(which truncates and loses content), this writes the full tool body to the
+workspace and returns a short preview + path the agent can ``read_file`` / ``grep``.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+from typing import Any, Callable
+
+from loomable.kernel.models import ToolCall, ToolOutcome, ToolResult
+
+__all__ = [
+    "DEFAULT_THRESHOLD",
+    "DEFAULT_THRESHOLD_TOKENS",
+    "estimate_tokens",
+    "make_workspace_offload_hook",
+    "offload_tool_text",
+]
+
+DEFAULT_THRESHOLD = 12_000  # chars (legacy)
+DEFAULT_THRESHOLD_TOKENS = 3_000  # ~12k chars at 4 chars/token
+DEFAULT_PREVIEW = 800
+
+
+def estimate_tokens(text: str) -> int:
+    """Cheap token estimate (≈4 chars/token) for offload decisions."""
+    if not text:
+        return 0
+    return max(1, (len(text) + 3) // 4)
+
+
+def offload_tool_text(
+    workspace: str | Path,
+    tool_name: str,
+    content: str,
+    *,
+    preview_chars: int = DEFAULT_PREVIEW,
+    store: Any | None = None,
+) -> tuple[str, str]:
+    """Write ``content`` under ``workspace/.offload/`` and return (rel_path, preview_msg).
+
+    When ``store`` is a :class:`~loomable.toolkits.workspace_tools.WorkspaceStore`,
+    the body is written through the store so ``read_file`` / ``grep`` see it immediately.
+    """
+    root = Path(workspace)
+    digest = hashlib.sha1(content.encode("utf-8", errors="replace")).hexdigest()[:12]
+    safe_tool = "".join(c if c.isalnum() or c in "-_" else "_" for c in (tool_name or "tool"))[:40]
+    rel = f".offload/{safe_tool}_{digest}.txt"
+    if store is not None and hasattr(store, "write"):
+        written = store.write(rel, content)
+        if written is None:
+            # Fall back to raw disk if store rejects the path
+            offload_dir = root / ".offload"
+            offload_dir.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(content, encoding="utf-8")
+    else:
+        offload_dir = root / ".offload"
+        offload_dir.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(content, encoding="utf-8")
+    preview = content[:preview_chars]
+    if len(content) > preview_chars:
+        preview += "\n..."
+    msg = (
+        f"[offloaded {len(content)} chars (~{estimate_tokens(content)} tokens) "
+        f"to workspace:{rel}]\n"
+        f"Use read_file('{rel}', offset=0, limit=80) or grep to retrieve slices — "
+        f"do not reload the entire file into chat.\n"
+        f"--- preview ---\n{preview}"
+    )
+    return rel, msg
+
+
+def make_workspace_offload_hook(
+    workspace: str | Path,
+    *,
+    threshold: int | None = None,
+    threshold_tokens: int | None = ...,  # type: ignore[assignment]
+    preview_chars: int = DEFAULT_PREVIEW,
+    skip_tools: frozenset[str] | None = None,
+    store: Any | None = None,
+) -> Callable[[str, ToolCall | None, ToolOutcome], Any]:
+    """Return a post-tool hook that offloads oversized string results to disk.
+
+    Prefer ``threshold_tokens`` (deepagents-style). Passing legacy ``threshold``
+    (chars) without ``threshold_tokens`` keeps char-based behavior.
+    """
+    skip = skip_tools or frozenset(
+        {
+            "read_file",
+            "write_file",
+            "edit_file",
+            "ls",
+            "glob",
+            "grep",
+            "write_todos",
+            "read_todos",
+            "update_todo",
+            "think",
+            "list_sources",
+            "format_bibliography",
+            "list_images",
+            "compact_conversation",
+        }
+    )
+    root = Path(workspace)
+
+    # Resolve thresholds: explicit ``threshold=`` alone → char mode (back-compat).
+    if threshold is not None and threshold_tokens is ...:
+        token_threshold: int | None = None
+        char_threshold = max(1, int(threshold))
+    elif threshold_tokens is ...:
+        token_threshold = DEFAULT_THRESHOLD_TOKENS
+        char_threshold = DEFAULT_THRESHOLD
+    else:
+        token_threshold = (
+            None if threshold_tokens is None else max(1, int(threshold_tokens))
+        )
+        char_threshold = (
+            DEFAULT_THRESHOLD if threshold is None else max(1, int(threshold))
+        )
+
+    def hook(
+        tool_name: str,
+        call: ToolCall | None,
+        outcome: ToolOutcome,
+    ) -> ToolOutcome | None:
+        if outcome.result is None or outcome.error is not None:
+            return None
+        if tool_name in skip:
+            return None
+        content = outcome.result.content
+        if not isinstance(content, str):
+            return None
+        if token_threshold is not None:
+            if estimate_tokens(content) <= token_threshold:
+                return None
+        elif len(content) <= char_threshold:
+            return None
+        _rel, msg = offload_tool_text(
+            root,
+            tool_name,
+            content,
+            preview_chars=preview_chars,
+            store=store,
+        )
+        meta = dict(outcome.result.metadata or {})
+        meta["offloaded"] = True
+        meta["offload_path"] = _rel
+        meta["offload_tokens"] = estimate_tokens(content)
+        return ToolOutcome(
+            call_id=outcome.call_id,
+            result=ToolResult(content=msg, metadata=meta),
+        )
+
+    hook.phase = "post"  # type: ignore[attr-defined]
+    return hook

@@ -1,43 +1,52 @@
 """loomable.toolkits.python_tools - Python code execution toolkit.
 
-Executes Python code in sandboxed subprocesses with configurable timeout
-and working directory. Uses only the Python standard library.
+Executes Python via a :class:`~loomable.sandbox.types.Sandbox` (default:
+:class:`~loomable.sandbox.SubprocessSandbox`) with timeout and working directory.
 """
 
 from __future__ import annotations
 
-import asyncio
-import sys
-
 from loomable.agent.tools import FunctionTool
+from loomable.sandbox import SubprocessSandbox
+from loomable.sandbox.types import Sandbox
 from loomable.toolkits._base import Toolkit
 
 
 class PythonTools(Toolkit):
-    """Python code execution toolkit using sandboxed subprocesses.
+    """Python code execution toolkit using a sandbox backend.
 
-    Executes Python code or files in a separate subprocess isolated from the
-    host agent process. Supports configurable timeout and working directory.
+    Executes Python code or files isolated from the host agent process
+    (subprocess by default). Supports configurable timeout and working directory.
 
     Usage::
 
         from loomable.toolkits import PythonTools
+        from loomable.sandbox import SubprocessSandbox
 
-        tools = PythonTools(timeout=60, working_dir="/tmp/sandbox")
+        tools = PythonTools(sandbox=SubprocessSandbox(root="/tmp/sandbox", timeout=60))
         agent = Agent(model=..., tools=[tools])
     """
 
     def __init__(
         self,
         *,
-        timeout: int = 30,
+        sandbox: Sandbox | None = None,
+        timeout: int | float = 30,
         working_dir: str | None = None,
         include_tools: list[str] | None = None,
         exclude_tools: list[str] | None = None,
     ) -> None:
         super().__init__(include_tools=include_tools, exclude_tools=exclude_tools)
-        self._timeout = timeout
-        self._working_dir = working_dir
+        self._sandbox: Sandbox = sandbox or SubprocessSandbox(
+            root=working_dir, timeout=float(timeout)
+        )
+        # Keep attributes for older tests / callers.
+        self._timeout = float(getattr(self._sandbox, "timeout", timeout))
+        self._working_dir = getattr(self._sandbox, "root", working_dir)
+
+    @property
+    def sandbox(self) -> Sandbox:
+        return self._sandbox
 
     def _register_tools(self) -> list[FunctionTool]:
         return [
@@ -47,59 +56,10 @@ class PythonTools(Toolkit):
 
     async def _run_python(self, code: str) -> str:
         """Execute Python code in a sandboxed subprocess and return output."""
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-c",
-            code,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=self._working_dir,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=self._timeout
-            )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            return f"Error: Execution timed out after {self._timeout} seconds"
-
-        stdout_text = stdout.decode()
-        stderr_text = stderr.decode()
-
-        if proc.returncode != 0:
-            return (
-                f"Execution failed (return code {proc.returncode}):\n"
-                f"{stderr_text}\n\nOutput:\n{stdout_text}"
-            )
-
-        return stdout_text if stdout_text else "Code executed successfully (no output)"
+        result = await self._sandbox.run_python(code)
+        return result.format()
 
     async def _run_python_file(self, path: str) -> str:
         """Execute a Python file in a sandboxed subprocess and return output."""
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=self._working_dir,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=self._timeout
-            )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            return f"Error: Execution timed out after {self._timeout} seconds"
-
-        stdout_text = stdout.decode()
-        stderr_text = stderr.decode()
-
-        if proc.returncode != 0:
-            return (
-                f"Execution failed (return code {proc.returncode}):\n"
-                f"{stderr_text}\n\nOutput:\n{stdout_text}"
-            )
-
-        return stdout_text if stdout_text else "Code executed successfully (no output)"
+        result = await self._sandbox.run_python_file(path)
+        return result.format()

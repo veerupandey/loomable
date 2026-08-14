@@ -89,6 +89,11 @@ class Workflow:
         Durable resume backend (JsonFile / SQLite / InMemory).
     memory:
         ``True`` for auto TieredMemoryStore, or a MemoryStore instance.
+    knowledge_base:
+        Shared vector-DB knowledge base inherited by Agent steps that do not
+        already have one (same object as ``Agent(knowledge_base=...)``).
+    retrievers / embedder:
+        Extra search tools / embedder inherited the same way.
     deps:
         Shared dependency injection object for all steps.
     """
@@ -103,6 +108,9 @@ class Workflow:
         session_id: str | None = None,
         checkpointer: "Checkpointer | None" = None,
         events: Any = None,
+        knowledge_base: Any = None,
+        retrievers: Any = None,
+        embedder: Any = None,
     ) -> None:
         self._name = name
         self._steps: list[Any] = list(steps) if steps is not None else []
@@ -110,6 +118,9 @@ class Workflow:
         self._session_id = session_id
         self._checkpointer = checkpointer
         self._events = events
+        self._knowledge_base = knowledge_base
+        self._retrievers = retrievers
+        self._embedder = embedder
         self._compiled_flow: Flow | None = None
         self._last_state: SharedState | None = None
         self._step_counter = 0
@@ -130,6 +141,19 @@ class Workflow:
 
         if self._steps:
             self._validate_no_duplicate_names(self._steps)
+            if (
+                knowledge_base is not None
+                or retrievers is not None
+                or embedder is not None
+            ):
+                from loomable.agent.memory_opts import apply_knowledge_base
+
+                apply_knowledge_base(
+                    self._steps,
+                    knowledge_base=knowledge_base,
+                    retrievers=retrievers,
+                    embedder=embedder,
+                )
 
     # ------------------------------------------------------------------
     # Fluent builders (return self for chaining)
@@ -289,6 +313,15 @@ class Workflow:
 
     def _invalidate(self) -> None:
         self._compiled_flow = None
+        if self._knowledge_base is not None or self._retrievers is not None or self._embedder is not None:
+            from loomable.agent.memory_opts import apply_knowledge_base
+
+            apply_knowledge_base(
+                self._steps,
+                knowledge_base=self._knowledge_base,
+                retrievers=self._retrievers,
+                embedder=self._embedder,
+            )
 
     def build(self) -> "Workflow":
         """Eagerly compile the graph (also happens automatically on arun/explain)."""
@@ -300,6 +333,14 @@ class Workflow:
             raise ValueError("At least one step is required — use .step() or pass steps=")
         self._validate_no_duplicate_names(self._steps)
         if self._compiled_flow is None:
+            from loomable.agent.memory_opts import apply_knowledge_base
+
+            apply_knowledge_base(
+                self._steps,
+                knowledge_base=self._knowledge_base,
+                retrievers=self._retrievers,
+                embedder=self._embedder,
+            )
             self._compiled_flow = WorkflowCompiler.compile(
                 self._steps,
                 name=self._name,

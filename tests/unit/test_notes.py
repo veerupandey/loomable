@@ -8,6 +8,7 @@ import pytest
 
 from loomable.agent.notes import Note, NoteStore, make_memory_tool
 from loomable.kernel.long_term import LongTermStore
+from loomable.providers.vector_store import open_vector_store
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +36,7 @@ def embedder() -> FakeEmbedder:
 
 @pytest.fixture
 def long_term_store() -> LongTermStore:
-    return LongTermStore()  # defaults to in-memory ZvecVectorBackend
+    return open_vector_store(engine="memory")  # in-memory (no Alibaba zvec required)
 
 
 @pytest.fixture
