@@ -19,6 +19,7 @@ Usage::
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -34,6 +35,8 @@ __all__ = [
     "make_task_tool",
 ]
 
+logger = logging.getLogger("loomable.agent.deep")
+
 DEEP_AGENT_INSTRUCTIONS = """\
 You are a deep agent: you solve hard, long-horizon tasks by planning, offloading
 context to the workspace filesystem, and delegating focused sub-work.
@@ -44,9 +47,11 @@ Operating rules:
 2. Prefer writing intermediate notes, research dumps, and drafts to workspace
    files (write_file / edit_file). Do not paste huge blobs into chat.
 3. Use read_file / grep / glob to pull back only the slices you need.
+   For large/offloaded files use read_file(path, offset=N, limit=80) or grep —
+   never reload an entire .offload dump into chat.
 4. Use web_search to find sources (at most 2 searches), then fetch_url /
    extract_text for full pages. Large tool results may be offloaded to .offload/
-   — read those files as needed. Do not keep searching once you have usable URLs.
+   — read those files in slices. Do not keep searching once you have usable URLs.
 5. Register important sources with register_source; end deliverables with
    format_bibliography (or paste its output into the report).
 6. For visual evidence: discover_images on a source page, then fetch_image +
@@ -71,6 +76,9 @@ def make_task_tool(
     tools: list[Any] | None = None,
     modalities: str | None = "text",
     default_role: str = "Specialist",
+    max_tool_iterations: int = 20,
+    token_budget: int = 64_000,
+    max_run_tokens: int = 0,
 ) -> FunctionTool:
     """LangGraph-style ``task`` tool — spawn an ephemeral specialist and return text."""
 
@@ -87,6 +95,9 @@ def make_task_tool(
             task=description,
             tools=list(tools or []),
             modalities=modalities,
+            max_tool_iterations=max_tool_iterations,
+            token_budget=token_budget,
+            max_run_tokens=max_run_tokens,
         )
 
     return FunctionTool(task, name="task", idempotent=False)
@@ -122,7 +133,10 @@ def create_deep_agent(
     user_id: str | None = None,
     scopes: dict[str, str] | None = None,
     require_confirmation: list[str] | None = None,
+    require_tools: list[str] | None = None,
     web_search: bool = True,
+    search_provider: str = "duckduckgo",
+    search_api_key: str | None = None,
     url_fetch: bool = True,
     url_max_length: int = 8_000,
     citations: bool = True,
@@ -146,6 +160,7 @@ def create_deep_agent(
     use_llm_summarizer: bool = True,
     loop_repeat_threshold: int = 6,
     token_budget: int = 128_000,
+    max_run_tokens: int = 0,
     name: str = "deep-agent",
     goal: str = "Complete hard, long-horizon tasks with planning and delegation",
     modalities: str = "text+image",
@@ -162,10 +177,10 @@ def create_deep_agent(
         Extra tools/toolkits merged after the deep defaults.
     workspace:
         Directory for virtual FS + persisted todos (created if missing).
-    web_search:
-        Include :class:`~loomable.toolkits.web_search.WebSearchTools` when available.
-    url_fetch:
-        Include :class:`~loomable.toolkits.url_tools.URLTools` when available.
+    web_search / search_provider / search_api_key:
+        Bundle web search (DuckDuckGo default, or Tavily with API key).
+    url_fetch / url_max_length:
+        Bundle URL fetch/extract with a safe length cap (marked truncation).
     citations:
         Include :class:`~loomable.toolkits.citation_tools.CitationTools`.
     images:
@@ -173,6 +188,12 @@ def create_deep_agent(
         include image (default: auto).
     offload_large_tools:
         Post-hook that saves oversized tool results under ``.offload/``.
+    require_tools:
+        Tools that must succeed before the run may finish (e.g. ``write_file``).
+    token_budget:
+        Context window estimate for compaction / bounding (default 128k).
+    max_run_tokens:
+        Cumulative spend stop. ``0`` = unbounded (default for deep agents).
     enable_task_tool:
         Register the general-purpose ``task`` subagent tool (shares workspace tools).
     mode:
@@ -199,15 +220,21 @@ def create_deep_agent(
     if citation_kit is not None:
         shared_for_task.append(citation_kit)
 
+    missing: list[str] = []
+
     if web_search:
         try:
             from loomable.toolkits.web_search import WebSearchTools
 
-            search_kit = WebSearchTools()
+            search_kwargs: dict[str, Any] = {"provider": search_provider}
+            if search_api_key:
+                search_kwargs["api_key"] = search_api_key
+            search_kit = WebSearchTools(**search_kwargs)
             bundled.append(search_kit)
-            shared_for_task.append(WebSearchTools())
-        except Exception:  # noqa: BLE001 — optional deps / network backends
-            pass
+            shared_for_task.append(WebSearchTools(**search_kwargs))
+        except Exception as exc:  # noqa: BLE001
+            missing.append(f"web_search ({exc})")
+            logger.warning("create_deep_agent: web_search unavailable: %s", exc)
 
     if url_fetch:
         try:
@@ -216,8 +243,9 @@ def create_deep_agent(
             url_kit = URLTools(max_length=url_max_length)
             bundled.append(url_kit)
             shared_for_task.append(URLTools(max_length=url_max_length))
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            missing.append(f"url_fetch ({exc})")
+            logger.warning("create_deep_agent: url_fetch unavailable: %s", exc)
 
     use_images = _modalities_include_image(modalities) if images is None else bool(images)
     if use_images:
@@ -227,8 +255,9 @@ def create_deep_agent(
             image_kit = ImageTools(workspace=root, model=model)
             bundled.append(image_kit)
             shared_for_task.append(ImageTools(workspace=root, model=model))
-        except Exception:  # noqa: BLE001 — httpx missing etc.
-            pass
+        except Exception as exc:  # noqa: BLE001
+            missing.append(f"images ({exc})")
+            logger.warning("create_deep_agent: ImageTools unavailable: %s", exc)
 
     if task_tools is None:
         task_tools = list(shared_for_task)
@@ -239,6 +268,9 @@ def create_deep_agent(
                 model=model,
                 tools=list(task_tools) if task_tools is not None else None,
                 modalities=modalities,
+                max_tool_iterations=min(20, max_tool_iterations),
+                token_budget=min(token_budget, 64_000),
+                max_run_tokens=max_run_tokens,
             )
         )
 
@@ -248,9 +280,14 @@ def create_deep_agent(
     prompt = DEEP_AGENT_INSTRUCTIONS
     if instructions:
         prompt = f"{prompt}\n\nAdditional instructions:\n{instructions.strip()}"
+    if missing:
+        prompt = (
+            f"{prompt}\n\nRuntime note: some optional toolkits failed to load: "
+            + ", ".join(missing)
+            + "."
+        )
 
     # Merge offload post-hook with any caller tool_hooks.
-    # Pass the same WorkspaceStore so offloads are immediately readable via read_file.
     existing_hooks = list(agent_kwargs.pop("tool_hooks", None) or [])
     if offload_large_tools:
         existing_hooks.append(
@@ -283,6 +320,7 @@ def create_deep_agent(
         think_tool=think_tool,
         plan_tool=plan_tool,
         require_confirmation=require_confirmation,
+        require_tools=require_tools,
         tool_hooks=existing_hooks or None,
         max_tool_iterations=max_tool_iterations,
         memory_window=memory_window,
@@ -290,6 +328,7 @@ def create_deep_agent(
         use_llm_summarizer=use_llm_summarizer,
         loop_repeat_threshold=loop_repeat_threshold,
         token_budget=token_budget,
+        max_run_tokens=max_run_tokens,
         modalities=modalities,
         debug=debug,
         mode=mode,
@@ -339,5 +378,6 @@ def create_research_agent(
             "Research topics thoroughly: search, fetch, cite, analyze images, deliver briefs",
         ),
         require_tools=require_tools,
+        max_run_tokens=kwargs.pop("max_run_tokens", 0),
         **kwargs,
     )

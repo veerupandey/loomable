@@ -67,7 +67,18 @@ async def test_workspace_tools_roundtrip_edit_grep(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_workspace_reads_external_disk_writes(tmp_path) -> None:
+async def test_workspace_read_file_offset_limit(tmp_path) -> None:
+    ws = WorkspaceTools(root=tmp_path)
+    by_name = {t.name: t for t in ws.tools()}
+    body = "\n".join(f"line-{i}" for i in range(1, 11))
+    await by_name["write_file"].invoke({"path": "notes/big.md", "content": body})
+    sliced = _content(
+        await by_name["read_file"].invoke({"path": "notes/big.md", "offset": 2, "limit": 3})
+    )
+    assert "line-3" in sliced
+    assert "line-5" in sliced
+    assert "line-1" not in sliced.split("\n", 1)[-1] or "lines 3-5" in sliced
+    assert "line-10" not in sliced
     """Offload/ImageTools write disk files; WorkspaceTools must still read them."""
     ws = WorkspaceTools(root=tmp_path)
     by_name = {t.name: t for t in ws.tools()}
@@ -136,7 +147,8 @@ async def test_create_deep_agent_registers_core_tools(tmp_path) -> None:
     ):
         assert required in names, f"missing {required} in {sorted(names)}"
     assert built.max_tool_iterations == 40
-    assert built._token_budget == 128_000 or getattr(agent, "_token_budget", None) == 128_000
+    assert getattr(agent, "_token_budget", None) == 128_000
+    assert getattr(agent, "_max_run_tokens", None) == 0
 
     # Multimodal research defaults register image tools
     vision = create_deep_agent(

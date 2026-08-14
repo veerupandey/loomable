@@ -52,7 +52,8 @@ def offload_tool_text(
         preview += "\n..."
     msg = (
         f"[offloaded {len(content)} chars to workspace:{rel}]\n"
-        f"Use read_file or grep on '{rel}' to retrieve slices.\n"
+        f"Use read_file('{rel}', offset=0, limit=80) or grep to retrieve slices — "
+        f"do not reload the entire file into chat.\n"
         f"--- preview ---\n{preview}"
     )
     return rel, msg

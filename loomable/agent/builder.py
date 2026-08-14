@@ -622,6 +622,8 @@ class BuiltAgent:
     # Token budget for context bounding (Req 13.1–13.4): when set, _bound_messages
     # applies evict-then-admit against this budget before each model call.
     _token_budget: int | None = None
+    # Cumulative spend stop for the run (0 = unbounded; None = fall back to token_budget).
+    _max_run_tokens: int | None = None
 
     # Skill load errors: isolated failures from skill loading (Req 4.3). Each
     # entry identifies a Skill that failed to load while others succeeded.
@@ -727,6 +729,7 @@ class BuiltAgent:
                 events=self.events,
                 max_steps=self.max_tool_iterations,
                 token_budget=self._token_budget,
+                max_run_tokens=self._max_run_tokens,
                 loop_repeat_threshold=self.loop_repeat_threshold,
             )
 
@@ -1707,24 +1710,25 @@ class BuiltAgent:
                     outcome.result.metadata["tool_name"] = call_name_map.get(outcome.call_id, "")
 
             tool_activity.extend(gated_result.outcomes)
+            outcome_by_id = {o.call_id: o for o in gated_result.outcomes}
             for tc in calls_to_dispatch:
                 called_tool_names.add(tc.tool_name)
                 path_arg = str(tc.args.get("path") or "")
+                outcome = outcome_by_id.get(tc.id)
+                ok = (
+                    outcome is not None
+                    and outcome.result is not None
+                    and not outcome.result.is_error
+                    and not str(outcome.result.content or "").startswith("Error:")
+                )
                 for name, path_sub in require_tool_specs:
                     if tc.tool_name != name:
+                        continue
+                    if not ok:
                         continue
                     if path_sub is None or _path_constraint_met(path_arg, path_sub):
                         satisfied_require_tools.add((name, path_sub))
                 if tc.tool_name == "write_json":
-                    outcome = next(
-                        (o for o in gated_result.outcomes if o.call_id == tc.id),
-                        None,
-                    )
-                    ok = (
-                        outcome is not None
-                        and outcome.result is not None
-                        and not outcome.result.is_error
-                    )
                     raw = tc.args.get("content")
                     if ok and raw is not None:
                         if isinstance(raw, str):
@@ -1797,7 +1801,11 @@ class BuiltAgent:
                 assistant_tool_calls.append(entry)
             request.messages.append({
                 "role": "assistant",
-                "content": [],
+                "content": (
+                    [{"type": "text", "text": str(response.content)}]
+                    if (getattr(response, "content", None) or "").strip()
+                    else []
+                ),
                 "tool_calls": assistant_tool_calls,
             })
 
@@ -2598,6 +2606,7 @@ class Agent:
         text_only: bool = False,
         multimodal: bool = False,
         token_budget: int = 8192,
+        max_run_tokens: int | None = None,
         checkpoint_interval: int = 5,
         session_id: str | None = None,
         user_id: str | None = None,
@@ -2711,6 +2720,8 @@ class Agent:
         # multimodal=True is a deprecated no-op alias: media is allowed by default.
         _ = multimodal  # retained for back-compat; default capabilities already include media
         self._token_budget = token_budget
+        # None → spend uses token_budget (legacy). Deep agents pass 0 for unbounded.
+        self._max_run_tokens = max_run_tokens
         self._checkpoint_interval = checkpoint_interval
         self._session_id = session_id
         self._user_id = user_id
@@ -3006,6 +3017,7 @@ class Agent:
             embedder=embedder_instance,
             knowledge_top_k=self._knowledge_top_k,
             _token_budget=self._token_budget,
+            _max_run_tokens=self._max_run_tokens,
             events=events,
             complexity_router=self._complexity_router,
             note_store=self._note_store,

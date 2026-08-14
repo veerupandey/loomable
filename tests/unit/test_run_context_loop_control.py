@@ -227,6 +227,23 @@ async def test_token_budget_stops_when_exceeded() -> None:
     assert loop_events[0].attributes["stop_reason"] == "token_budget"
 
 
+async def test_max_run_tokens_zero_is_unbounded() -> None:
+    """max_run_tokens=0 disables cumulative spend stop (deep-agent default)."""
+    from loomable.agent.context import RunContext
+
+    ctx = RunContext(token_budget=10, max_run_tokens=0)
+    ctx.add_tokens(10_000)
+    assert ctx.token_budget_exceeded() is False
+
+
+async def test_max_run_tokens_overrides_token_budget() -> None:
+    ctx = RunContext(token_budget=10, max_run_tokens=100)
+    ctx.add_tokens(50)
+    assert ctx.token_budget_exceeded() is False
+    ctx.add_tokens(60)
+    assert ctx.token_budget_exceeded() is True
+
+
 async def test_non_idempotent_tool_excluded_from_re_dispatch() -> None:
     """A non-idempotent tool is not re-dispatched on a second identical call."""
     call_count = 0
