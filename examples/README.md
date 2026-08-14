@@ -24,7 +24,7 @@
 | Build retrievers (docs/code) | `build_retriever` | `advanced/05_build_retriever.py` |
 | Agentic retriever (pluggable) | `ingest` + `build_agentic_retriever` | `advanced/06_agentic_retriever.py` |
 | Ship any Retriever ABC | `Agent(retrievers=[...])` | `advanced/07_ship_any_retriever.py` |
-| Complex multi-format RAG | `AgenticRetriever` + corpora | `advanced/08_complex_agentic_rag.py` |
+| Complex multi-format RAG | `Agent(knowledge_base={docs, code})` + Workflow | `advanced/08_complex_agentic_rag.py` |
 | RAG (searchable vector DB) | `knowledge_base=` on Agent / create_deep_agent | `agents/07_knowledge_base.py` |
 | RAG (Team / Workflow inherit KB) | `Team(..., knowledge_base=...)` | `agents/08_team_knowledge_base.py` |
 | RAG (passive snippets) | `knowledge` + embedder | `agents/05_with_knowledge.py` |
