@@ -155,10 +155,9 @@ class ConversationMemory:
         Use model-based compaction when True.
     enabled:
         When False, Agent runs without conversation replay even if session_id set.
-    scope:
-        Optional tenant scope hint (documented for Postgres ``user_id``). Isolation
-        for chat threads still uses ``session_id``; put claim/thread identity there
-        (e.g. ``session_id=f"claim:{claim_id}"``) when you need per-claim chats.
+
+    Thread isolation uses ``session_id`` (e.g. ``session_id=f"claim:{claim_id}"``).
+    Tenant / user scoping for notes belongs on ``UserMemory`` / ``Agent(user_id=)``.
     """
 
     store: Any | None = None
@@ -167,7 +166,6 @@ class ConversationMemory:
     compaction_threshold: int | None = None
     use_llm_summarizer: bool = False
     enabled: bool = True
-    scope: MemoryScope | None = None
 
 
 @dataclass
@@ -179,9 +177,11 @@ class UserMemory:
     note_store / long_term / embedder:
         Provide a NoteStore, or enough pieces to build one.
     memory_tool:
-        Expose agentic ``memory`` tool.
+        Expose agentic ``memory`` tool. Requires ``note_store`` or ``embedder``
+        (raises ``AgentConfigError`` otherwise).
     auto_extract:
         Heuristic Always-mode: extract facts from user text after each turn.
+        Requires a resolvable note store (same as ``memory_tool``).
     user_id:
         Convenience for ``scopes={"user_id": ...}``.
     scopes:
@@ -333,6 +333,17 @@ class Memory:
             out["use_memory"] = False
 
         note_store = self.resolve_note_store()
+        if self.user is not None:
+            wants_store = bool(self.user.memory_tool or self.user.auto_extract)
+            if wants_store and note_store is None:
+                from loomable.agent.errors import AgentConfigError
+
+                raise AgentConfigError(
+                    "UserMemory(memory_tool=True) and/or auto_extract=True require "
+                    "note_store= or embedder= (to build a NoteStore). "
+                    "Pass note_store=..., embedder=..., or set memory_tool=False "
+                    "and auto_extract=False."
+                )
         if note_store is not None:
             out["note_store"] = note_store
             if self.user and self.user.memory_tool:
@@ -340,6 +351,14 @@ class Memory:
 
         if self.knowledge is not None:
             k = self.knowledge
+            if k.documents and k.embedder is None:
+                from loomable.agent.errors import AgentConfigError
+
+                raise AgentConfigError(
+                    "KnowledgeMemory(documents=...) requires embedder= for "
+                    "passive RAG indexing. Pass embedder=..., or use "
+                    "store=/sources=/knowledge_base= for search_* tools."
+                )
             if k.documents:
                 out["knowledge"] = list(k.documents)
             if k.embedder is not None:

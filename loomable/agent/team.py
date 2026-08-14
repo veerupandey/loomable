@@ -14,6 +14,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any, Literal
 
 from .builder import Agent
+from .errors import AgentConfigError
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from loomable.agent.run import RunResult
@@ -155,8 +156,15 @@ class Team:
         self._session_id = session_id
         self._max_delegations = max_delegations
         self._max_depth = max_depth
-        # Hard by default for broadcast/sequential; soft for coordinate/route
-        self._hard = (mode in ("broadcast", "sequential")) if hard is None else hard
+        # Hard by default for broadcast/sequential; soft for coordinate/route.
+        # hard=True on coordinate/route used to be a silent no-op — reject it.
+        if hard is True and mode not in ("broadcast", "sequential"):
+            raise AgentConfigError(
+                f"Team(hard=True) only applies to mode='broadcast' or "
+                f"'sequential' (got mode={mode!r}). Omit hard= for "
+                "coordinate/route (soft LLM orchestration)."
+            )
+        self._hard = (mode in ("broadcast", "sequential")) if hard is None else bool(hard)
 
         agent_kwargs: dict[str, Any] = {
             "model": model,

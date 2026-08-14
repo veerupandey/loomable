@@ -2413,7 +2413,18 @@ class BuiltAgent:
         # Resolve the provider for streaming detection
         provider = self.model_interface._providers.get(self.model_interface.default_provider)
 
-        if provider is not None and hasattr(provider, "stream"):
+        # Provider ``stream()`` is single-shot (no tool loop / complexity router).
+        # Fall back to arun→chunk whenever tools or a complexity router are wired
+        # so NDJSON does not silently skip tool use.
+        has_tools = bool(getattr(self.tool_runtime, "_tools", None))
+        use_provider_stream = (
+            provider is not None
+            and hasattr(provider, "stream")
+            and not has_tools
+            and self.complexity_router is None
+        )
+
+        if use_provider_stream:
             # --- Real streaming path ---
             # (1) Input capability gating
             for modality in agent_input.modalities():
@@ -3146,7 +3157,25 @@ class Agent:
         self._embedder = embedder
         self._knowledge_top_k = knowledge_top_k
         self._mode = (mode or "").strip().lower() or None
-        self._dispatch = dispatch if dispatch in ("reuse", "spawn") else "reuse"
+        if self._mode is not None and self._mode != "case":
+            raise AgentConfigError(
+                f"Agent(mode={mode!r}) is unsupported; use mode='case' or omit mode."
+            )
+        if dispatch not in ("reuse", "spawn"):
+            raise AgentConfigError(
+                f"dispatch must be 'reuse' or 'spawn', got {dispatch!r}"
+            )
+        if self._mode != "case":
+            if checkpointer is not None:
+                raise AgentConfigError(
+                    "checkpointer= only applies with Agent(mode='case') "
+                    "(or construct Case/Workflow directly)."
+                )
+            if max_rounds is not None:
+                raise AgentConfigError(
+                    "max_rounds= only applies with Agent(mode='case')."
+                )
+        self._dispatch = dispatch
         self._accept = accept
         self._board = board
         self._max_rounds = max_rounds
@@ -3298,9 +3327,23 @@ class Agent:
         # --- Knowledge / RAG (Req 8.2–8.5): embed + index knowledge docs ---
         long_term: LongTermStore | None = None
         embedder_instance = self._embedder
-        if self._knowledge and self._embedder is not None:
+        if self._knowledge:
+            if self._embedder is None:
+                raise AgentConfigError(
+                    "knowledge= requires embedder= (passive RAG indexes documents "
+                    "at build time). Pass embedder=..., or use knowledge_base= for "
+                    "search_* tools without passive injection."
+                )
             long_term = LongTermStore()
             self._index_knowledge_sync(long_term, self._knowledge, self._embedder)
+
+        # memory_tool without a resolvable note store was a silent no-op — fail loud.
+        if self._memory_tool and self._note_store is None:
+            raise AgentConfigError(
+                "memory_tool=True requires note_store= (or UserMemory with "
+                "note_store=/embedder= inside Memory.compose). "
+                "Pass note_store=... or set memory_tool=False."
+            )
 
         from loomable.memory.compose import MemoryScope
 
@@ -3545,7 +3588,16 @@ class Agent:
         *,
         output_schema: type | None = None,
     ) -> "AsyncIterator[RunChunk]":
-        """Build (once) and stream incremental output as :class:`RunChunk`s (Req 1.5)."""
+        """Build (once) and stream incremental output as :class:`RunChunk`s (Req 1.5).
+
+        ``mode="case"`` does not support NDJSON chunks — use :meth:`arun` or
+        :meth:`astream_events`.
+        """
+        if self._mode == "case":
+            raise AgentConfigError(
+                "Agent(mode='case') does not support astream() (NDJSON chunks). "
+                "Use arun() or astream_events()."
+            )
         built = self._get_built()
         async for chunk in built.astream(input, output_schema=output_schema):
             yield chunk
@@ -3629,6 +3681,8 @@ class Agent:
             parts.append(f"You are a {self._role}.")
         if self._goal:
             parts.append(f"Your goal: {self._goal}")
+        if self._description:
+            parts.append(self._description)
         if self._instructions:
             if parts:
                 parts.append("")  # blank line separator
