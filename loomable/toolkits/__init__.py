@@ -14,7 +14,9 @@ Usage::
 """
 
 from loomable.toolkits._base import Toolkit
+from loomable.toolkits.citation_tools import CitationStore, CitationTools
 from loomable.toolkits.file_tools import FileTools
+from loomable.toolkits.image_tools import ImageTools
 from loomable.toolkits.python_tools import PythonTools
 from loomable.toolkits.sql_tools import SQLTools
 from loomable.toolkits.todo_tools import TodoStore, TodoTools
@@ -39,7 +41,10 @@ except ImportError:  # pragma: no cover
 
 __all__ = [
     "Toolkit",
+    "CitationTools",
+    "CitationStore",
     "FileTools",
+    "ImageTools",
     "PDFTools",
     "PPTTools",
     "PythonTools",

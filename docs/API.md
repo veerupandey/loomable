@@ -413,25 +413,35 @@ result.trace               # list of Event objects (when debug=True)
 
 ## Deep Agent
 
-LangGraph-style long-horizon harness (`create_deep_agent`) on top of `Agent`:
+LangGraph-style long-horizon harness (`create_deep_agent` / `create_research_agent`)
+on top of `Agent` — designed to match and beat langchain-ai/deepagents for research:
 
 1. **Planning** — `TodoTools` (`write_todos` / `read_todos` / `update_todo`)
 2. **Workspace FS** — `WorkspaceTools` (`ls` / `read_file` / `write_file` / `edit_file` / `glob` / `grep`)
-3. **Subagents** — `task` tool (plus optional `subagents=` / `mode="case"`)
-4. **Context** — `think_tool`, optional memory, `max_tool_iterations=40`
+3. **Subagents** — `task` tool with **shared workspace** (plus optional `subagents=` / `mode="case"`)
+4. **Context** — think/plan, `Memory.compose`, LLM summarizer, **large-tool offload** to `.offload/`
+5. **Research defaults** — `WebSearchTools`, `URLTools`, `ImageTools`, `CitationTools`
+6. **Skills / HITL** — `skills=`, `require_confirmation=`
 
 ```python
-from loomable import create_deep_agent
+from pathlib import Path
+from loomable import create_research_agent, Memory, ConversationMemory, UserMemory
 
-agent = create_deep_agent(
+agent = create_research_agent(
     model="openai:gpt-4o-mini",
     workspace="./.deep_workspace",
-    # optional: session_store=..., note_store=..., mode="case", accept=...
+    memory=Memory.compose(
+        conversation=ConversationMemory(),
+        user=UserMemory(auto_extract=True),
+    ),
+    skills=[Path("examples/deep_agent/skills/research")],
 )
-await agent.arun("Research X and write reports/x.md")
+await agent.arun("Research X and write reports/x.md with citations")
 ```
 
-See `examples/deep_agent/`.
+Defaults: `modalities="text+image"`, `use_llm_summarizer=True`, `max_tool_iterations=40`.
+
+See `examples/deep_agent/` (including `03_live_multimodal_research.py`).
 
 ---
 
