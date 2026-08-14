@@ -207,33 +207,32 @@ result = await flow.arun("Analyze the AI market")
 
 Engine selection is automatic by default: linear chains get Sequential, independent branches get Parallel, a manager node gets Hierarchical.
 
-### Level 6: Flow with optimizer, memory, checkpointer
+### Level 6: Workflow with shared memory + checkpointer
 
-Add optimization, shared memory, and durable checkpointing for production workflows.
+Prefer `Workflow` for production processes. Shared blackboard memory and durable
+checkpoints are opt-in kwargs — no `TieredMemoryStore` / Edge wiring required.
 
 ```python
-from loomable.flow import Flow, Optimizer, TieredMemoryStore, MemoryStore
+from loomable import Agent, Workflow
 from loomable.persist import JsonFileCheckpointer
 
-flow = Flow(
-    {"research": researcher, "draft": writer, "review": reviewer},
-    edges=[
-        Edge(source="research", target="draft"),
-        Edge(source="draft", target="review"),
-    ],
-    optimizer=True,  # enables parallelization, dead-node elimination, CSE, model-tier rules
-    memory=TieredMemoryStore(),
-    checkpointer=JsonFileCheckpointer(".checkpoints"),
-    session_id="article-v1",
+wf = (
+    Workflow(
+        "article",
+        session_id="article-v1",
+        memory=True,  # shared working memory across steps
+        checkpointer=JsonFileCheckpointer(".checkpoints"),
+    )
+    .step("research", researcher)
+    .step("draft", writer)
+    .step("review", reviewer)
 )
-result = await flow.arun("Write a technical article")
-
-# Inspect the optimization
-plan = flow.explain()
-print(plan)  # shows original vs optimized topology + applied rules
+result = await wf.arun("Write a technical article")
+print(wf.explain())  # inspect topology
 ```
 
-Everything is opt-in. An unoptimized, memory-free, uncheckpointed flow runs identically to one without these options.
+Low-level `Flow(optimizer=..., memory=TieredMemoryStore(), ...)` remains an
+advanced escape hatch; teaching demos and new code should use `Workflow`.
 
 ### Level 7: Custom engine, HITL, observability
 
@@ -442,9 +441,6 @@ agent = create_deep_agent(
 
 await agent.arun("Research any topic; write reports/brief.md")
 ```
-
-`create_research_agent(...)` is a **deprecated** alias for `profile="research"`
-(emits `DeprecationWarning`; prefer `create_deep_agent`).
 
 Pillars:
 
@@ -1018,7 +1014,7 @@ agent = Agent(model="openai:gpt-4o-mini", text_only=True)
 Other examples: `modalities="text+image"`, `modalities=["text", "audio"]`,
 `capabilities="text+audio"`. Audio remains opt-in.
 
-`multimodal=True` is a deprecated no-op kept for back-compat.
+`multimodal=True` emits `DeprecationWarning` and is a no-op (media is already default).
 
 ### Input: passing images
 

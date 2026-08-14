@@ -7,7 +7,7 @@ primitives without modifying ``loomable.kernel``:
 - ``ModelSpec`` declarative model configuration
 - ``AgentConfigError`` for invalid/missing builder configuration
 
-Multi-agent orchestration is now handled via ``loomable.flow.Flow`` (Req 14.4).
+Multi-agent orchestration is handled via ``Team`` / ``Workflow`` (and low-level ``Flow``).
 """
 
 from .builder import (
@@ -18,7 +18,6 @@ from .builder import (
     PostToolHook,
     ToolHook,
 )
-from .channels import Channel, ChannelMessage, InMemoryChannel
 from .context import RunContext, StopReason
 from .context_policy import CompactionResult, ContextPolicy
 from .delegation import make_delegation_tools, spawn_specialist
@@ -41,10 +40,8 @@ from .summarize import LLMSummarizer
 from .team import Team
 from .tools import FunctionTool, MCPTool, tool
 from .deep import (
-    DEEP_AGENT_INSTRUCTIONS,
     SpecialistSpec,
     create_deep_agent,
-    create_research_agent,
     make_compact_conversation_tool,
     make_research_accept,
     make_task_tool,
@@ -65,9 +62,6 @@ __all__ = [
     "InputValidationError",
     "ToolHookRejection",
     "HITLPause",
-    "Channel",
-    "ChannelMessage",
-    "InMemoryChannel",
     "RunResult",
     "RunChunk",
     "RunContext",
@@ -88,13 +82,11 @@ __all__ = [
     "make_think_tool",
     "make_plan_tool",
     "create_deep_agent",
-    "create_research_agent",
     "make_task_tool",
     "make_task_tools",
     "make_research_accept",
     "make_compact_conversation_tool",
     "SpecialistSpec",
-    "DEEP_AGENT_INSTRUCTIONS",
     "LLMSummarizer",
     "image",
     "video",

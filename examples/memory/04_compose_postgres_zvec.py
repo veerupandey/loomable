@@ -1,11 +1,12 @@
-"""Compose memory backends: conversation L1/L2 + vector L3 (live LLM).
+"""Compose memory backends via Memory.compose (live LLM).
 
-Two independent axes — mix freely:
+Conversation (L1/L2) and long-term notes (L3) are independent layers::
 
-  Conversation (L1/L2)  → session_store
-      sqlite | file | postgres | memory
-  Long-term notes (L3)  → note_store (vector backend)
-      default Alibaba zvec, or faiss / memory / postgres
+    memory = Memory.compose(
+        conversation=ConversationMemory(store=...),
+        user=UserMemory(note_store=..., memory_tool=True),
+    )
+    Agent(model=..., memory=memory, session_id=..., user_id=...)
 
 Requires a live LLM key — see ``.env.example``.
 Optional: ``POSTGRES_URL`` and ``pip install 'loomable[postgres,zvec]'``.
@@ -26,10 +27,9 @@ load_dotenv()
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _provider import require_provider  # noqa: E402
 
-from loomable import Agent
+from loomable import Agent, ConversationMemory, Memory, UserMemory, open_session_store
 from loomable.agent import NoteStore
 from loomable.kernel.long_term import LongTermStore
-from loomable.memory import open_session_store
 from loomable.providers import GeminiEmbedder
 from loomable.providers.vector_store import open_vector_store
 
@@ -57,15 +57,17 @@ async def main() -> None:
         )
         print("L3: in-memory fallback (pip install loomable[zvec] for default)")
 
+    memory = Memory.compose(
+        conversation=ConversationMemory(store=conversation, window=8),
+        user=UserMemory(note_store=notes, memory_tool=True),
+    )
+
     agent = Agent(
         model=model,
+        memory=memory,
         session_id=session_id,
-        session_store=conversation,
-        note_store=notes,
-        memory_tool=True,
-        modalities="text",
-        memory_window=8,
         user_id="alice",
+        modalities="text",
         instructions="Remember user preferences.",
     )
     print("turn1:", (await agent.arun("I prefer dark mode and Python.")).output.text())
@@ -80,13 +82,11 @@ async def main() -> None:
 
     agent2 = Agent(
         model=model,
+        memory=memory,
         session_id=session_id,
-        session_store=conversation,
         resume=True,
-        note_store=notes,
-        memory_tool=True,
-        modalities="text",
         user_id="alice",
+        modalities="text",
         instructions="Remember user preferences.",
     )
     print("turn2:", (await agent2.arun("What are my preferences?")).output.text())
