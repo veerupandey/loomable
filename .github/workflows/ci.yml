@@ -7,6 +7,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -30,14 +33,19 @@ jobs:
       - name: Toolkit tests
         run: python -m pytest tests/toolkits -q --tb=short
       - name: Integration (non-live)
-        run: >
-          python -m pytest tests/integration -q --tb=short
-          --ignore=tests/integration/test_postgres_live.py
-          --ignore=tests/integration/test_memory_parity_live.py
+        run: |
+          python -m pytest tests/integration -q --tb=short \
+            --ignore=tests/integration/test_postgres_live.py \
+            --ignore=tests/integration/test_memory_parity_live.py
 
   live-optional:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    env:
+      DEEP_AGENT_LIVE: "1"
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+      POSTGRES_URL: ${{ secrets.POSTGRES_URL }}
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -49,14 +57,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,toolkits,postgres]"
       - name: Live Gemini deep gate
-        if: ${{ secrets.GEMINI_API_KEY != '' }}
-        env:
-          DEEP_AGENT_LIVE: "1"
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
-        run: python examples/deep_agent/05_live_gemini_gate.py
+        run: |
+          if [ -z "${GEMINI_API_KEY}" ]; then
+            echo "GEMINI_API_KEY not set; skipping live Gemini gate"
+            exit 0
+          fi
+          python examples/deep_agent/05_live_gemini_gate.py
       - name: Live Postgres
-        if: ${{ secrets.POSTGRES_URL != '' }}
-        env:
-          POSTGRES_URL: ${{ secrets.POSTGRES_URL }}
-        run: python -m pytest tests/integration/test_postgres_live.py -q --tb=short
+        run: |
+          if [ -z "${POSTGRES_URL}" ]; then
+            echo "POSTGRES_URL not set; skipping live Postgres tests"
+            exit 0
+          fi
+          python -m pytest tests/integration/test_postgres_live.py -q --tb=short

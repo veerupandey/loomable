@@ -733,11 +733,14 @@ def create_deep_agent(
             bundled.append(code_kit)
             shared_for_task.append(CodeTools(resolved_index))
             # Seed knowledge with a compact map if caller did not pass knowledge.
+            # Agent.build() requires embedder= whenever knowledge= is set.
             if knowledge is None:
                 knowledge = [
                     resolved_index.repo_map(max_entries=60),
                     *resolved_index.as_knowledge(max_chunks=12),
                 ]
+                if embedder is None:
+                    embedder = resolved_index.embedder
         except Exception as exc:  # noqa: BLE001
             missing.append(f"code_tools ({exc})")
             logger.warning("create_deep_agent: CodeTools unavailable: %s", exc)

@@ -134,7 +134,21 @@ class TestMemoryManagerInit:
     def test_default_long_term_store_is_alibaba_zvec(self) -> None:
         mm = MemoryManager()
         assert isinstance(mm.l3, LongTermStore)
-        assert mm.l3.backend_name == "zvec"
+        try:
+            import zvec  # noqa: F401
+        except ImportError:
+            assert mm.l3.backend_name == "memory"
+            assert isinstance(mm.l3.backend, InMemoryVectorBackend)
+        else:
+            assert mm.l3.backend_name == "zvec"
+
+    @pytest.mark.asyncio
+    async def test_default_long_term_store_can_index(self) -> None:
+        store = LongTermStore()
+        await store.index("note-fallback", [1.0, 0.0, 0.0], {"topic": "fallback"})
+        hits = await store.query([1.0, 0.0, 0.0], k=1)
+        assert hits
+        assert hits[0]["id"] == "note-fallback"
 
     def test_custom_long_term_store_used(self) -> None:
         custom_store = LongTermStore(

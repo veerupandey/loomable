@@ -85,12 +85,17 @@ class LongTermStore:
             self.backend = ZvecVectorBackend(path, dimensions=dimensions)
             self.backend_name = "zvec"
         else:
+            # Probe zvec at init: ZvecVectorBackend defers ImportError until the
+            # first index() when dimensions are unknown, which would skip this
+            # fallback and surface MemoryBackendError from Agent knowledge indexing.
             try:
-                self.backend = ZvecVectorBackend(DEFAULT_ZVEC_PATH, dimensions=dimensions)
-                self.backend_name = "zvec"
+                import zvec as _zvec  # noqa: F401
             except ImportError:
                 self.backend = InMemoryVectorBackend()
                 self.backend_name = "memory"
+            else:
+                self.backend = ZvecVectorBackend(DEFAULT_ZVEC_PATH, dimensions=dimensions)
+                self.backend_name = "zvec"
 
     async def index(self, id: str, vector: list[float], metadata: dict[str, Any]) -> None:
         try:
