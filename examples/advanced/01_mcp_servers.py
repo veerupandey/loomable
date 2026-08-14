@@ -4,7 +4,7 @@ USE WHEN: You want filesystem / DB / browser tools from an MCP server.
 MCP tools register as normal Agent tools at build time (eager connect).
 
 This demo starts the official filesystem MCP server (requires ``npx``).
-For progressive discovery of MCP tools, see ``deep_agent/06_sandbox_browser.py``.
+For progressive discovery of MCP tools, see ``deep_agent/03_sandbox.py``.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ async def main() -> None:
     if not shutil.which("npx"):
         raise SystemExit(
             "npx not found — install Node.js to run the filesystem MCP demo,\n"
-            "or see examples/deep_agent/06_sandbox_browser.py for MCP via skills."
+            "or see examples/deep_agent/03_sandbox.py for MCP via skills."
         )
 
     model = require_provider()

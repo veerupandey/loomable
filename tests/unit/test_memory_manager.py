@@ -134,7 +134,13 @@ class TestMemoryManagerInit:
     def test_default_long_term_store_is_alibaba_zvec(self) -> None:
         mm = MemoryManager()
         assert isinstance(mm.l3, LongTermStore)
-        assert mm.l3.backend_name == "zvec"
+        try:
+            import zvec  # noqa: F401
+        except ImportError:
+            assert mm.l3.backend_name == "memory"
+            assert isinstance(mm.l3.backend, InMemoryVectorBackend)
+        else:
+            assert mm.l3.backend_name == "zvec"
 
     def test_custom_long_term_store_used(self) -> None:
         custom_store = LongTermStore(
