@@ -167,6 +167,12 @@ async def spawn_specialist(
     max_tool_iterations: int | None = None,
     token_budget: int | None = None,
     max_run_tokens: int | None = None,
+    discovery: bool | None = None,
+    discovery_core_tools: list[str] | None = None,
+    defer_local_tools: bool | None = None,
+    lazy_mcp: bool | None = None,
+    activation_allowlist: list[str] | None = None,
+    activation_denylist: list[str] | None = None,
 ) -> str:
     """Create an ephemeral specialist Agent, run ``task``, and discard it.
 
@@ -179,7 +185,11 @@ async def spawn_specialist(
         )
 
     Optional kwargs (skills, tool_hooks/offload, memory, budgets) let deep agents
-    share research infrastructure with specialists.
+    share research infrastructure with specialists. Passing ``discovery=True``
+    (and optionally ``discovery_core_tools`` / ``defer_local_tools`` /
+    ``lazy_mcp`` / ``activation_allowlist`` / ``activation_denylist``) wires
+    progressive capability discovery into the specialist too, so a large
+    shared toolset (research kit, images, MCP) doesn't blow its schema budget.
     """
     from .builder import Agent
 
@@ -220,6 +230,18 @@ async def spawn_specialist(
         kwargs["token_budget"] = token_budget
     if max_run_tokens is not None:
         kwargs["max_run_tokens"] = max_run_tokens
+    if discovery is not None:
+        kwargs["discovery"] = discovery
+    if discovery_core_tools is not None:
+        kwargs["discovery_core_tools"] = discovery_core_tools
+    if defer_local_tools is not None:
+        kwargs["defer_local_tools"] = defer_local_tools
+    if lazy_mcp is not None:
+        kwargs["lazy_mcp"] = lazy_mcp
+    if activation_allowlist is not None:
+        kwargs["activation_allowlist"] = activation_allowlist
+    if activation_denylist is not None:
+        kwargs["activation_denylist"] = activation_denylist
     agent = Agent(**kwargs)
     result = await agent.arun(task)
     return result.output.text()
