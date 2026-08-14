@@ -1,4 +1,4 @@
-"""Live multimodal research deep agent — beat LangGraph deepagents on loomable.
+"""Live multimodal research deep agent.
 
 Demonstrates (real APIs when keys are set):
   - web_search + fetch_url / extract_text
@@ -10,16 +10,16 @@ Demonstrates (real APIs when keys are set):
 
 Scripted CI path (no API key)::
 
-    python examples/deep_agent/03_live_multimodal_research.py
+    python examples/deep_agent/04_live_multimodal_research.py
 
 Live::
 
     DEEP_AGENT_LIVE=1 GEMINI_API_KEY=... \\
-      python examples/deep_agent/03_live_multimodal_research.py
+      python examples/deep_agent/04_live_multimodal_research.py
 
     # or OpenAI
     DEEP_AGENT_LIVE=1 OPENAI_API_KEY=... DEEP_MODEL=openai:gpt-4o-mini \\
-      python examples/deep_agent/03_live_multimodal_research.py
+      python examples/deep_agent/04_live_multimodal_research.py
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ ROOT.mkdir(parents=True, exist_ok=True)
 
 TOPIC = os.environ.get(
     "DEEP_RESEARCH_TOPIC",
-    "How LangGraph deep agents use filesystem offload and subagents",
+    "How deep agents use filesystem offload and subagents",
 )
 
 
@@ -109,9 +109,9 @@ class _ScriptedResearchProvider:
                         id="3",
                         tool_name="register_source",
                         args={
-                            "url": "https://docs.langchain.com/oss/python/deepagents/overview",
-                            "title": "Deep Agents overview",
-                            "summary": "Official deepagents harness docs",
+                            "url": "https://example.com/research/deep-agents",
+                            "title": "Deep agents overview",
+                            "summary": "Filesystem offload, subagents, context management",
                             "quote": "filesystem, subagents, context management",
                         },
                     )
@@ -280,8 +280,7 @@ async def main() -> None:
 
     prompt = (
         f"Research: {TOPIC}\n\n"
-        "Search the web at most twice, then extract_text on the best source "
-        "(prefer https://docs.langchain.com/oss/python/deepagents/overview when relevant). "
+        "Search the web at most twice, then extract_text on the best source. "
         "register_source for sources you use, write reports/research.md with a bibliography, "
         "download/analyze an image only if easy, and complete your todos."
     )

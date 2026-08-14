@@ -319,16 +319,15 @@ async def test_task_tool_shares_workspace(tmp_path) -> None:
     assert (tmp_path / "notes" / "from_specialist.md").is_file()
 
 
-def test_create_research_agent_alias(tmp_path) -> None:
-    from loomable.agent.deep import create_research_agent
-
+def test_create_deep_agent_research_profile(tmp_path) -> None:
     class _Noop:
         async def complete(self, request: ModelRequest) -> ModelResponse:
             return ModelResponse(content="ok")
 
-    agent = create_research_agent(
+    agent = create_deep_agent(
         ModelSpec(provider="scripted", provider_impl=_Noop()),
         workspace=tmp_path,
+        profile="research",
         web_search=False,
         url_fetch=False,
         think_tool=False,

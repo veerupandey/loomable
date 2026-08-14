@@ -10,9 +10,9 @@ constructs default implementations for every kernel subsystem that was not suppl
 Missing or invalid required fields raise :class:`AgentConfigError` naming the field
 before any run is attempted (Req 1.6).
 
-Multi-agent orchestration is now handled via ``loomable.flow.Flow``. The agent
-retains only single-agent auto-escalation: single-shot → tool-loop → self-plan
-(via the Flow engine) (Req 14.4, 17.3).
+Multi-agent orchestration is handled via ``Team`` / ``Workflow`` (and low-level
+``Flow``). The agent retains single-agent auto-escalation: single-shot →
+tool-loop → self-plan (Req 14.4, 17.3).
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import logging
 import time
 import uuid
 from collections.abc import Callable
@@ -43,7 +44,7 @@ from loomable.kernel.contracts import ModelProvider, Retriever, Tool
 from loomable.kernel.errors import GuardrailViolation, MCPConnectionError, SkillLoadError
 from loomable.kernel.guardrails import GuardrailHarness
 from loomable.kernel.long_term import LongTermStore
-from loomable.kernel.mcp_client import MCPClient, MCPSession
+from loomable.kernel.mcp_client import MCPClient
 from loomable.kernel.memory import MemoryManager
 from loomable.kernel.model_interface import ModelInterface
 from loomable.kernel.model_router import ModelRouter, TierSubstitution
@@ -51,7 +52,6 @@ from loomable.kernel.models import (
     AgentConfig,
     ContextItem,
     Session,
-    TierPolicy,
     ToolCall,
     ToolError,
     ToolOutcome,
@@ -605,6 +605,9 @@ class BuiltAgent:
     # Entries may be plain names ("write_file") or path constraints
     # ("write_file:output/brief.md") matched against the tool's path argument.
     require_tools: list[str] = field(default_factory=list)
+    # When True, raise RequireToolsError if required tools are still missing
+    # after nudges (fail-closed). Default is best-effort (metadata only).
+    strict_require_tools: bool = False
 
     # Per-tool timeout and concurrency cap for gated dispatch (Req 2.1–2.4).
     # When set, each tool call in a batch is bounded by asyncio.wait_for and
@@ -869,7 +872,7 @@ class BuiltAgent:
         # the verifier reports failure, re-run with the failure detail appended to
         # context up to max_verify_retries times.
         if self.verifier is not None:
-            from loomable.flow.loop import CallableVerifier, Verifier, VerdictResult
+            from loomable.flow.loop import CallableVerifier, Verifier
 
             # Resolve the verifier: callable → CallableVerifier adapter
             resolved_verifier: Verifier
@@ -1680,8 +1683,12 @@ class BuiltAgent:
                         )
                         try:
                             discovery_rt.ensure_tools_activated(missing_tool_names)
-                        except Exception:  # noqa: BLE001 — activation is best-effort
-                            pass
+                        except Exception as exc:  # noqa: BLE001 — activation is best-effort
+                            logging.getLogger("loomable.agent").warning(
+                                "discovery ensure_tools_activated failed for %s: %s",
+                                missing_tool_names,
+                                exc,
+                            )
                 if (
                     missing_required
                     and require_tools_nudges < max_require_tools_nudges
@@ -2271,6 +2278,10 @@ class BuiltAgent:
         )
         if still_missing:
             metadata["required_tools_missing"] = still_missing
+            if self.strict_require_tools:
+                from loomable.agent.errors import RequireToolsError
+
+                raise RequireToolsError(still_missing)
 
         provider_reasoning: list[str] = []
         if response is not None:
@@ -2408,7 +2419,18 @@ class BuiltAgent:
         # Resolve the provider for streaming detection
         provider = self.model_interface._providers.get(self.model_interface.default_provider)
 
-        if provider is not None and hasattr(provider, "stream"):
+        # Provider ``stream()`` is single-shot (no tool loop / complexity router).
+        # Fall back to arun→chunk whenever tools or a complexity router are wired
+        # so NDJSON does not silently skip tool use.
+        has_tools = bool(getattr(self.tool_runtime, "_tools", None))
+        use_provider_stream = (
+            provider is not None
+            and hasattr(provider, "stream")
+            and not has_tools
+            and self.complexity_router is None
+        )
+
+        if use_provider_stream:
             # --- Real streaming path ---
             # (1) Input capability gating
             for modality in agent_input.modalities():
@@ -2481,7 +2503,6 @@ class BuiltAgent:
             TEXT_MESSAGE_START,
             AsyncStreamBus,
             StreamBridge,
-            StreamEvent,
         )
 
         run_id = uuid.uuid4().hex
@@ -2843,7 +2864,6 @@ class Agent:
         capabilities: ModelCapabilities | str | list[str] | None = None,
         modalities: str | list[str] | None = None,
         text_only: bool = False,
-        multimodal: bool = False,
         token_budget: int = 8192,
         max_run_tokens: int | None = None,
         checkpoint_interval: int = 5,
@@ -2865,12 +2885,14 @@ class Agent:
         # tool hooks / HITL:
         tool_hooks: list[Any] | None = None,
         require_confirmation: list[str] | None = None,
+        approver: Any | None = None,
         # harness knobs (avoids needing build() for common config):
         tool_timeout: float | None = None,
         tool_concurrency: int | None = None,
         max_tool_iterations: int | None = None,
         require_final_text: bool = True,
         require_tools: list[str] | None = None,
+        strict_require_tools: bool = False,
         max_delegations: int | None = None,
         max_depth: int = 4,
         # Tiered model routing:
@@ -2900,6 +2922,7 @@ class Agent:
         think_tool: bool = False,
         plan_tool: bool = False,
         memory_tool: bool = False,
+        memory_auto_extract: bool = False,
         # Case mode (plan → dispatch → synthesize → accept):
         mode: str | None = None,
         dispatch: str = "reuse",
@@ -2984,9 +3007,14 @@ class Agent:
             self._modalities_raw = "text"
 
         if text_only and (modalities is not None or capabilities is not None):
-            raise AgentConfigError("text_only")
+            raise AgentConfigError(
+                "text_only (mutually exclusive with modalities= and capabilities=; "
+                "use modalities='text' instead)"
+            )
         if modalities is not None and capabilities is not None:
-            raise AgentConfigError("modalities")
+            raise AgentConfigError(
+                "modalities (mutually exclusive with capabilities=; pick one)"
+            )
         if text_only:
             self._capabilities = capabilities_for("text")
         elif modalities is not None:
@@ -2997,10 +3025,8 @@ class Agent:
             self._capabilities = capabilities_for(capabilities)
         else:
             self._capabilities = None
-        # multimodal=True is a deprecated no-op alias: media is allowed by default.
-        _ = multimodal  # retained for back-compat; default capabilities already include media
         self._token_budget = token_budget
-        # None → spend uses token_budget (legacy). Deep agents pass 0 for unbounded.
+        # None → spend uses token_budget. Deep agents pass 0 for unbounded.
         self._max_run_tokens = max_run_tokens
         self._checkpoint_interval = checkpoint_interval
         self._session_id = session_id
@@ -3021,11 +3047,13 @@ class Agent:
         self._knowledge_top_k = knowledge_top_k
         self._tool_hooks = tool_hooks
         self._require_confirmation = require_confirmation
+        self._approver = approver
         self._tool_timeout = tool_timeout
         self._tool_concurrency = tool_concurrency
         self._max_tool_iterations = max_tool_iterations
         self._require_final_text = require_final_text
         self._require_tools = list(require_tools) if require_tools else []
+        self._strict_require_tools = bool(strict_require_tools)
         self._max_delegations = max_delegations
         self._max_depth = max_depth
 
@@ -3038,20 +3066,41 @@ class Agent:
         self._context_manager = context_manager
         self._memory_bundle = None
         self._memory_auto_extract = False
-        # ``memory=`` accepts composable Memory OR legacy MemoryManager.
+        # ``memory=`` accepts :class:`~loomable.memory.Memory` from Memory.compose.
         from loomable.memory.compose import is_kernel_memory_manager, is_memory_bundle
 
         if is_memory_bundle(memory):
+            if getattr(memory, "working", None) is not None and memory.working is not None:
+                raise AgentConfigError(
+                    "WorkingMemory is for Workflow blackboards — use "
+                    "Workflow(..., memory=True) or Workflow(memory=working.store). "
+                    "Do not pass working= inside Agent(memory=Memory.compose(...))."
+                )
+            flat_conflict = [
+                name
+                for name, value in (
+                    ("session_store", session_store),
+                    ("memory_backend", memory_backend),
+                    ("note_store", note_store),
+                )
+                if value is not None
+            ]
+            if flat_conflict:
+                raise AgentConfigError(
+                    "memory="
+                    + f" already sets store layers; do not also pass {', '.join(flat_conflict)}. "
+                    "Put stores only inside Memory.compose(...)."
+                )
             bundle = memory.with_scopes(user_id=user_id, scopes=scopes)
             self._memory_bundle = bundle
             composed = bundle.to_agent_kwargs()
-            if session_store is None and "session_store" in composed:
+            if "session_store" in composed:
                 session_store = composed["session_store"]
-            if memory_backend is None and "memory_backend" in composed:
+            if "memory_backend" in composed:
                 memory_backend = composed["memory_backend"]
-            if note_store is None and "note_store" in composed:
+            if "note_store" in composed:
                 note_store = composed["note_store"]
-            if not memory_tool and composed.get("memory_tool"):
+            if composed.get("memory_tool"):
                 memory_tool = True
             if knowledge is None and "knowledge" in composed:
                 knowledge = composed["knowledge"]
@@ -3076,7 +3125,10 @@ class Agent:
             )
             self._memory = kernel_memory
         elif is_kernel_memory_manager(memory):
-            self._memory = memory
+            raise AgentConfigError(
+                "Agent(memory=...) expects Memory.compose(...); "
+                "kernel MemoryManager is internal."
+            )
         else:
             self._memory = kernel_memory or memory
             # Even without a Memory bundle, scopes+user_id can wrap an explicit note_store.
@@ -3086,6 +3138,7 @@ class Agent:
                 scope = MemoryScope.of(**({**(scopes or {}), **({"user_id": user_id} if user_id else {})}))
                 if scope and not isinstance(note_store, ScopedNoteStore):
                     note_store = ScopedNoteStore(note_store, scope=scope)
+            self._memory_auto_extract = bool(memory_auto_extract)
         self._tool_runtime = tool_runtime
         self._harness = harness
         self._planner = planner
@@ -3115,7 +3168,25 @@ class Agent:
         self._embedder = embedder
         self._knowledge_top_k = knowledge_top_k
         self._mode = (mode or "").strip().lower() or None
-        self._dispatch = dispatch if dispatch in ("reuse", "spawn") else "reuse"
+        if self._mode is not None and self._mode != "case":
+            raise AgentConfigError(
+                f"Agent(mode={mode!r}) is unsupported; use mode='case' or omit mode."
+            )
+        if dispatch not in ("reuse", "spawn"):
+            raise AgentConfigError(
+                f"dispatch must be 'reuse' or 'spawn', got {dispatch!r}"
+            )
+        if self._mode != "case":
+            if checkpointer is not None:
+                raise AgentConfigError(
+                    "checkpointer= only applies with Agent(mode='case') "
+                    "(or construct Case/Workflow directly)."
+                )
+            if max_rounds is not None:
+                raise AgentConfigError(
+                    "max_rounds= only applies with Agent(mode='case')."
+                )
+        self._dispatch = dispatch
         self._accept = accept
         self._board = board
         self._max_rounds = max_rounds
@@ -3169,8 +3240,7 @@ class Agent:
             checkpoint_interval=self._checkpoint_interval,
         )
 
-        # --- Construct or reuse subsystems (Req 1.2 defaults, 2.2/2.3 overrides) ---
-        context_manager = self._context_manager or ContextManager(self._token_budget)
+        # --- Construct or reuse subsystems ---
         memory = self._memory or MemoryManager()
         self._materialize_knowledge_base()
         tool_registry, skill_errors = self._build_tool_registry()
@@ -3267,9 +3337,23 @@ class Agent:
         # --- Knowledge / RAG (Req 8.2–8.5): embed + index knowledge docs ---
         long_term: LongTermStore | None = None
         embedder_instance = self._embedder
-        if self._knowledge and self._embedder is not None:
+        if self._knowledge:
+            if self._embedder is None:
+                raise AgentConfigError(
+                    "knowledge= requires embedder= (passive RAG indexes documents "
+                    "at build time). Pass embedder=..., or use knowledge_base= for "
+                    "search_* tools without passive injection."
+                )
             long_term = LongTermStore()
             self._index_knowledge_sync(long_term, self._knowledge, self._embedder)
+
+        # memory_tool without a resolvable note store was a silent no-op — fail loud.
+        if self._memory_tool and self._note_store is None:
+            raise AgentConfigError(
+                "memory_tool=True requires note_store= (or UserMemory with "
+                "note_store=/embedder= inside Memory.compose). "
+                "Pass note_store=... or set memory_tool=False."
+            )
 
         from loomable.memory.compose import MemoryScope
 
@@ -3356,6 +3440,9 @@ class Agent:
             built.max_tool_iterations = self._max_tool_iterations
         built.require_final_text = self._require_final_text
         built.require_tools = list(self._require_tools)
+        built.strict_require_tools = self._strict_require_tools
+        if self._approver is not None:
+            built.approver = self._approver
 
         # --- Wire debug mode: use a console-friendly tracer ---
         if self._debug and self._events is None:
@@ -3486,10 +3573,19 @@ class Agent:
         return result
 
     def cancel(self) -> bool:
-        """Request cooperative cancellation of the active built-agent run."""
+        """Request cooperative cancellation of the active run.
+
+        ``mode="case"`` cancels the underlying Case/Workflow. Otherwise cancels
+        the BuiltAgent tool loop.
+        """
+        hit = False
+        if self._mode == "case" and self._case is not None:
+            cancel = getattr(self._case, "cancel", None)
+            if callable(cancel):
+                hit = bool(cancel()) or hit
         if self._built is not None:
-            return self._built.cancel()
-        return False
+            hit = self._built.cancel() or hit
+        return hit
 
     def run(
         self,
@@ -3514,7 +3610,16 @@ class Agent:
         *,
         output_schema: type | None = None,
     ) -> "AsyncIterator[RunChunk]":
-        """Build (once) and stream incremental output as :class:`RunChunk`s (Req 1.5)."""
+        """Build (once) and stream incremental output as :class:`RunChunk`s (Req 1.5).
+
+        ``mode="case"`` does not support NDJSON chunks — use :meth:`arun` or
+        :meth:`astream_events`.
+        """
+        if self._mode == "case":
+            raise AgentConfigError(
+                "Agent(mode='case') does not support astream() (NDJSON chunks). "
+                "Use arun() or astream_events()."
+            )
         built = self._get_built()
         async for chunk in built.astream(input, output_schema=output_schema):
             yield chunk
@@ -3552,11 +3657,7 @@ class Agent:
             "audio": audio,
             "output_schema": schema,
         }
-        # BuiltAgent.astream_events may not take context yet — only pass if supported.
-        import inspect
-
-        params = inspect.signature(built.astream_events).parameters
-        if "context" in params and _is_run_context(context):
+        if _is_run_context(context):
             kwargs["context"] = context
         async for event in built.astream_events(input, **kwargs):
             yield event
@@ -3602,6 +3703,8 @@ class Agent:
             parts.append(f"You are a {self._role}.")
         if self._goal:
             parts.append(f"Your goal: {self._goal}")
+        if self._description:
+            parts.append(self._description)
         if self._instructions:
             if parts:
                 parts.append("")  # blank line separator

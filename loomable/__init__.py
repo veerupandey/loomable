@@ -21,7 +21,6 @@ from loomable.agent import (
     RunResult,
     Team,
     create_deep_agent,
-    create_research_agent,
     spawn_specialist,
     tool,
 )
@@ -53,11 +52,7 @@ from loomable.flow import (
     VerdictResult,
     Verifier,
     Workflow,
-    coordinate,
-    parallel,
     plan_and_execute,
-    route,
-    sequential,
 )
 from loomable.persist import (
     InMemoryCheckpointer,
@@ -84,7 +79,6 @@ __all__ = [
     "ContextPolicy",
     "spawn_specialist",
     "create_deep_agent",
-    "create_research_agent",
     "resolve_skills",
     "list_bundled_skills",
     "Memory",
@@ -100,10 +94,6 @@ __all__ = [
     "map_specialists",
     "Verifier",
     "VerdictResult",
-    "sequential",
-    "parallel",
-    "route",
-    "coordinate",
     "plan_and_execute",
     "JsonFileCheckpointer",
     "SQLiteCheckpointer",

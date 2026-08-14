@@ -85,6 +85,15 @@ class StructuredOutputError(LoomableError):
         super().__init__(f"Structured output failed: {reason}")
 
 
+class RequireToolsError(LoomableError):
+    """Raised when ``strict_require_tools=True`` and required tools were never called."""
+
+    def __init__(self, missing: list[str]) -> None:
+        self.missing = list(missing)
+        joined = ", ".join(self.missing) if self.missing else "(unknown)"
+        super().__init__(f"Required tools never called: {joined}")
+
+
 class HITLPause(LoomableError):
     """Raised when a run pauses for human-in-the-loop approval.
 

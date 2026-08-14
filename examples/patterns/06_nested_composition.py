@@ -1,9 +1,7 @@
-"""Nested Composition — Flows containing other Flows.
+"""Nested composition — Workflows inside Workflows.
 
-USE WHEN: You have a complex workflow where individual stages
-are themselves multi-step processes (composition of compositions).
-
-Flow nodes can be Loops, other Flows, or any Runnable — they nest.
+USE WHEN: Individual stages are themselves multi-step processes
+(composition of compositions). Nested Workflows are first-class Runnables.
 """
 
 import asyncio
@@ -11,13 +9,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from loomable.agent import Agent
-from loomable.flow.helpers import sequential, parallel
-from loomable.providers.openai import AzureOpenAIProvider
+import sys
+from pathlib import Path
 
-provider = AzureOpenAIProvider()
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _provider import require_provider  # noqa: E402
 
-# --- Stage 1: Research (parallel perspectives) ---
+from loomable import Agent, Workflow
+
+provider = require_provider()
 
 tech_researcher = Agent(
     model=provider,
@@ -33,10 +33,6 @@ market_researcher = Agent(
     instructions="Assess market viability in 2-3 sentences.",
 )
 
-research_stage = parallel(tech_researcher, market_researcher)
-
-# --- Stage 2: Analysis (sequential) ---
-
 analyst = Agent(
     model=provider,
     role="Business Analyst",
@@ -44,11 +40,21 @@ analyst = Agent(
     instructions="Given the research results, provide a clear go/no-go recommendation.",
 )
 
-# --- Full pipeline: parallel research → sequential analysis ---
+# Nested: research stage is its own Workflow, then analysis
+research = Workflow("research").parallel(
+    tech=tech_researcher,
+    market=market_researcher,
+)
 
-pipeline = sequential(research_stage, analyst)
+pipeline = (
+    Workflow("product-decision")
+    .step("research", research)
+    .step("analyze", analyst)
+)
 
-result = asyncio.run(pipeline.arun(
-    "Should we build a real-time collaborative code editor as a SaaS product?"
-))
+result = asyncio.run(
+    pipeline.arun(
+        "Should we build a real-time collaborative code editor as a SaaS product?"
+    )
+)
 print(result.output.text())

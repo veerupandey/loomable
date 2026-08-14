@@ -5,7 +5,7 @@ from __future__ import annotations
 import loomable
 
 
-# Documented stable + deprecated-alias exports (docs/STABILITY.md).
+# Documented stable exports (docs/STABILITY.md).
 _EXPECTED = {
     "__version__",
     "Agent",
@@ -24,7 +24,6 @@ _EXPECTED = {
     "ContextPolicy",
     "spawn_specialist",
     "create_deep_agent",
-    "create_research_agent",
     "resolve_skills",
     "list_bundled_skills",
     "Memory",
@@ -40,10 +39,6 @@ _EXPECTED = {
     "map_specialists",
     "Verifier",
     "VerdictResult",
-    "sequential",
-    "parallel",
-    "route",
-    "coordinate",
     "plan_and_execute",
     "JsonFileCheckpointer",
     "SQLiteCheckpointer",

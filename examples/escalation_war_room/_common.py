@@ -2,46 +2,21 @@
 
 from __future__ import annotations
 
-import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
+# Repo-root .env (examples may be run from this subfolder)
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 load_dotenv()
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _provider import make_provider, require_provider  # noqa: E402, F401
 
 ROOT = Path(__file__).resolve().parent
 FIXTURES = ROOT / "fixtures"
 OUTPUT = ROOT / "output"
-
-
-def make_provider():
-    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if gemini_key:
-        from loomable.providers.gemini import GeminiProvider
-
-        return GeminiProvider(
-            model=os.environ.get("GEMINI_MODEL", "gemini-flash-latest"),
-            api_key=gemini_key,
-            timeout=180.0,
-        )
-
-    zai = os.environ.get("ZAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
-    if zai:
-        from loomable.providers.openai import OpenAIProvider
-
-        return OpenAIProvider(
-            model=os.environ.get("ZAI_MODEL", os.environ.get("OPENAI_MODEL", "glm-5.2")),
-            api_key=zai,
-            base_url=os.environ.get(
-                "ZAI_BASE_URL",
-                os.environ.get("OPENAI_BASE_URL", "https://api.z.ai/api/coding/paas/v4"),
-            ),
-            timeout=180.0,
-        )
-
-    from loomable.providers.openai import AzureOpenAIProvider
-
-    return AzureOpenAIProvider()
 
 
 ESCALATION_EMAIL = """\

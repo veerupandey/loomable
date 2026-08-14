@@ -8,12 +8,12 @@ Illustrates the layering:
 
 Run (no network required for the scripted smoke path)::
 
-    python examples/deep_agent/05_sandbox_browser.py
+    python examples/deep_agent/06_sandbox_browser.py
 
 Live Lightpanda (optional)::
 
     # install/start Lightpanda per https://lightpanda.io/docs/usage/mcp
-    DEEP_AGENT_BROWSER=1 python examples/deep_agent/05_sandbox_browser.py
+    DEEP_AGENT_BROWSER=1 python examples/deep_agent/06_sandbox_browser.py
 """
 
 from __future__ import annotations
@@ -74,8 +74,8 @@ async def main() -> None:
     built = agent.build()
     catalog = {t.name for t in built.discovery.catalog.tools}
     print("bundled_skills", list_bundled_skills())
-    print("has_run_python", "run_python" in catalog or "run_python" in built.tool_runtime._tools)
-    print("has_run_shell", "run_shell" in catalog or "run_shell" in built.tool_runtime._tools)
+    print("has_run_python", "run_python" in catalog or "run_python" in built.tool_runtime)
+    print("has_run_shell", "run_shell" in catalog or "run_shell" in built.tool_runtime)
     print("mcp_servers", [s.get("id") for s in mcp_servers] or "(none — set DEEP_AGENT_BROWSER=1)")
     result = await agent.arun("Confirm sandbox tools are available.")
     print(result.output.text())

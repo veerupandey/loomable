@@ -29,9 +29,51 @@
 ### Changed
 
 - Package status: **Beta** (`0.2.0b0`)
-- `create_research_agent` emits `DeprecationWarning` (alias retained)
 - CI installs `.[dev,toolkits]`; README badge pins `main`
 - Default zvec L3 store reuses an in-process collection handle (no exclusive-lock deadlock across `Agent()` builds)
+- Examples audited for 0.2.0 APIs: unique numbering, live `knowledge_base` / Team inherit demos, retrieval demos use live providers
+- Pattern examples teach `Workflow` / `Team` (not `sequential`/`parallel`/`route` helpers)
+- Docs Level 4–6 teach `Workflow` parallel/branch/HITL; Flow demoted to escape hatch
+- Root README teaches `Memory.compose` + `create_deep_agent(profile=...)`
+- Memory compose example uses `Memory.compose` (not flat `session_store=` / `note_store=`)
+- Shared provider helper adds `make_embedder()` aligned with chat credentials
+- Renamed `memory/03_workflow_shared_memory.py`, `advanced/02_workflow_branch.py`
+- Fail loud on silent no-ops: `knowledge=` without `embedder=`, `memory_tool=`/`UserMemory(auto_extract=)` without a note store, `Team(hard=True)` on soft modes
+- `mount_case` / case-mode Agent omit NDJSON `/run/stream`; `Agent(mode="case").astream` raises
+- `knowledge_base=` promoted to Stable in STABILITY.md
+- `BuiltAgent.astream` falls back to `arun` when tools / complexity router are present (no silent tool skip)
+- Reject unknown `Agent(mode=...)`, invalid `dispatch=`, and case-only `checkpointer=`/`max_rounds=` without `mode="case"`
+- Remove unused `ConversationMemory.scope`; wire `Agent(description=)` into the system prompt
+- Docs honesty: complexity router is opt-in; Team has no `scopes=`
+- Cooperative `cancel()` on Workflow / Case / Team / `Agent(mode="case")`; serve disconnect walks those targets
+- `strict_require_tools=True` raises `RequireToolsError` (WR-021)
+- `Workflow(require_tools=...)` / `.step(..., require_tools=)` inherit onto Agent steps (WR-022)
+- Soft `Team(mode="coordinate")` auto-requires `delegate_to_*` and falls back to running skipped members (WR-020)
+- Workflow branch join preserves `AgentOutput` (so `result.output.text()` is the branch text)
+- `Case.from_agent` copies `require_tools` / `strict_require_tools` / `require_confirmation` / `approver`
+- `Agent(approver=)` is applied on `build()`
+- `confirm=True` without `checkpointer=` + `session_id=` raises; HITL is rejected inside `.parallel()` / `.branch()` / `.loop()`
+- `Memory.to_agent_kwargs()` forwards `UserMemory(auto_extract=True)` as `memory_auto_extract`
+- Custom Flow engines with a checkpointer fail loud instead of silently dropping HITL/checkpoint kwargs
+- Soft `except: pass` on serve cancel / bind_session and discovery activation → logged
+- Docs: NDJSON demoted; Flow Engine Workflow-first; KnowledgeMemory in compose example
+
+### Removed (greenfield clean — no compatibility shims)
+
+- `Agent(multimodal=...)` — media is default; use `modalities=` / `text_only=`
+- `Memory.compose(short=` / `long=`) — use `conversation=` / `user=`
+- `Memory.with_user_id()` — use `with_scopes(user_id=...)`
+- `ScopedNoteStore(user_id=)` — require `scope=MemoryScope.of(...)`
+- Flat store kwargs overriding `memory=` — conflict raises `AgentConfigError`
+- `WorkingMemory` inside `Agent(memory=...)` — raises; use `Workflow(memory=True)`
+- `Loop(end_condition=)` — use `verifier=` (Workflow uses `until=`)
+- `Workflow.branch(name=)` no-op kwarg
+- Char-based offload `threshold=` — use `threshold_tokens=` / `offload_threshold_tokens=`
+- Top-level `sequential` / `parallel` / `route` / `coordinate` exports — use `Workflow` / `Team` (helpers remain under `loomable.flow.helpers`)
+- `Map` / `Router` aliases — use `MapNode` / `RouterNode`
+- `rank_match` discovery helper — use `rank_bm25`
+- Passing kernel `MemoryManager` as `Agent(memory=...)` — use `Memory.compose`
+- `ExtensionRegistry` removed from `loomable.kernel.__all__` (import `loomable.kernel.registry`)
 
 ### Limits (documented)
 

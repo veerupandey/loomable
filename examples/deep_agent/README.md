@@ -11,7 +11,13 @@ agent = create_deep_agent(model, profile="research", workspace="./.deep_workspac
 # equivalent: create_deep_agent(model, skills=["research"], ...)
 ```
 
-`create_research_agent` remains a thin alias for `profile="research"`.
+`create_deep_agent` is Agent, so the same RAG kwargs work:
+
+```python
+create_deep_agent(model, knowledge_base=store_or_sources, retrievers=[custom])
+```
+
+See ``examples/agents/07_knowledge_base.py`` for a live ``knowledge_base=`` demo.
 
 | Pillar | Loomable |
 |--------|----------|
@@ -20,24 +26,13 @@ agent = create_deep_agent(model, profile="research", workspace="./.deep_workspac
 | Subagents | `task` / `task_batch` + named specialists |
 | Context | `compact_conversation`, Memory, summarizer |
 | Skills | Bundled `research` (any topic) via `loomable.skills` |
-| Discovery | Schema budget: core tools + `search_*` / `load_skill` / `activate_tool` (see `docs/COMPETITIVE.md`) |
+| Discovery | Schema budget: core tools + `search_*` / `load_skill` / `activate_tool` |
 | Hard tasks | accept gates, Case, AG-UI / Team / Workflow |
-
-## Why this beats peer deep agents
-
-| Capability | deepagents | Agno | CrewAI | **loomable** |
-|------------|------------|------|--------|--------------|
-| Pure stack | LangChain+LangGraph | Agno | Crew | **loomable only** |
-| Research specialization | Separate harness ideas | Toolkits | Crew roles | **Skill + profile** |
-| Shared FS offload | Yes | Session | Weak | **Token-aware `.offload/`** |
-| Citations / claims | None | Integrations | Weak | **verify + claim tools** |
-| Parallel fan-out | Multi-task | broadcast | async | **`task_batch`** |
-| Enterprise spine | LangGraph | AgentOS | Flows | **Case / Team / Workflow / AG-UI** |
 
 ## Quick start
 
 ```python
-from loomable import create_deep_agent, Memory, ConversationMemory, UserMemory
+from loomable import create_deep_agent, Memory, ConversationMemory
 
 agent = create_deep_agent(
     model="gemini:gemini-flash-latest",
@@ -45,7 +40,6 @@ agent = create_deep_agent(
     workspace="./.deep_workspace",
     memory=Memory.compose(
         conversation=ConversationMemory(),
-        user=UserMemory(auto_extract=True),
     ),
 )
 await agent.arun("Research X; write reports/x.md with citations")
@@ -62,13 +56,15 @@ agent = create_deep_agent(model, workspace="./.deep_workspace", profile="general
 | File | What it shows |
 |------|----------------|
 | `01_research_brief.py` | Scripted / live `create_deep_agent` |
-| `02_progressive_discovery.py` | `search_skills` / `load_skill` / `search_tools` / `activate_tool` progressive disclosure |
-| `02_case_deep_hard.py` | Deep + Case accept |
-| `03_live_multimodal_research.py` | `profile="research"` live loop |
-| `04_live_gemini_gate.py` | Live Gemini correctness + schema-budget gate |
+| `02_progressive_discovery.py` | `search_skills` / `load_skill` / `search_tools` / `activate_tool` |
+| `03_case_deep_hard.py` | Deep + Case accept |
+| `04_live_multimodal_research.py` | `profile="research"` live loop |
+| `05_live_gemini_gate.py` | Live Gemini correctness + schema-budget gate |
+| `06_sandbox_browser.py` | Soft sandbox + bundled `browser` skill |
+| `07_deep_code.py` | `profile="code"` + `CodeIndex` |
 
 ```bash
 python examples/deep_agent/01_research_brief.py
 DEEP_AGENT_LIVE=1 GEMINI_API_KEY=... \
-  python examples/deep_agent/04_live_gemini_gate.py
+  python examples/deep_agent/05_live_gemini_gate.py
 ```

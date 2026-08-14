@@ -58,7 +58,13 @@ examples/deep_agent/.workspace_*/
 examples/advanced/.retrieval_demo/
 examples/advanced/.agentic_demo/
 examples/advanced/.complex_rag_demo/
+examples/advanced/.checkpoint_demo/
 examples/agents/.personalized_demo/
 examples/agents/.knowledge_base_demo/
+examples/agents/.team_kb_demo/
 examples/deep_agent/.workspace_*/
 **/.loomable/
+
+examples/memory/.compose_sessions/
+examples/memory/.sessions_demo/
+examples/advanced/.checkpoint_demo/

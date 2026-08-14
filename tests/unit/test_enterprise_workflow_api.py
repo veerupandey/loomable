@@ -9,9 +9,8 @@ from loomable import (
     InMemoryCheckpointer,
     Step,
     Workflow,
-    parallel,
-    sequential,
 )
+from loomable.flow.helpers import parallel, sequential
 from loomable.content import AgentOutput, Modality, Text, capabilities_for
 from loomable.kernel.models import ModelRequest, ModelResponse
 
@@ -88,11 +87,88 @@ async def test_workflow_branch_then() -> None:
         else_=Step("go_else", else_step),
     )
     result = await wf.arun("seed")
-    # Join may passthrough; prefer sub_results when present
-    texts = [result.output.text()]
-    if result.sub_results:
-        texts.extend(r.output.text() for r in result.sub_results.values())
-    assert any("THEN" in t for t in texts)
+    assert result.output.text() == "THEN"
+
+
+@pytest.mark.asyncio
+async def test_workflow_branch_else() -> None:
+    async def then_step(inp, *, context=None):
+        from loomable.agent.run import RunResult
+
+        return RunResult(output=AgentOutput(parts=[Text("THEN")]), session_id="s")
+
+    async def else_step(inp, *, context=None):
+        from loomable.agent.run import RunResult
+
+        return RunResult(output=AgentOutput(parts=[Text("ELSE")]), session_id="s")
+
+    wf = Workflow("branchy").branch(
+        when=lambda state: False,
+        then=Step("go_then", then_step),
+        else_=Step("go_else", else_step),
+    )
+    result = await wf.arun("seed")
+    assert result.output.text() == "ELSE"
+
+
+def test_confirm_without_checkpointer_raises() -> None:
+    from loomable.flow.nodes import FlowConfigError
+
+    async def noop(inp, *, context=None):
+        from loomable.agent.run import RunResult
+
+        return RunResult(output=AgentOutput(parts=[Text("x")]), session_id="s")
+
+    wf = Workflow("hitl").step("gate", noop, confirm=True)
+    with pytest.raises(FlowConfigError, match="checkpointer"):
+        wf.build()
+
+
+def test_confirm_inside_parallel_raises() -> None:
+    from loomable.flow.nodes import FlowConfigError
+
+    async def noop(inp, *, context=None):
+        from loomable.agent.run import RunResult
+
+        return RunResult(output=AgentOutput(parts=[Text("x")]), session_id="s")
+
+    with pytest.raises(FlowConfigError, match="parallel"):
+        Workflow("p").parallel(Step("gate", noop, confirm=True))
+
+
+def test_confirm_inside_branch_raises() -> None:
+    from loomable.flow.nodes import FlowConfigError
+    from loomable.persist import InMemoryCheckpointer
+
+    async def noop(inp, *, context=None):
+        from loomable.agent.run import RunResult
+
+        return RunResult(output=AgentOutput(parts=[Text("x")]), session_id="s")
+
+    wf = Workflow(
+        "b", session_id="s", checkpointer=InMemoryCheckpointer()
+    ).branch(
+        when=lambda state: True,
+        then=Step("gate", noop, confirm=True),
+    )
+    with pytest.raises(FlowConfigError, match="branch"):
+        wf.build()
+
+
+def test_confirm_inside_loop_raises() -> None:
+    from loomable.flow.nodes import FlowConfigError
+    from loomable.persist import InMemoryCheckpointer
+
+    async def noop(inp, *, context=None):
+        from loomable.agent.run import RunResult
+
+        return RunResult(output=AgentOutput(parts=[Text("x")]), session_id="s")
+
+    wf = Workflow(
+        "l", session_id="s", checkpointer=InMemoryCheckpointer()
+    ).loop(Step("gate", noop, confirm=True), max_iterations=1)
+    with pytest.raises(FlowConfigError, match="loop"):
+        wf.build()
 
 
 def test_capabilities_for_strings() -> None:
@@ -205,7 +281,13 @@ def test_step_confirm_alias() -> None:
 
     s = Step("gate", noop, confirm=True)
     assert s.require_confirmation is True
-    node = Workflow("w").step("gate", noop, confirm=True).flow._nodes["gate"]
+    from loomable.persist import InMemoryCheckpointer
+
+    node = (
+        Workflow("w", session_id="s", checkpointer=InMemoryCheckpointer())
+        .step("gate", noop, confirm=True)
+        .flow._nodes["gate"]
+    )
     assert node.require_confirmation is True
 
 

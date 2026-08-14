@@ -47,8 +47,8 @@ def test_extract_user_facts() -> None:
 @pytest.mark.asyncio
 async def test_scoped_note_store_isolates_users() -> None:
     base = NoteStore(long_term=open_vector_store(engine="memory"), embedder=_Emb())
-    alice = ScopedNoteStore(base, user_id="alice")
-    bob = ScopedNoteStore(base, user_id="bob")
+    alice = ScopedNoteStore(base, scope=MemoryScope.of(user_id="alice"))
+    bob = ScopedNoteStore(base, scope=MemoryScope.of(user_id="bob"))
     await alice.write("prefs", "Alice likes teal")
     await bob.write("prefs", "Bob likes crimson")
     a = await alice.recall("likes", k=3)
@@ -118,6 +118,17 @@ async def test_memory_compose_conversation_and_user_auto_extract() -> None:
     assert agent._memory_tool is True
     assert agent._memory_auto_extract is True
 
+    kwargs = memory.to_agent_kwargs()
+    assert kwargs.get("memory_auto_extract") is True
+    flat = Agent(
+        model=_model(),
+        session_id="compose-flat",
+        user_id="alice",
+        modalities="text",
+        **{k: v for k, v in kwargs.items() if k != "memory"},
+    )
+    assert flat._memory_auto_extract is True
+
     await agent.arun("My name is Alex and I prefer dark mode.")
     # Auto-extract should have written scoped notes
     listed = await agent._note_store.list()
@@ -139,27 +150,39 @@ async def test_memory_compose_conversation_and_user_auto_extract() -> None:
 
 
 @pytest.mark.asyncio
-async def test_memory_compose_legacy_kwargs_override() -> None:
+async def test_memory_compose_rejects_flat_store_kwargs() -> None:
+    from loomable.agent.errors import AgentConfigError
+
     store_a = open_session_store("memory")
     store_b = open_session_store("memory")
     memory = Memory.compose(conversation=ConversationMemory(store=store_a))
-    agent = Agent(
-        model=_model(),
-        memory=memory,
-        session_store=store_b,  # explicit wins
-        session_id="x",
-        modalities="text",
-    )
-    assert agent._session_store is store_b
+    with pytest.raises(AgentConfigError, match="Memory.compose"):
+        Agent(
+            model=_model(),
+            memory=memory,
+            session_store=store_b,
+            session_id="x",
+            modalities="text",
+        )
 
 
 @pytest.mark.asyncio
-async def test_memory_compose_short_long_aliases() -> None:
+async def test_memory_compose_rejects_working_on_agent() -> None:
+    from loomable.agent.errors import AgentConfigError
+    from loomable.memory import WorkingMemory
+
+    memory = Memory.compose(working=WorkingMemory.tiered())
+    with pytest.raises(AgentConfigError, match="WorkingMemory"):
+        Agent(model=_model(), memory=memory, modalities="text")
+
+
+@pytest.mark.asyncio
+async def test_memory_compose_conversation_and_user() -> None:
     store = open_session_store("memory")
     notes = NoteStore(long_term=open_vector_store(engine="memory"), embedder=_Emb())
     memory = Memory.compose(
-        short=ConversationMemory(store=store),
-        long=UserMemory(note_store=notes, memory_tool=False),
+        conversation=ConversationMemory(store=store),
+        user=UserMemory(note_store=notes, memory_tool=False),
     )
     assert memory.conversation is not None
     assert memory.user is not None

@@ -1,7 +1,7 @@
-"""Progressive capability discovery on loomable — deepagents/Claude-Code-style.
+"""Progressive capability discovery — metadata, then load/activate, then call.
 
-Shows the industry "metadata → search → load/activate → call" pattern that
-loomable's ``discovery=True`` wires into every :func:`create_deep_agent`:
+Shows the "search → load/activate → call" pattern that ``discovery=True``
+wires into every :func:`create_deep_agent`:
 
   1. ``search_skills`` — discover the bundled ``research`` skill by query
      (name + description only; the body is not in context yet).
@@ -13,7 +13,7 @@ loomable's ``discovery=True`` wires into every :func:`create_deep_agent`:
 
 Everything below is scripted (no network / API key required) so it runs in
 CI. See ``01_research_brief.py`` for the general deep-agent loop and
-``03_live_multimodal_research.py`` for a live-model run.
+``04_live_multimodal_research.py`` for a live-model run.
 
 Run::
 

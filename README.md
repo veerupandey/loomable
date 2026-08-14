@@ -30,10 +30,11 @@ Loomable is a Python framework for production agent systems. One `Runnable` cont
 | Primitive | Role |
 |-----------|------|
 | **Agent** | Model + tools + memory + structured I/O |
-| **Team** | Specialists (broadcast / sequential / coordinate) |
+| **Team** | Specialists (broadcast / sequential / coordinate / route) |
 | **Workflow** | Durable multi-step process (HITL, checkpoints, SharedState) |
 | **Case** | Goal + WorkItems board + plan → dispatch → accept |
-| **Deep Agent** | Loomable-only long-horizon research harness (beats LangGraph/Agno/Crew deep stacks) |
+| **Memory** | `Memory.compose` — conversation / user / knowledge layers |
+| **Deep Agent** | `create_deep_agent(profile="research"\|"code")` long-horizon harness |
 | **Flow** | Low-level graph escape hatch |
 
 Everything that runs is a `Runnable`. Agents nest in workflows; cases compile to workflows; workflows stream the same AG-UI events as agents.
@@ -102,6 +103,33 @@ Searchable knowledge base (vector store → `search_*` tools):
 agent = Agent(model=GeminiProvider(), knowledge_base=["./handbook.pdf", "./runbooks"])
 ```
 
+Composable memory:
+
+```python
+from loomable import Agent, ConversationMemory, Memory, UserMemory, open_session_store, open_vector_store
+from loomable.agent import NoteStore
+
+# UserMemory(memory_tool=/auto_extract=) needs note_store= or embedder=
+from loomable.providers import OpenAIEmbedder  # or GeminiEmbedder / AzureOpenAIEmbedder
+
+embedder = OpenAIEmbedder()
+notes = NoteStore(long_term=open_vector_store(engine="memory"), embedder=embedder)
+memory = Memory.compose(
+    conversation=ConversationMemory(store=open_session_store("sqlite", path="sessions.db")),
+    user=UserMemory(note_store=notes, auto_extract=True, memory_tool=True),
+)
+agent = Agent(model=provider, memory=memory, session_id="chat-1", user_id="alice")
+```
+
+Deep research / code harness:
+
+```python
+from loomable import create_deep_agent
+
+agent = create_deep_agent(provider, profile="research", workspace="./.deep_workspace")
+# agent = create_deep_agent(provider, profile="code", repo="./my-app")
+```
+
 ## Core primitives
 
 ### Agent
@@ -121,7 +149,7 @@ result = await agent.arun("What is 7 * 8?")
 ### Workflow (+ SharedState)
 
 ```python
-from loomable import Workflow, JsonFileCheckpointer
+from loomable import Workflow, JsonFileCheckpointer, FlowPaused
 
 cp = JsonFileCheckpointer("./ckpts")  # or PostgresCheckpointer(POSTGRES_URL)
 wf = (
@@ -130,7 +158,11 @@ wf = (
     .parallel(analyst=analyst, visual=visual)
     .step("scribe", scribe, confirm=True)  # HITL
 )
-result = await wf.arun(email)
+try:
+    result = await wf.arun(email)
+except FlowPaused:
+    await wf.approve("scribe")
+    result = await wf.arun(resume=True)
 print(wf.state.get("gather"))
 ```
 
@@ -156,13 +188,15 @@ print(result.metadata["board"])
 ```python
 from loomable import Team
 
+# hard= applies only to broadcast / sequential (default on for those modes)
 team = Team(members=[sre, legal, exec], mode="broadcast", hard=True)
 result = await team.arun(brief)
+# soft LLM orchestration: Team(..., mode="coordinate") or mode="route"
 ```
 
 ## AG-UI SSE
 
-First-class CopilotKit / AG-UI-compatible events — no hard CopilotKit dependency.
+First-class AG-UI events over `text/event-stream`.
 
 ```python
 from fastapi import FastAPI
@@ -177,7 +211,9 @@ async for ev in agent.astream_events(prompt):
     print(ev.type)  # RUN_STARTED, TEXT_MESSAGE_CONTENT, TOOL_CALL_*, RUN_FINISHED
 ```
 
-Legacy NDJSON remains at `POST /run/stream`.
+Prefer AG-UI SSE (`/run/events`). NDJSON at `POST /run/stream` is **Agent-only**
+(requires `astream`); `mount_case` does not register it. Disconnect calls
+`cancel()` on Agent, Case, Workflow, and Team.
 
 ## Features
 
@@ -185,15 +221,16 @@ Legacy NDJSON remains at `POST /run/stream`.
 |---------|--------------|
 | **Function tools** | `@tool` — JSON schema from type hints |
 | **Tool-use loop** | Automatic tool iteration until final answer |
-| **Require tools** | Path-constrained side-effect enforcement |
-| **Memory** | Session / user / tiered stores + compaction |
-| **Knowledge base** | Vector store → `search_*` tools (`knowledge_base=`); optional passive `knowledge=` |
+| **Require tools** | Path-constrained side-effects; `strict_require_tools=True` fail-closed; Workflow inherit |
+| **Memory** | `Memory.compose` (conversation / user / knowledge) + compaction |
+| **Knowledge base** | Vector store → `search_*` tools (`knowledge_base=`); optional passive `knowledge=` + `embedder=` |
+| **Retrieval builders** | `loomable.retrieval` helpers are experimental; prefer `knowledge_base=` / `retrievers=` on Agent |
 | **Multimodal I/O** | Image / audio / video in and out |
 | **Structured I/O** | Pydantic / dataclass schemas |
 | **Verification** | Same verifier protocol on Agent, Loop, Case |
 | **HITL** | Fluent `confirm=True` + `approve()` + resume |
 | **Checkpoints** | JsonFile / SQLite / in-memory durability |
-| **Team modes** | broadcast / sequential / coordinate (+ hard) |
+| **Team modes** | `broadcast`/`sequential` (hard by default); `coordinate`/`route` (soft) |
 | **Case board** | WorkItems + `STATE_SNAPSHOT` / `STATE_DELTA` |
 | **AG-UI SSE** | Lifecycle, text, tools, nodes, state |
 | **MCP / Skills** | External tool packages |
@@ -204,19 +241,21 @@ Legacy NDJSON remains at `POST /run/stream`.
 ```
 examples/
 ├── agents/               # Start here (07 = knowledge_base vector DB)
-├── deep_agent/           # Loomable-only deep research (beats peer deep agents)
+├── deep_agent/           # create_deep_agent(profile=research|code)
 ├── subagents/            # Delegation & Team
-├── patterns/             # Loop / pipeline / parallel / plan-execute
-├── memory/               # Session & shared memory
-├── advanced/             # MCP, checkpoints, multimodal
+├── patterns/             # Workflow step / parallel / Team route / map
+├── memory/               # Memory.compose, Workflow chaining, callable blackboard
+├── advanced/             # MCP, Workflow branch, checkpoints, RAG
 ├── simple_use_cases/     # News, research, docs
 └── escalation_war_room/  # Full SEV ladder (Case + SSE)
 ```
 
 ```bash
 python examples/agents/01_hello_world.py
-python examples/agents/07_knowledge_base.py
-python examples/deep_agent/03_live_multimodal_research.py
+python examples/agents/07_knowledge_base.py   # live LLM + knowledge_base=
+python examples/agents/08_team_knowledge_base.py
+python examples/deep_agent/04_live_multimodal_research.py
+python examples/advanced/05_build_retriever.py
 python examples/escalation_war_room/10_case.py
 python examples/escalation_war_room/12_agent_agui_sse.py
 ```

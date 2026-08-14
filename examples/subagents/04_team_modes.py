@@ -12,10 +12,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from loomable.agent import Agent, Team
-from loomable.providers.openai import AzureOpenAIProvider
+import sys
+from pathlib import Path
 
-provider = AzureOpenAIProvider()
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _provider import require_provider  # noqa: E402
+
+from loomable.agent import Agent, Team
+
+provider = require_provider()
 
 # --- Define team members ---
 
@@ -37,26 +42,37 @@ pragmatist = Agent(
     goal="Give balanced, actionable recommendations",
 )
 
-# --- Coordinate mode: all members work, coordinator synthesizes ---
+# --- Coordinate: all members work, coordinator synthesizes ---
 
-team = Team(
+coord = Team(
     members=[optimist, pessimist, pragmatist],
     model=provider,
     mode="coordinate",
 )
 
-result = asyncio.run(team.arun(
-    "Should a startup adopt microservices architecture from day one?"
-))
+result = asyncio.run(
+    coord.arun("Should a startup adopt microservices architecture from day one?")
+)
 
-# Pretty-print with delegation breakdown
 from loomable.display import pp, delegation_outputs
 
 print("=== Team Coordinate Mode ===")
 pp(result)
 
-# Access what each member said
 outputs = delegation_outputs(result)
 for member, text in outputs.items():
     print(f"\n--- {member} ---")
     print(text[:150])
+
+# --- Route: pick the single best member ---
+
+router = Team(
+    members=[optimist, pessimist, pragmatist],
+    model=provider,
+    mode="route",
+)
+routed = asyncio.run(
+    router.arun("List only the top risk of adopting microservices on day one.")
+)
+print("\n=== Team Route Mode ===")
+pp(routed)

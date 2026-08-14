@@ -9,7 +9,7 @@ Happy path (no low-level graph types)::
     from loomable import Agent, Workflow, Step
 
     wf = (
-        Workflow("sev1", session_id="inc-1", checkpointer=cp, memory=True)
+        Workflow("sev1", session_id="inc-1", checkpointer=cp)
         .step("gather", gatherer)
         .parallel(Step("analyst", analyst), Step("visual", visual))
         .branch(when=needs_human, then=approver, else_=auto_close)
@@ -26,7 +26,6 @@ from __future__ import annotations
 __all__ = ["Workflow"]
 
 import asyncio
-import uuid
 from typing import Any, AsyncIterator, Callable, TYPE_CHECKING
 
 from loomable.agent.context import RunContext
@@ -42,8 +41,6 @@ if TYPE_CHECKING:
 
 def _as_steps(value: Any) -> list[Any]:
     """Normalize a branch / parallel argument into a list of composable elements."""
-    from loomable.flow.step import Step
-
     if value is None:
         return []
     if isinstance(value, list):
@@ -73,6 +70,59 @@ def _wrap_runnable(value: Any, *, default_name: str | None = None) -> Any:
     return Step(name, value)
 
 
+def _collect_confirm_names(steps: list[Any]) -> list[str]:
+    """Names of steps marked ``confirm=True`` / ``require_confirmation``."""
+    names: list[str] = []
+    for element in steps:
+        if getattr(element, "require_confirmation", False):
+            name = getattr(element, "name", None) or getattr(element, "_name", None)
+            names.append(str(name) if name else "step")
+        nested = getattr(element, "_steps", None)
+        if nested:
+            names.extend(_collect_confirm_names(list(nested)))
+        for attr in ("_then_steps", "_else_steps"):
+            child = getattr(element, attr, None)
+            if child:
+                names.extend(_collect_confirm_names(list(child)))
+        body = getattr(element, "_body", None)
+        if body is not None:
+            names.extend(_collect_confirm_names([body]))
+    return names
+
+
+def _unsupported_confirm_sites(steps: list[Any]) -> list[str]:
+    """HITL sites that compile but never pause (branch / loop / parallel)."""
+    from loomable.flow.condition import Condition
+    from loomable.flow.loop import Loop
+    from loomable.flow.parallel_group import Parallel_Group
+    from loomable.flow.step import Step
+
+    sites: list[str] = []
+    for element in steps:
+        if isinstance(element, Parallel_Group):
+            names = _collect_confirm_names(list(element._steps))
+            if names:
+                sites.append(f"parallel ({', '.join(names)})")
+        elif isinstance(element, Condition):
+            nested: list[Any] = list(element._then_steps or [])
+            nested.extend(element._else_steps or [])
+            names = _collect_confirm_names(nested)
+            if names:
+                sites.append(f"branch ({', '.join(names)})")
+        elif isinstance(element, Loop):
+            body = getattr(element, "_body", None)
+            names = _collect_confirm_names([body] if body is not None else [])
+            if names:
+                sites.append(f"loop ({', '.join(names)})")
+        elif isinstance(element, Step):
+            inner = getattr(element, "_agent", None)
+            if inner is not None and hasattr(inner, "_steps"):
+                sites.extend(_unsupported_confirm_sites(list(inner._steps)))
+        elif type(element).__name__ == "Workflow" and hasattr(element, "_steps"):
+            sites.extend(_unsupported_confirm_sites(list(element._steps)))
+    return sites
+
+
 class Workflow:
     """Enterprise process: sequential / parallel / branch / loop over Agents & Teams.
 
@@ -84,7 +134,7 @@ class Workflow:
         Optional initial list of steps (declarative style). Prefer fluent
         ``.step()`` / ``.parallel()`` / ``.branch()`` / ``.loop()``.
     session_id:
-        Scopes memory and checkpoints (LangGraph-style thread id).
+        Scopes memory and checkpoints (thread id).
     checkpointer:
         Durable resume backend (JsonFile / SQLite / InMemory).
     memory:
@@ -94,6 +144,9 @@ class Workflow:
         already have one (same object as ``Agent(knowledge_base=...)``).
     retrievers / embedder:
         Extra search tools / embedder inherited the same way.
+    require_tools / strict_require_tools:
+        Inherited by Agent steps that do not already set ``require_tools``.
+        Same semantics as ``Agent(require_tools=..., strict_require_tools=...)``.
     deps:
         Shared dependency injection object for all steps.
     """
@@ -111,6 +164,8 @@ class Workflow:
         knowledge_base: Any = None,
         retrievers: Any = None,
         embedder: Any = None,
+        require_tools: list[str] | None = None,
+        strict_require_tools: bool = False,
     ) -> None:
         self._name = name
         self._steps: list[Any] = list(steps) if steps is not None else []
@@ -121,9 +176,12 @@ class Workflow:
         self._knowledge_base = knowledge_base
         self._retrievers = retrievers
         self._embedder = embedder
+        self._require_tools = list(require_tools) if require_tools else []
+        self._strict_require_tools = bool(strict_require_tools)
         self._compiled_flow: Flow | None = None
         self._last_state: SharedState | None = None
         self._step_counter = 0
+        self._active_ctx: RunContext | None = None
 
         # Explicit empty steps=[] still fails fast; steps=None allows fluent .step()
         if steps is not None and not steps:
@@ -154,6 +212,14 @@ class Workflow:
                     retrievers=retrievers,
                     embedder=embedder,
                 )
+            if self._require_tools or self._strict_require_tools:
+                from loomable.agent.memory_opts import apply_require_tools
+
+                apply_require_tools(
+                    self._steps,
+                    require_tools=self._require_tools or None,
+                    strict_require_tools=self._strict_require_tools or None,
+                )
 
     # ------------------------------------------------------------------
     # Fluent builders (return self for chaining)
@@ -168,11 +234,15 @@ class Workflow:
         deps: Any = None,
         require_confirmation: bool = False,
         confirm: bool | None = None,
+        require_tools: list[str] | None = None,
+        strict_require_tools: bool | None = None,
     ) -> "Workflow":
         """Append a named step. ``.step("gather", agent)`` or ``.step(Step(...))``.
 
         Pass ``confirm=True`` (or ``require_confirmation=True``) to pause the
         workflow before the step until ``approve(name)`` + ``arun(resume=True)``.
+        ``require_tools`` / ``strict_require_tools`` apply when ``agent`` is an
+        :class:`~loomable.agent.builder.Agent`.
         """
         from loomable.flow.step import Step
 
@@ -193,6 +263,21 @@ class Workflow:
                 deps=deps,
                 require_confirmation=require_confirmation,
             )
+        inner = getattr(element, "_agent", None)
+        if require_tools is not None or strict_require_tools is True:
+            from loomable.agent.memory_opts import inherit_agent_require_tools
+
+            if inner is not None and hasattr(inner, "_require_tools"):
+                inherit_agent_require_tools(
+                    inner,
+                    require_tools=require_tools,
+                    strict_require_tools=strict_require_tools,
+                    overwrite=True,
+                )
+            elif require_tools:
+                raise TypeError(
+                    "Workflow.step(..., require_tools=) only applies when the step is an Agent"
+                )
         self._steps.append(element)
         self._invalidate()
         return self
@@ -225,6 +310,14 @@ class Workflow:
             elements.append(Step(key, value))
         if not elements:
             raise ValueError("parallel() requires at least one step")
+        for el in elements:
+            if getattr(el, "require_confirmation", False):
+                from loomable.flow.nodes import FlowConfigError
+
+                raise FlowConfigError(
+                    "confirm=True is not supported inside Workflow.parallel(); "
+                    "put HITL on a sequential .step(..., confirm=True) after the group."
+                )
         self._steps.append(Parallel_Group(*elements, name=name))
         self._invalidate()
         return self
@@ -234,16 +327,12 @@ class Workflow:
         when: Callable[[SharedState], bool],
         then: Any,
         else_: Any | None = None,
-        *,
-        name: str | None = None,
     ) -> "Workflow":
         """Conditional branch. ``when`` receives SharedState and returns bool."""
         from loomable.flow.condition import Condition
 
         then_steps = _as_steps(then)
         else_steps = _as_steps(else_) if else_ is not None else None
-        # name is reserved for future RouterNode labeling; Condition has no name today
-        _ = name
         self._steps.append(Condition(when, then_steps, else_steps))
         self._invalidate()
         return self
@@ -322,6 +411,14 @@ class Workflow:
                 retrievers=self._retrievers,
                 embedder=self._embedder,
             )
+        if self._require_tools or self._strict_require_tools:
+            from loomable.agent.memory_opts import apply_require_tools
+
+            apply_require_tools(
+                self._steps,
+                require_tools=self._require_tools or None,
+                strict_require_tools=self._strict_require_tools or None,
+            )
 
     def build(self) -> "Workflow":
         """Eagerly compile the graph (also happens automatically on arun/explain)."""
@@ -341,6 +438,31 @@ class Workflow:
                 retrievers=self._retrievers,
                 embedder=self._embedder,
             )
+            if self._require_tools or self._strict_require_tools:
+                from loomable.agent.memory_opts import apply_require_tools
+
+                apply_require_tools(
+                    self._steps,
+                    require_tools=self._require_tools or None,
+                    strict_require_tools=self._strict_require_tools or None,
+                )
+            unsupported = _unsupported_confirm_sites(self._steps)
+            if unsupported:
+                from loomable.flow.nodes import FlowConfigError
+
+                raise FlowConfigError(
+                    "confirm=True is not supported inside Workflow.parallel(), "
+                    ".branch(), or .loop(); put HITL on a sequential "
+                    f".step(..., confirm=True). Found: {'; '.join(unsupported)}"
+                )
+            confirm_names = _collect_confirm_names(self._steps)
+            if confirm_names and (self._checkpointer is None or not self._session_id):
+                from loomable.flow.nodes import FlowConfigError
+
+                raise FlowConfigError(
+                    "confirm=True requires Workflow(..., checkpointer=..., session_id=...); "
+                    f"HITL steps: {', '.join(confirm_names)}"
+                )
             self._compiled_flow = WorkflowCompiler.compile(
                 self._steps,
                 name=self._name,
@@ -390,12 +512,29 @@ class Workflow:
         """
         flow = self._ensure_compiled()
         ctx = context or RunContext()
-        result = await flow.arun(input, context=ctx, resume=resume)
+        self._active_ctx = ctx
+        try:
+            result = await flow.arun(input, context=ctx, resume=resume)
+        finally:
+            if self._active_ctx is ctx:
+                self._active_ctx = None
         if ctx.shared_state is not None:
             self._last_state = ctx.shared_state
         else:
             self._last_state = SharedState()
         return result
+
+    def cancel(self) -> bool:
+        """Request cooperative cancellation of the in-flight workflow run."""
+        hit = False
+        ctx = self._active_ctx
+        if ctx is not None:
+            ctx.cancel()
+            hit = True
+        flow = self._compiled_flow
+        if flow is not None and hasattr(flow, "cancel"):
+            hit = flow.cancel() or hit
+        return hit
 
     async def astream_events(
         self,
@@ -409,15 +548,19 @@ class Workflow:
         """Yield AG-UI events (NODE_* lifecycle + nested run frames)."""
         flow = self._ensure_compiled()
         ctx = context or RunContext()
-
-        async for event in flow.astream_events(
-            input,
-            session_id=session_id or self._session_id,
-            run_id=run_id,
-            context=ctx,
-            resume=resume,
-        ):
-            yield event
+        self._active_ctx = ctx
+        try:
+            async for event in flow.astream_events(
+                input,
+                session_id=session_id or self._session_id,
+                run_id=run_id,
+                context=ctx,
+                resume=resume,
+            ):
+                yield event
+        finally:
+            if self._active_ctx is ctx:
+                self._active_ctx = None
 
         if ctx.shared_state is not None:
             self._last_state = ctx.shared_state

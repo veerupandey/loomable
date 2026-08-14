@@ -62,12 +62,12 @@ class TestPublicSurface:
         assert MapNode is not None
         assert RouterNode is not None
 
-    def test_convenience_aliases(self):
-        """Map and Router aliases point to MapNode and RouterNode."""
-        from loomable.flow import Map, Router, MapNode, RouterNode
+    def test_map_and_router_nodes(self):
+        """MapNode and RouterNode are exported (no Map/Router aliases)."""
+        from loomable.flow import MapNode, RouterNode
 
-        assert Map is MapNode
-        assert Router is RouterNode
+        assert MapNode is not None
+        assert RouterNode is not None
 
     def test_state_exports(self):
         """State management exports are importable."""
@@ -117,9 +117,11 @@ class TestPublicSurface:
     def test_top_level_enterprise_exports(self):
         """Agent / Team / Workflow / Case are importable from loomable."""
         from loomable import Agent, Board, Case, Team, Workflow
-        from loomable.serve import mount_agent, mount_case
 
         assert all(x is not None for x in (Agent, Team, Workflow, Case, Board))
+        pytest.importorskip("fastapi")
+        from loomable.serve import mount_agent, mount_case
+
         assert callable(mount_agent) and callable(mount_case)
 
     def test_observability_exports(self):
@@ -135,13 +137,13 @@ class TestPublicSurface:
         assert MessageSnapshot is not None
 
     def test_helper_exports(self):
-        """Convenience constructor helpers are importable."""
-        from loomable.flow import (
+        """Advanced Flow helpers live under loomable.flow.helpers; plan_and_execute on flow."""
+        from loomable.flow import plan_and_execute
+        from loomable.flow.helpers import (
             sequential,
             parallel,
             route,
             coordinate,
-            plan_and_execute,
         )
 
         assert callable(sequential)
@@ -168,9 +170,7 @@ class TestPublicSurface:
             "Edge",
             "Node",
             "MapNode",
-            "Map",
             "RouterNode",
-            "Router",
             "FlowConfigError",
             "Reducer",
             "SharedState",
@@ -192,12 +192,22 @@ class TestPublicSurface:
             "emit_context_snapshot",
             "emit_node_end",
             "emit_node_start",
-            "sequential",
-            "parallel",
-            "route",
-            "coordinate",
             "plan_and_execute",
+            "Step",
+            "Workflow",
+            "Condition",
+            "ComposableElement",
+            "Parallel_Group",
+            "FlowClass",
+            "start",
+            "listen",
+            "router",
         }
+        actual = set(flow_mod.__all__)
+        missing = expected - actual
+        extra = actual - expected
+        assert not missing, f"Missing from __all__: {missing}"
+        assert not extra, f"Unexpected in __all__: {extra}"
 
         actual = set(flow_mod.__all__)
         missing = expected - actual

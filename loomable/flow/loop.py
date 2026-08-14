@@ -146,11 +146,6 @@ class Loop:
         When ``None``, an :class:`AlwaysOkVerifier` is used — the body runs
         exactly once (Req 5.4). A callable is automatically adapted via
         :class:`CallableVerifier`.
-    end_condition:
-        An ergonomic alias for ``verifier``. A callable receiving a
-        :class:`~loomable.agent.run.RunResult` and returning bool (True
-        means stop). Adapted into a :class:`CallableVerifier` internally.
-        Cannot be combined with ``verifier``.
     max_iterations:
         Maximum number of iterations before the loop stops regardless of
         the verifier outcome (Req 5.3). Defaults to 3.
@@ -162,7 +157,6 @@ class Loop:
         *,
         steps: "list[Any] | None" = None,
         verifier: "Verifier | Callable[[AgentOutput, RunContext], bool] | None" = None,
-        end_condition: "Callable[[Any], bool] | None" = None,
         max_iterations: int = 3,
     ) -> None:
         # --- Resolve body vs steps (Req 5.1, 5.2, 5.3) ---
@@ -194,32 +188,8 @@ class Loop:
 
         self._max_iterations = max_iterations
 
-        # --- Resolve verifier / end_condition (Req 5.6, 5.7) ---
-        if end_condition is not None:
-            # Adapt end_condition (receives RunResult, returns bool) into a
-            # CallableVerifier (which receives AgentOutput + context).
-            # The end_condition receives the full RunResult from the body.
-            # We adapt it to the Verifier protocol which receives AgentOutput.
-            # Since the verifier.check() is called with (output, context), we
-            # need to bridge between the RunResult-based end_condition and
-            # the AgentOutput-based Verifier protocol.
-            _ec = end_condition
-
-            def _adapted_verifier(output: AgentOutput, context: RunContext) -> bool:
-                """Adapt end_condition to Verifier interface.
-
-                The end_condition callable expects a RunResult-like object.
-                We create a minimal RunResult wrapping the output for it.
-                """
-                from loomable.agent.run import RunResult as _RR
-
-                # Build a minimal RunResult so end_condition gets what it expects
-                result = _RR(output=output, session_id="")
-                return _ec(result)
-
-            self._verifier: Verifier = CallableVerifier(_adapted_verifier)
-        elif verifier is None:
-            self._verifier = AlwaysOkVerifier()
+        if verifier is None:
+            self._verifier: Verifier = AlwaysOkVerifier()
         elif callable(verifier) and not isinstance(verifier, Verifier):
             self._verifier = CallableVerifier(verifier)
         else:
@@ -264,6 +234,8 @@ class Loop:
                     }
 
             # Run the body
+            if ctx.cancelled:
+                break
             last_result = await self._body.arun(body_input, context=ctx)
 
             # Verify the output
@@ -278,9 +250,18 @@ class Loop:
             # Failure — capture detail for next iteration (Req 5.5)
             failure_detail = verdict.detail
 
-        # Iteration cap reached without success (Req 5.3)
-        assert last_result is not None  # At least one iteration ran
-        last_result.metadata["loop_stop"] = "max_iterations"
-        last_result.metadata["loop_iterations"] = self._max_iterations
+        # Iteration cap reached without success (Req 5.3), or cancelled.
+        if last_result is None:
+            from loomable.content import AgentOutput, Text
+
+            last_result = RunResult(
+                output=AgentOutput(parts=[Text("")]), session_id=""
+            )
+        if ctx.cancelled:
+            last_result.metadata["loop_stop"] = "cancelled"
+            last_result.metadata["stop_reason"] = "cancelled"
+        else:
+            last_result.metadata["loop_stop"] = "max_iterations"
+            last_result.metadata["loop_iterations"] = self._max_iterations
         last_result.metadata["loop_verified"] = False
         return last_result
