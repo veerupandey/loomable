@@ -14,8 +14,8 @@ Use this workflow for long-horizon research tasks.
 3. **Fetch** — `extract_text` / `fetch_url` on the best URLs. Large results may be
    offloaded to `.offload/` — use `read_file` / `grep` on those paths.
 4. **Cite** — `register_source(url, title, summary, quote?)` for every source you rely on.
-5. **Images** — when a page has charts/photos worth evidence, `fetch_image` then
-   `analyze_image` with a focused question; keep notes under `images/`.
+5. **Images** — `discover_images` on a page, then `fetch_image` + `analyze_image`;
+   keep notes under `images/`.
 6. **Delegate** — use `task` for isolated sub-research; specialists share this workspace.
 7. **Deliver** — write `reports/<slug>.md` with findings + paste `format_bibliography`.
 8. **Close** — mark todos completed; store durable user facts via `memory` when available.

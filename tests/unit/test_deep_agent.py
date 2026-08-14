@@ -67,6 +67,23 @@ async def test_workspace_tools_roundtrip_edit_grep(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_workspace_reads_external_disk_writes(tmp_path) -> None:
+    """Offload/ImageTools write disk files; WorkspaceTools must still read them."""
+    ws = WorkspaceTools(root=tmp_path)
+    by_name = {t.name: t for t in ws.tools()}
+    off = tmp_path / ".offload" / "fetch_url_abc.txt"
+    off.parent.mkdir(parents=True)
+    off.write_text("EXTERNAL_BODY_MARKER", encoding="utf-8")
+    assert "EXTERNAL_BODY_MARKER" == _content(
+        await by_name["read_file"].invoke({"path": ".offload/fetch_url_abc.txt"})
+    )
+    listing = json.loads(_content(await by_name["ls"].invoke({"path": ".offload"})))
+    assert "fetch_url_abc.txt" in listing["entries"]
+    hits = json.loads(_content(await by_name["grep"].invoke({"query": "EXTERNAL_BODY"})))
+    assert hits["hits"]
+
+
+@pytest.mark.asyncio
 async def test_file_tools_edit_glob_grep(tmp_path) -> None:
     from loomable.toolkits import FileTools
 
@@ -119,6 +136,7 @@ async def test_create_deep_agent_registers_core_tools(tmp_path) -> None:
     ):
         assert required in names, f"missing {required} in {sorted(names)}"
     assert built.max_tool_iterations == 40
+    assert built._token_budget == 128_000 or getattr(agent, "_token_budget", None) == 128_000
 
     # Multimodal research defaults register image tools
     vision = create_deep_agent(
@@ -134,7 +152,7 @@ async def test_create_deep_agent_registers_core_tools(tmp_path) -> None:
         use_llm_summarizer=False,
     )
     vnames = set(vision.build().tool_runtime._tools.keys())
-    for required in ("fetch_image", "analyze_image", "list_images"):
+    for required in ("fetch_image", "analyze_image", "list_images", "discover_images"):
         assert required in vnames, f"missing {required}"
 
 

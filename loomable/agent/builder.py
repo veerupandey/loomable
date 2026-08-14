@@ -242,6 +242,30 @@ def _coerce_media_item(item: "Any", target_modality: str) -> "MediaPart":
     )
 
 
+def _synthesize_tool_activity_summary(tool_activity: list[Any]) -> str:
+    """Build a short user-facing summary when the model ends with empty text."""
+    lines: list[str] = ["Completed tool actions:"]
+    for outcome in tool_activity[-12:]:
+        name = ""
+        detail = ""
+        if getattr(outcome, "result", None) is not None:
+            name = str((outcome.result.metadata or {}).get("tool_name") or "")
+            content = outcome.result.content
+            if isinstance(content, str) and content.strip():
+                detail = content.strip().replace("\n", " ")
+                if len(detail) > 160:
+                    detail = detail[:157] + "..."
+        if not name:
+            name = "tool"
+        if detail:
+            lines.append(f"- {name}: {detail}")
+        else:
+            lines.append(f"- {name}")
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines)
+
+
 def _schema_instruction(output_schema: type) -> str:
     """Build a lightweight, provider-agnostic instruction asking for JSON output.
 
@@ -1916,9 +1940,30 @@ class BuiltAgent:
                 )
             request.messages.append({"role": "user", "content": nudge})
             request.tools = []
-            response = await self.model_interface.invoke(request)
-            output = from_model_response(response)
+            try:
+                response = await self.model_interface.invoke(request)
+                output = from_model_response(response)
+            except Exception:  # noqa: BLE001 — provider may reject tool-free nudge
+                pass
             final_text_reprompted = True
+
+        # If the model still produced no text after tools (common with some Gemini
+        # OpenAI-compat turns), synthesize a short confirmation from tool activity
+        # so callers aren't left with an empty RunResult.
+        if not (output.text() or "").strip() and tool_activity:
+            summary = _synthesize_tool_activity_summary(tool_activity)
+            if summary:
+                from loomable.content.parts import MediaPart as _MP
+
+                output = AgentOutput(
+                    parts=[
+                        _MP(
+                            modality=Modality.TEXT,
+                            media_type="text/plain",
+                            data=summary.encode("utf-8"),
+                        )
+                    ]
+                )
 
         # (6) Output capability gating (Req 5.4).
         for modality in output.modalities():

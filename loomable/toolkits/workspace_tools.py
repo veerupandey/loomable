@@ -62,29 +62,28 @@ class WorkspaceStore:
         if dest.is_file():
             dest.unlink()
 
-    def ls(self, path: str = "") -> list[str]:
-        prefix = self._norm(path) or ""
-        if prefix and not prefix.endswith("/"):
-            prefix = prefix + "/"
-        names: set[str] = set()
-        for key in self._files:
-            if prefix and not key.startswith(prefix):
-                continue
-            rest = key[len(prefix) :] if prefix else key
-            if not rest:
-                continue
-            first = rest.split("/", 1)[0]
-            if "/" in rest:
-                names.add(first + "/")
-            else:
-                names.add(first)
-        return sorted(names)
+    def _refresh_from_disk(self) -> None:
+        """Pull text files written outside this store (offload, ImageTools, …)."""
+        if self._mirror and self._root is not None:
+            self._hydrate_from_disk()
 
     def read(self, path: str) -> str | None:
         key = self._norm(path)
         if key is None:
             return None
-        return self._files.get(key)
+        if key in self._files:
+            return self._files[key]
+        # Disk fallback — external writers (offload hook, analyze notes) land on disk
+        if self._mirror and self._root is not None:
+            dest = self._root / key
+            if dest.is_file():
+                try:
+                    text = dest.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    return None
+                self._files[key] = text
+                return text
+        return None
 
     def write(self, path: str, content: str) -> str | None:
         key = self._norm(path)
@@ -98,7 +97,7 @@ class WorkspaceStore:
         key = self._norm(path)
         if key is None:
             return None, "invalid path"
-        cur = self._files.get(key)
+        cur = self.read(path)  # include disk fallback
         if cur is None:
             return None, "file not found"
         if old not in cur:
@@ -113,17 +112,24 @@ class WorkspaceStore:
 
     def delete(self, path: str) -> bool:
         key = self._norm(path)
-        if key is None or key not in self._files:
+        if key is None:
+            return False
+        # Ensure disk-only files can be deleted too
+        if key not in self._files:
+            self.read(path)
+        if key not in self._files:
             return False
         del self._files[key]
         self._mirror_delete(key)
         return True
 
     def glob(self, pattern: str) -> list[str]:
+        self._refresh_from_disk()
         pat = (pattern or "*").strip()
         return sorted(k for k in self._files if fnmatch.fnmatch(k, pat) or fnmatch.fnmatch(k.split("/")[-1], pat))
 
     def grep(self, query: str, *, path: str = "", max_hits: int = 40) -> list[dict[str, Any]]:
+        self._refresh_from_disk()
         prefix = self._norm(path) or ""
         hits: list[dict[str, Any]] = []
         try:
@@ -140,6 +146,25 @@ class WorkspaceStore:
                     if len(hits) >= max_hits:
                         return hits
         return hits
+
+    def ls(self, path: str = "") -> list[str]:
+        self._refresh_from_disk()
+        prefix = self._norm(path) or ""
+        if prefix and not prefix.endswith("/"):
+            prefix = prefix + "/"
+        names: set[str] = set()
+        for key in self._files:
+            if prefix and not key.startswith(prefix):
+                continue
+            rest = key[len(prefix) :] if prefix else key
+            if not rest:
+                continue
+            first = rest.split("/", 1)[0]
+            if "/" in rest:
+                names.add(first + "/")
+            else:
+                names.add(first)
+        return sorted(names)
 
 
 class WorkspaceTools(Toolkit):

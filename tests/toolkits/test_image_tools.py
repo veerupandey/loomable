@@ -63,10 +63,43 @@ async def test_fetch_image_http_error(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_discover_images_from_html(tmp_path) -> None:
+    html = """
+    <html><body>
+      <img src="/a.png" />
+      <img data-src="https://cdn.example.com/b.jpg" />
+      <img src="data:image/png;base64,xxx" />
+    </body></html>
+    """
+    tools = ImageTools(workspace=tmp_path)
+    discover = next(t for t in tools.tools() if t.name == "discover_images")
+
+    response = MagicMock()
+    response.status_code = 200
+    response.text = html
+    response.content = html.encode()
+    response.headers = {"content-type": "text/html"}
+    client = MagicMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    client.get = AsyncMock(return_value=response)
+
+    with patch("httpx.AsyncClient", return_value=client):
+        out = json.loads(
+            _content(
+                await discover.invoke({"url": "https://example.com/page", "limit": 5})
+            )
+        )
+    assert out["images"]
+    assert any(u.endswith("/a.png") or u.endswith("a.png") for u in out["images"])
+    assert any("b.jpg" in u for u in out["images"])
+    assert all(not u.startswith("data:") for u in out["images"])
+
+
+@pytest.mark.asyncio
 async def test_analyze_image_with_scripted_model(tmp_path) -> None:
     class _Vision:
         async def complete(self, request: ModelRequest) -> ModelResponse:
-            # Ensure multimodal content reached the provider
             msgs = request.messages or []
             assert msgs
             return ModelResponse(content="A red square chart with rising trend.")

@@ -32,7 +32,7 @@ class GeminiProvider(OpenAIProvider):
 
     def __init__(
         self,
-        model: str = "gemini-2.0-flash",
+        model: str = "gemini-flash-latest",
         *,
         api_key: str | None = None,
         base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai",
