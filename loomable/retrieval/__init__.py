@@ -9,9 +9,12 @@ High-level::
         name="docs",
         mode="hybrid",          # vector | lexical | hybrid
         strategy="auto",        # text | markdown | code | html | pdf | auto
-        persist_path="./.loomable/docs.zvec.json",
+        persist_path="./.loomable/docs_zvec",  # Alibaba zvec on disk
     )
     agent = Agent(model=..., retrievers=[retriever])
+
+Pass ``store=open_vector_store(postgres_url=...)`` (or any ``VectorBackend``)
+instead of ``persist_path`` when you want Postgres or another vector DB.
 
 Deep code uses the same stack via :class:`~loomable.codeindex.CodeIndex`.
 """

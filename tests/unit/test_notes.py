@@ -35,7 +35,7 @@ def embedder() -> FakeEmbedder:
 
 @pytest.fixture
 def long_term_store() -> LongTermStore:
-    return LongTermStore()  # defaults to in-memory ZvecVectorBackend
+    return LongTermStore()  # in-memory (no Alibaba zvec required)
 
 
 @pytest.fixture

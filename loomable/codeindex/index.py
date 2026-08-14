@@ -11,7 +11,7 @@ from typing import Any, Sequence
 from loomable.codeindex.chunking import CodeChunk, iter_code_chunks
 from loomable.codeindex.embedders import HashingEmbedder
 from loomable.kernel.contracts import VectorBackend
-from loomable.kernel.long_term import LongTermStore, ZvecVectorBackend
+from loomable.kernel.long_term import LongTermStore, open_vector_store  # noqa: F401
 
 
 @dataclass(frozen=True)
@@ -39,15 +39,18 @@ class CodeHit:
 class CodeIndex:
     """Indexed view of a repository for agent code understanding.
 
-    Defaults to loomable **zvec** (:class:`ZvecVectorBackend`) — pass ``path=``
-    via ``persist_path`` for a file-backed store. Swap ``store=`` /
-    ``backend=`` for Postgres/FAISS/etc. without changing tools.
+    Default file store is **Alibaba zvec** (``pip install loomable[zvec]``)
+    under ``persist_path`` or ``<repo>/.loomable/codeindex_zvec``. Pass
+    ``store=`` / ``backend=`` for Postgres (:class:`PgVectorBackend`) or any
+    :class:`~loomable.kernel.contracts.VectorBackend`.
 
     Usage::
 
-        index = await CodeIndex.build("./repo")
-        hits = await index.search("authentication middleware")
-        print(index.repo_map())
+        index = await CodeIndex.build("./repo")  # Alibaba zvec on disk
+        index = await CodeIndex.build(
+            "./repo",
+            store=open_vector_store(postgres_url=DSN, dimensions=1536),
+        )
     """
 
     def __init__(
@@ -69,8 +72,7 @@ class CodeIndex:
         elif persist_path is not None:
             self.store = LongTermStore(path=persist_path, backend_name="zvec")
         else:
-            # Default: file-backed zvec beside the repo when possible
-            cache = self.root / ".loomable" / "codeindex.zvec.json"
+            cache = self.root / ".loomable" / "codeindex_zvec"
             self.store = LongTermStore(path=cache, backend_name="zvec")
         self._chunks: list[CodeChunk] = list(chunks or [])
         self._by_id: dict[str, CodeChunk] = {c.chunk_id: c for c in self._chunks}

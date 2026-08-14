@@ -6,8 +6,9 @@
 
 - Soft execution sandbox (`loomable.sandbox`), `ShellTools`, deep `code_exec`/`shell` wiring
 - Bundled `browser` skill (Lightpanda MCP)
-- `CodeIndex` + `CodeTools` + bundled `coding` skill + `create_deep_agent(profile="code")` (zvec-pluggable)
-- `loomable.retrieval`: chunk strategies, multi-doc ingest, `build_retriever` (vector/lexical/hybrid, zvec-pluggable)
+- `CodeIndex` + `CodeTools` + bundled `coding` skill + `create_deep_agent(profile="code")` (Alibaba zvec / pluggable store)
+- `loomable.retrieval`: chunk strategies, multi-doc ingest, `build_retriever` (vector/lexical/hybrid; Alibaba zvec / Postgres / custom)
+- Real **Alibaba zvec** file backend (`loomable[zvec]`), `open_vector_store()`, `InMemoryVectorBackend` for tests; `PgVectorBackend` remains the Postgres option
 - Stability policy ([docs/STABILITY.md](docs/STABILITY.md)), SECURITY.md, beta graduation plan
 - `BuiltAgent.cancel()` / `Agent.cancel()` with active `RunContext` tracking
 - SSE / stream client disconnect triggers cooperative cancel

@@ -64,7 +64,7 @@ class _Scripted:
 
 async def main() -> None:
     repo = _ensure_repo()
-    index = await CodeIndex.build(repo, persist_path=ROOT / "codeindex.zvec.json")
+    index = await CodeIndex.build(repo, persist_path=ROOT / "codeindex_zvec")
     print("indexed_chunks", index.size)
     print(index.repo_map(max_entries=20))
 

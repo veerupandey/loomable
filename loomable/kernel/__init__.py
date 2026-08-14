@@ -26,7 +26,12 @@ from loomable.kernel.errors import (
     SubagentError,
     UnsupportedExtensionError,
 )
-from loomable.kernel.long_term import LongTermStore, ZvecVectorBackend
+from loomable.kernel.long_term import (
+    InMemoryVectorBackend,
+    LongTermStore,
+    ZvecVectorBackend,
+    open_vector_store,
+)
 from loomable.kernel.memory import MemoryManager
 from loomable.kernel.summarizer import Summarizer
 from loomable.kernel.model_interface import ModelInterface
@@ -78,6 +83,8 @@ __all__ = [
     # Long-Term Store
     "LongTermStore",
     "ZvecVectorBackend",
+    "InMemoryVectorBackend",
+    "open_vector_store",
     # Memory Manager
     "MemoryManager",
     # Summarizer

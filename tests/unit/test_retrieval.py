@@ -79,17 +79,17 @@ async def test_build_retriever_vector_and_lexical(tmp_path: Path) -> None:
     (docs_dir / "billing.md").write_text(
         "# Billing\n\nInvoices and discounts.\n", encoding="utf-8"
     )
-    persist = tmp_path / "docs.zvec.json"
+    from loomable.kernel.long_term import LongTermStore
+
     vector = await build_retriever(
         [docs_dir],
         name="docs",
         mode="vector",
         strategy="markdown",
-        persist_path=persist,
+        store=LongTermStore(),  # in-memory for unit speed
     )
     hits = await vector.retrieve("OAuth2 login", k=3)
     assert hits
-    assert persist.is_file()
 
     lexical = await build_retriever([docs_dir], name="lex", mode="lexical", strategy="auto")
     hits2 = await lexical.retrieve("invoices discounts", k=3)
@@ -98,6 +98,25 @@ async def test_build_retriever_vector_and_lexical(tmp_path: Path) -> None:
         "discount" in hits2[0].get("content", "").lower()
         or "invoice" in hits2[0].get("content", "").lower()
     )
+
+
+@pytest.mark.asyncio
+async def test_build_retriever_alibaba_zvec(tmp_path: Path) -> None:
+    pytest.importorskip("zvec")
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "auth.md").write_text("# Auth\n\nOAuth2 tokens.\n", encoding="utf-8")
+    persist = tmp_path / "docs_zvec"
+    vector = await build_retriever(
+        [docs_dir],
+        name="docs",
+        mode="vector",
+        strategy="markdown",
+        persist_path=persist,
+    )
+    hits = await vector.retrieve("OAuth2", k=2)
+    assert hits
+    assert persist.exists()
 
 
 @pytest.mark.asyncio

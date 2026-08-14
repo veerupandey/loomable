@@ -51,7 +51,7 @@ def _make_store(
         return LongTermStore(backend=backend, backend_name="custom")
     if persist_path is not None:
         return LongTermStore(path=persist_path, backend_name="zvec")
-    return LongTermStore()  # in-memory zvec
+    return LongTermStore()  # in-memory (no Alibaba zvec required)
 
 
 async def build_retriever(
@@ -81,8 +81,10 @@ async def build_retriever(
         Any object with ``async embed(text) -> list[float]``. Defaults to
         :class:`~loomable.codeindex.embedders.HashingEmbedder` for offline use.
     store / backend / persist_path:
-        Pluggable vector storage. Default is in-memory zvec; pass
-        ``persist_path=`` for file-backed zvec.
+        Pluggable vector storage. ``persist_path`` uses **Alibaba zvec**
+        (``pip install loomable[zvec]``). Pass ``store=open_vector_store(
+        postgres_url=...)`` or ``backend=PgVectorBackend(...)`` for Postgres.
+        Omit both for an in-memory store (tests / ephemeral).
 
     Examples
     --------
@@ -92,8 +94,12 @@ async def build_retriever(
             ["./docs", "./README.md"],
             name="docs",
             mode="hybrid",
-            persist_path="./.loomable/docs.zvec.json",
+            persist_path="./.loomable/docs_zvec",  # Alibaba zvec on disk
         )
+        # Or Postgres:
+        # from loomable.kernel.long_term import open_vector_store
+        # store = open_vector_store(postgres_url=DSN, dimensions=1536)
+        # retriever = await build_retriever([...], store=store)
         agent = Agent(model=..., retrievers=[retriever])
     """
     _docs, chunks = await build_corpus(sources, strategy=strategy)
