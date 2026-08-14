@@ -1,11 +1,10 @@
-"""Searchable knowledge base — high-level ``knowledge_base=`` / ``retrievers=``.
+"""Searchable knowledge base — live ``Agent(knowledge_base=...)``.
 
 ``knowledge_base=`` is a vector DB (optionally ingested from files/dirs).
 ``retrievers=`` attaches extra ``search_*`` tools on the same Agent.
-``create_deep_agent`` is Agent, so it takes the same kwargs.
+``create_deep_agent`` takes the same kwargs.
 
-Offline (scripted model). For live use, swap in Gemini / Azure and keep the
-same ``knowledge_base=`` kwargs.
+Requires a real LLM key — see ``.env.example``.
 
 Run::
 
@@ -19,13 +18,16 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from loomable import Agent, create_deep_agent, open_vector_store
-from loomable.agent import ModelSpec
 from loomable.kernel.contracts import Retriever
 from loomable.retrieval import KnowledgeBase
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _offline import scripted_model  # noqa: E402
+from _provider import require_provider  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent / ".knowledge_base_demo"
 ROOT.mkdir(parents=True, exist_ok=True)
@@ -70,67 +72,51 @@ class CatalogRetriever(Retriever):
         return (hits or rows)[: max(1, int(k))]
 
 
-async def _ask(agent: Agent, label: str) -> None:
-    result = await agent.arun(
-        "Can I commit STAGING_TOKEN=demo-not-a-secret per policy? "
-        "What is the webhook signing secret? Cite sources."
-    )
-    print(f"[{label}] {(result.output.text() or '').strip()}")
-
-
-def _kb_script() -> ModelSpec:
-    return scripted_model(
-        [
-            {"tool": "search_personal", "args": {"query": "commit secrets tokens git", "k": 3}},
-            {"tool": "search_company", "args": {"query": "webhook DEMO-WH .env policy", "k": 5}},
-            "Do not commit the staging token (personal notes are stricter "
-            "than company .env policy). Webhook key is DEMO-WH-4419 (runbook.md).",
-        ]
-    )
-
-
 async def main() -> None:
+    model = require_provider()
     kb = _seed()
-
-    # Named collections → search_personal, search_company
-    await _ask(
-        Agent(
-            _kb_script(),
-            user_id="avery",
-            knowledge_base=kb,
-            use_llm_summarizer=False,
-            max_tool_iterations=8,
-        ),
-        "Agent named collections",
+    question = (
+        "Can I commit STAGING_TOKEN=demo-not-a-secret per policy? "
+        "What is the webhook signing secret? Cite which collection you used."
     )
 
-    await _ask(
-        create_deep_agent(
-            _kb_script(),
-            user_id="avery",
-            knowledge_base=kb,
-            workspace=ROOT / "workspace",
-            web_search=False,
-            url_fetch=False,
-            citations=False,
-            think_tool=False,
-            board=False,
-            use_llm_summarizer=False,
-            max_tool_iterations=8,
+    agent = Agent(
+        model,
+        user_id="avery",
+        knowledge_base=kb,
+        instructions=(
+            "Use search_personal and search_company. Prefer personal prefs over "
+            "company policy when they conflict. Cite sources."
         ),
-        "create_deep_agent",
+        max_tool_iterations=8,
     )
+    result = await agent.arun(question)
+    print("[Agent named collections]")
+    print((result.output.text() or "").strip())
 
-    # KnowledgeBase(store=..., sources=...) + extra retrievers=
+    deep = create_deep_agent(
+        model,
+        user_id="avery",
+        knowledge_base=kb,
+        workspace=ROOT / "workspace",
+        web_search=False,
+        url_fetch=False,
+        citations=False,
+        think_tool=False,
+        board=False,
+        max_tool_iterations=8,
+    )
+    deep_result = await deep.arun(question)
+    print("\n[create_deep_agent]")
+    print((deep_result.output.text() or "").strip())
+
     handbook = ROOT / "handbook.md"
-    handbook.write_text("# Auth\n\nUse OAuth2 bearer tokens for API login.\n", encoding="utf-8")
+    handbook.write_text(
+        "# Auth\n\nUse OAuth2 bearer tokens for API login.\n",
+        encoding="utf-8",
+    )
     combo = Agent(
-        scripted_model(
-            [
-                {"tool": "search_handbook", "args": {"query": "OAuth2", "k": 2}},
-                "KnowledgeBase + retrievers demo complete.",
-            ]
-        ),
+        model,
         knowledge_base=KnowledgeBase(
             store=open_vector_store(engine="memory"),
             sources=[handbook],
@@ -138,11 +124,14 @@ async def main() -> None:
             description="Internal engineering handbook.",
         ),
         retrievers=[CatalogRetriever()],
-        use_llm_summarizer=False,
-        max_tool_iterations=4,
+        instructions="Use search_handbook and search_catalog when relevant.",
+        max_tool_iterations=6,
     )
-    result = await combo.arun("How do we authenticate?")
-    print(f"[KnowledgeBase+retrievers] {(result.output.text() or '').strip()}")
+    combo_result = await combo.arun(
+        "How do we authenticate to the API? What is the widget SKU?"
+    )
+    print("\n[KnowledgeBase + retrievers]")
+    print((combo_result.output.text() or "").strip())
 
 
 if __name__ == "__main__":

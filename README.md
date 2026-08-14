@@ -215,7 +215,7 @@ examples/
 
 ```bash
 python examples/agents/01_hello_world.py
-python examples/agents/07_knowledge_base.py
+python examples/agents/07_knowledge_base.py   # live LLM + knowledge_base=
 python examples/agents/08_team_knowledge_base.py
 python examples/deep_agent/04_live_multimodal_research.py
 python examples/advanced/05_build_retriever.py

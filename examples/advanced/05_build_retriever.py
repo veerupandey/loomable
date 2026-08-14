@@ -1,9 +1,7 @@
 """Build pluggable retrievers and attach via ``Agent(retrievers=...)``.
 
-``Agent(knowledge_base=sources)`` is the usual path. Use ``build_retriever``
-when you need an explicit hybrid/lexical/vector tool.
-
-Offline in-memory store — swap ``engine=`` for zvec/faiss/chroma/milvus/postgres.
+Live model — the agent calls ``search_docs`` itself.
+Requires a real LLM key — see ``.env.example``.
 
 Run::
 
@@ -16,11 +14,15 @@ import asyncio
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from loomable import Agent, open_vector_store
 from loomable.retrieval import build_retriever, list_strategies
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _offline import scripted_model  # noqa: E402
+from _provider import require_provider  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent / ".retrieval_demo"
 ROOT.mkdir(parents=True, exist_ok=True)
@@ -47,16 +49,12 @@ async def main() -> None:
         store=open_vector_store(engine="memory"),
     )
     agent = Agent(
-        model=scripted_model(
-            [
-                {"tool": "search_docs", "args": {"query": "OAuth2 login", "k": 2}},
-                "Retriever demo complete.",
-            ]
-        ),
+        model=require_provider(),
         retrievers=[retriever],
-        use_llm_summarizer=False,
+        instructions="Use search_docs before answering. Cite what you found.",
+        max_tool_iterations=4,
     )
-    result = await agent.arun("How do we authenticate?")
+    result = await agent.arun("How do we authenticate to the API?")
     print(result.output.text())
 
 
