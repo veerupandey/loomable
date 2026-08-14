@@ -65,9 +65,10 @@ agent = create_deep_agent(model, workspace="./.deep_workspace", profile="general
 | `02_progressive_discovery.py` | `search_skills` / `load_skill` / `search_tools` / `activate_tool` progressive disclosure |
 | `02_case_deep_hard.py` | Deep + Case accept |
 | `03_live_multimodal_research.py` | `profile="research"` live loop |
+| `04_live_gemini_gate.py` | Live Gemini correctness + schema-budget gate |
 
 ```bash
 python examples/deep_agent/01_research_brief.py
 DEEP_AGENT_LIVE=1 GEMINI_API_KEY=... \
-  python examples/deep_agent/03_live_multimodal_research.py
+  python examples/deep_agent/04_live_gemini_gate.py
 ```
