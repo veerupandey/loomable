@@ -17,7 +17,7 @@
 - Default ingest: popular docs/code/HTML/PDF/DOCX/PPTX/JSON/CSV + `http(s)` URLs; `json`/`csv` chunk strategies; complex multi-format RAG example/tests
 - Vector engines: **zvec**, **FAISS**, **Chroma** (file/HTTP), **Milvus** (Lite `.db` / server), **Postgres/pgvector**; `uri=` shorthand + matrix integration tests
 - PDF ingest: page extract + bounded page chunks (no 8k truncation / overlap-shard bug); large-PDF quality matrix across all engines
-- Stability policy ([docs/STABILITY.md](docs/STABILITY.md)), SECURITY.md, beta graduation plan
+- Retrieval **metadata**: ingest-time fields on every chunk/hit (author, tags, page, filename, …) + `retrieve(..., filters=)`- Stability policy ([docs/STABILITY.md](docs/STABILITY.md)), SECURITY.md, beta graduation plan
 - `BuiltAgent.cancel()` / `Agent.cancel()` with active `RunContext` tracking
 - SSE / stream client disconnect triggers cooperative cancel
 - `mount_agent` / `mount_case` optional `api_key=` (Bearer or `X-API-Key`)

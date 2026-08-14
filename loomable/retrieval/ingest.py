@@ -335,13 +335,28 @@ def coerce_source(source: Any) -> list[Document]:
     if isinstance(source, Document):
         return [source]
     if isinstance(source, dict):
+        extra_meta = dict(source.get("metadata") or {})
+        for lift in ("title", "author", "tags", "department", "locale"):
+            if source.get(lift) is not None:
+                extra_meta.setdefault(lift, source[lift])
         if source.get("url"):
-            return [
+            docs = [
                 load_url(
                     str(source["url"]),
                     doc_id=str(source["id"]) if source.get("id") else None,
                 )
             ]
+            for d in docs:
+                d.metadata.update({k: v for k, v in extra_meta.items() if v is not None})
+            return docs
+        if source.get("path") or source.get("file"):
+            raw_path = source.get("path") or source.get("file")
+            loaded = coerce_source(raw_path)
+            for d in loaded:
+                d.metadata.update({k: v for k, v in extra_meta.items() if v is not None})
+                if source.get("id") and len(loaded) == 1:
+                    d.id = str(source["id"])
+            return loaded
         text = str(source.get("text") or "")
         return [
             Document(
@@ -349,7 +364,7 @@ def coerce_source(source: Any) -> list[Document]:
                 text=text,
                 source=str(source.get("source") or ""),
                 media_type=str(source.get("media_type") or "text/plain"),
-                metadata=dict(source.get("metadata") or {}),
+                metadata=extra_meta,
             )
         ]
     if isinstance(source, Path) or (

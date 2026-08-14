@@ -91,8 +91,14 @@ class AgenticRetriever(Retriever):
         self.fetch_k = fetch_k
         self.llm = llm
 
-    async def _retrieve_chunks(self, query: str, k: int) -> list[dict[str, Any]]:
-        return await self.corpus.retriever.retrieve(query, k)
+    async def _retrieve_chunks(
+        self, query: str, k: int, filters: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        retrieve = self.corpus.retriever.retrieve
+        try:
+            return await retrieve(query, k, filters=filters)
+        except TypeError:
+            return await retrieve(query, k)
 
     async def _retrieve_file(self, query: str, k: int) -> list[dict[str, Any]]:
         sources = list(self.corpus.documents_by_source().keys())
@@ -133,9 +139,16 @@ class AgenticRetriever(Retriever):
             return hits
         return [c.as_result(score=1.0) | {"retrieval_mode": "file"} for c in chunks[:k]]
 
-    async def retrieve(self, query: str, k: int) -> list[dict[str, Any]]:
+    async def retrieve(
+        self,
+        query: str,
+        k: int,
+        filters: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         k = max(1, int(k))
         fetch = int(self.fetch_k) if self.fetch_k else max(k * 4, k)
+        if filters:
+            fetch = max(fetch * 3, k * 8)
         queries = await self.rewriter.rewrite(query)
         if not queries:
             queries = [query]
@@ -146,16 +159,19 @@ class AgenticRetriever(Retriever):
             if mode == "file":
                 hits = await self._retrieve_file(q, fetch)
             else:
-                hits = await self._retrieve_chunks(q, fetch)
+                hits = await self._retrieve_chunks(q, fetch, filters=filters)
             for h in hits:
                 h.setdefault("retrieval_mode", mode)
                 h.setdefault("corpus", self.corpus.name)
             groups.append(hits)
 
         merged = _merge_hits(groups, k=fetch) if len(groups) > 1 else (groups[0][:fetch] if groups else [])
+        if filters:
+            from loomable.retrieval.metadata import matches_filters
+
+            merged = [h for h in merged if matches_filters(h, filters)]
         ranked = await self.reranker.rerank(query, merged, top_n=k)
         compressed = await self.compressor.compress(query, ranked)
-        # Ensure citation-friendly fields
         out: list[dict[str, Any]] = []
         for hit in compressed[:k]:
             row = dict(hit)
@@ -212,7 +228,12 @@ class CompositeRetriever(Retriever):
     def infos(self) -> list[dict[str, str]]:
         return [c.corpus.info() for c in self._children.values()]
 
-    async def retrieve(self, query: str, k: int) -> list[dict[str, Any]]:
+    async def retrieve(
+        self,
+        query: str,
+        k: int,
+        filters: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         k = max(1, int(k))
         chosen = await self.router.choose_corpora(query, self.infos())
         if not chosen:
@@ -223,7 +244,10 @@ class CompositeRetriever(Retriever):
             child = self._children.get(name)
             if child is None:
                 continue
-            hits = await child.retrieve(query, per)
+            try:
+                hits = await child.retrieve(query, per, filters=filters)
+            except TypeError:
+                hits = await child.retrieve(query, per)
             groups.append(hits)
         return _merge_hits(groups, k=k)
 
@@ -241,6 +265,7 @@ async def build_agentic_retriever(
     persist_path: Any | None = None,
     base_mode: str = "hybrid",
     vector_weight: float = 0.7,
+    metadata: dict | None = None,
     # agentic stages (all pluggable)
     mode: str | Any = "auto",
     rewrite: str | Any | None = "off",
@@ -295,6 +320,7 @@ async def build_agentic_retriever(
             persist_path=persist_path,
             base_mode=base_mode,
             vector_weight=vector_weight,
+            metadata=metadata,
         )
 
     return AgenticRetriever(
