@@ -1,7 +1,10 @@
-"""Team inherits ``knowledge_base=`` onto members (high-level API).
+"""Team inherits ``knowledge_base=`` — members are Agents, not parse steps.
 
-``Team``, ``Case``, ``Workflow``, and ``Flow`` take the same ``knowledge_base=``
-kwarg as ``Agent``. Members without their own KB get the shared search tools.
+``Team`` / ``Workflow`` / ``Case`` take the same ``knowledge_base=`` as ``Agent``.
+Members without their own KB get the shared search tools.
+
+For pipelines, prefer ``Team(mode="sequential")`` or ``Workflow.step(...)`` with
+Agents — each Agent already reads the prior Agent's output. No glue parsers.
 
 Run::
 
@@ -28,24 +31,33 @@ async def main() -> None:
     docs = ROOT / "policy.md"
     docs.write_text("# Ship policy\n\nNever ship without review.\n", encoding="utf-8")
 
-    member = Agent(
+    researcher = Agent(
         scripted_model(
             [
                 {"tool": "search_knowledge", "args": {"query": "ship review", "k": 2}},
-                "Review required before ship (policy).",
+                "Policy says: never ship without review.",
             ]
         ),
-        role="Reviewer",
+        role="Researcher",
+        goal="Look up ship policy in the knowledge base",
         use_llm_summarizer=False,
         max_tool_iterations=4,
     )
+    # Sequential Team: this Agent receives the researcher's output as input.
+    advisor = Agent(
+        scripted_model([{"echo": "Decision based on prior finding → {input}"}]),
+        role="Advisor",
+        goal="Decide whether we can ship tonight",
+        use_llm_summarizer=False,
+    )
+
     team = Team(
-        [member],
-        model=scripted_model(["unused — broadcast runs members directly"]),
-        mode="broadcast",
+        [researcher, advisor],
+        model=scripted_model(["coordinator unused in hard sequential mode"]),
+        mode="sequential",
         knowledge_base=KnowledgeBase(sources=[docs], name="knowledge"),
     )
-    assert "search_knowledge" in member.build().tool_runtime._tools
+    assert "search_knowledge" in researcher.build().tool_runtime._tools
 
     result = await team.arun("Can we ship tonight?")
     print((result.output.text() or "").strip())

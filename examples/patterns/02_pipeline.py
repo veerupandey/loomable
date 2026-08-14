@@ -3,7 +3,8 @@
 USE WHEN: You have a multi-step workflow where each step's
 output feeds into the next step's input.
 
-Uses the `sequential` flow helper for explicit step ordering.
+Uses the `sequential` flow helper. Each Agent receives the previous
+Agent's output automatically — no parse/glue functions between steps.
 """
 
 import asyncio

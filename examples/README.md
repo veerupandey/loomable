@@ -81,5 +81,7 @@ python examples/advanced/06_agentic_retriever.py   # offline
 5. **High-level Loomable API** — prefer `from loomable import Agent, Team, Workflow, …`.
    Offline demos share `examples/_offline.py` (`scripted_model`) so examples are not
    full of kernel `ModelRequest` / `ToolCall` boilerplate. Live demos use a provider.
-   Exam / stress scripts under `escalation_war_room/` and long deep-agent gates may
-   dig deeper on purpose.
+6. **Agents understand prior output** — put `Agent`s on `Workflow.step` / `sequential` /
+   `Team(mode="sequential")`. Do **not** add glue functions that parse `AgentOutput`
+   between steps; the framework already passes the previous output as the next input.
+   Exam / stress scripts under `escalation_war_room/` may dig deeper on purpose.
