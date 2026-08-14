@@ -1,6 +1,6 @@
 """Live gate — Agent AG-UI SSE over FastAPI (Gemini).
 
-    python 11_agent_agui_sse.py
+    python 12_agent_agui_sse.py
 
 Asserts text/event-stream with RUN_STARTED → TEXT_* → RUN_FINISHED.
 """

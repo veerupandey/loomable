@@ -106,11 +106,14 @@ agent = Agent(model=GeminiProvider(), knowledge_base=["./handbook.pdf", "./runbo
 Composable memory:
 
 ```python
-from loomable import Agent, ConversationMemory, Memory, UserMemory, open_session_store
+from loomable import Agent, ConversationMemory, Memory, UserMemory, open_session_store, open_vector_store
+from loomable.agent import NoteStore
 
+# UserMemory(memory_tool=/auto_extract=) needs note_store= or embedder=
+notes = NoteStore(long_term=open_vector_store(engine="memory"), embedder=embedder)
 memory = Memory.compose(
     conversation=ConversationMemory(store=open_session_store("sqlite", path="sessions.db")),
-    user=UserMemory(auto_extract=True, memory_tool=True),
+    user=UserMemory(note_store=notes, auto_extract=True, memory_tool=True),
 )
 agent = Agent(model=provider, memory=memory, session_id="chat-1", user_id="alice")
 ```
@@ -178,8 +181,10 @@ print(result.metadata["board"])
 ```python
 from loomable import Team
 
+# hard= applies only to broadcast / sequential (default on for those modes)
 team = Team(members=[sre, legal, exec], mode="broadcast", hard=True)
 result = await team.arun(brief)
+# soft LLM orchestration: Team(..., mode="coordinate") or mode="route"
 ```
 
 ## AG-UI SSE
@@ -199,7 +204,8 @@ async for ev in agent.astream_events(prompt):
     print(ev.type)  # RUN_STARTED, TEXT_MESSAGE_CONTENT, TOOL_CALL_*, RUN_FINISHED
 ```
 
-Prefer AG-UI SSE (`/run/events`). NDJSON at `POST /run/stream` remains for simple stream clients.
+Prefer AG-UI SSE (`/run/events`). NDJSON at `POST /run/stream` is **Agent-only**
+(requires `astream`); `mount_case` does not register it.
 
 ## Features
 
@@ -209,13 +215,14 @@ Prefer AG-UI SSE (`/run/events`). NDJSON at `POST /run/stream` remains for simpl
 | **Tool-use loop** | Automatic tool iteration until final answer |
 | **Require tools** | Path-constrained side-effect enforcement |
 | **Memory** | `Memory.compose` (conversation / user / knowledge) + compaction |
-| **Knowledge base** | Vector store → `search_*` tools (`knowledge_base=`); optional passive `knowledge=` |
+| **Knowledge base** | Vector store → `search_*` tools (`knowledge_base=`); optional passive `knowledge=` + `embedder=` |
+| **Retrieval builders** | `loomable.retrieval` helpers are experimental; prefer `knowledge_base=` / `retrievers=` on Agent |
 | **Multimodal I/O** | Image / audio / video in and out |
 | **Structured I/O** | Pydantic / dataclass schemas |
 | **Verification** | Same verifier protocol on Agent, Loop, Case |
 | **HITL** | Fluent `confirm=True` + `approve()` + resume |
 | **Checkpoints** | JsonFile / SQLite / in-memory durability |
-| **Team modes** | broadcast / sequential / coordinate (+ hard) |
+| **Team modes** | `broadcast`/`sequential` (hard by default); `coordinate`/`route` (soft) |
 | **Case board** | WorkItems + `STATE_SNAPSHOT` / `STATE_DELTA` |
 | **AG-UI SSE** | Lifecycle, text, tools, nodes, state |
 | **MCP / Skills** | External tool packages |

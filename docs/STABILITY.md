@@ -17,7 +17,8 @@ API. Prefer the high-level path; treat advanced Flow types as an escape hatch.
 | `tool`, `RunResult`, `ContextPolicy`, `spawn_specialist` | DX helpers |
 | `plan_and_execute` | Used by `Workflow.map`; also importable at top level |
 | `JsonFileCheckpointer`, `SQLiteCheckpointer`, `InMemoryCheckpointer`, `PostgresCheckpointer` | Durability |
-| `loomable.serve.mount_agent` / `mount_case` | AG-UI HTTP + SSE (optional `api_key=`) |
+| `loomable.serve.mount_agent` / `mount_case` | AG-UI HTTP + SSE (optional `api_key=`); NDJSON `/run/stream` on Agent only |
+| `Agent(knowledge_base=)` / `create_deep_agent(knowledge_base=)` | Vector-DB knowledge base + optional `retrievers=` |
 | Bundled skills via `resolve_skills` / `list_bundled_skills` | Progressive skills |
 
 ## Advanced escape hatch (not primary DX)
@@ -40,7 +41,6 @@ API. Prefer the high-level path; treat advanced Flow types as an escape hatch.
 | Bundled `browser` skill | Assumes Lightpanda (or compatible) MCP |
 | `loomable.codeindex` / `CodeTools` / `profile="code"` | Deep code; Alibaba zvec by default |
 | `loomable.retrieval` | Framework RAG; pluggable agentic stages |
-| `Agent(knowledge_base=)` / `create_deep_agent(knowledge_base=)` | Vector-DB knowledge base + optional `retrievers=` |
 | `AgenticRetriever` / `CompositeRetriever` | Rewrite / route / rerank / multi-corpus |
 | `FaissVectorBackend` / `open_vector_store(engine="faiss")` | Optional FAISS CPU/GPU ANN |
 | Agent L3 / `LongTermStore()` | Defaults to Alibaba zvec at `.loomable/memory_zvec` |

@@ -42,7 +42,7 @@ def sequential(
     checkpointer: Any = None,
     events: Any = None,
 ) -> Flow:
-    """Create a Flow that runs steps sequentially (replaces Pipeline).
+    """Create a Flow that runs steps sequentially.
 
     Prefer :class:`~loomable.flow.workflow.Workflow` for new code::
 
