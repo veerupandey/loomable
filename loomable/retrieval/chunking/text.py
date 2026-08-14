@@ -41,12 +41,17 @@ class TextChunker:
             if len(para) <= self.max_chars:
                 buf = para
             else:
-                # hard-split long paragraph
+                # Hard-split long paragraph. Advance by (max_chars - overlap)
+                # and stop at EOF so we never emit 1-char-step shards.
                 start = 0
-                while start < len(para):
-                    end = min(len(para), start + self.max_chars)
+                n = len(para)
+                while start < n:
+                    end = min(n, start + self.max_chars)
                     blocks.append(para[start:end])
-                    start = max(end - self.overlap, start + 1)
+                    if end >= n:
+                        break
+                    nxt = end - self.overlap
+                    start = nxt if nxt > start else end
                 buf = ""
         if buf:
             blocks.append(buf)

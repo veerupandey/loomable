@@ -69,6 +69,8 @@ class VectorRetriever(Retriever):
                     "end_line": row.get("end_line"),
                     "kind": row.get("kind"),
                     "name": row.get("name"),
+                    "page": row.get("page"),
+                    "corpus": row.get("corpus"),
                 }
             )
         return out
