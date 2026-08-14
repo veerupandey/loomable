@@ -476,6 +476,19 @@ async def test_flow_inherits_knowledge_base(tmp_path: Path) -> None:
     assert "visible" in (result.output.text() or "")
 
 
+def _has_live_llm() -> bool:
+    import os
+
+    return bool(
+        os.environ.get("GEMINI_API_KEY")
+        or os.environ.get("GOOGLE_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("ZAI_API_KEY")
+        or os.environ.get("AZURE_OPENAI_API_KEY")
+    )
+
+
+@pytest.mark.skipif(not _has_live_llm(), reason="needs live LLM API key")
 def test_example_07_knowledge_base_runs() -> None:
     import runpy
 
@@ -483,6 +496,7 @@ def test_example_07_knowledge_base_runs() -> None:
     runpy.run_path(str(script), run_name="__main__")
 
 
+@pytest.mark.skipif(not _has_live_llm(), reason="needs live LLM API key")
 def test_example_08_team_knowledge_base_runs() -> None:
     import runpy
 
@@ -490,6 +504,7 @@ def test_example_08_team_knowledge_base_runs() -> None:
     runpy.run_path(str(script), run_name="__main__")
 
 
+@pytest.mark.skipif(not _has_live_llm(), reason="needs live LLM API key")
 def test_example_build_retriever_runs() -> None:
     import runpy
 
@@ -502,6 +517,7 @@ def test_example_build_retriever_runs() -> None:
     runpy.run_path(str(script), run_name="__main__")
 
 
+@pytest.mark.skipif(not _has_live_llm(), reason="needs live LLM API key")
 def test_example_checkpointing_runs() -> None:
     import runpy
 

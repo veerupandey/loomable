@@ -66,10 +66,10 @@ examples/
 # GEMINI_API_KEY=...  or OPENAI_API_KEY / Azure vars
 
 python examples/agents/01_hello_world.py
-python examples/agents/07_knowledge_base.py        # offline, no API key
-python examples/agents/08_team_knowledge_base.py   # offline Team KB inherit
-python examples/advanced/05_build_retriever.py     # offline
-python examples/advanced/06_agentic_retriever.py   # offline
+python examples/agents/07_knowledge_base.py        # live LLM + knowledge_base=
+python examples/agents/08_team_knowledge_base.py   # live Team KB inherit
+python examples/advanced/05_build_retriever.py     # live LLM + retrievers=
+python examples/advanced/03_checkpointing.py       # live Workflow + checkpointer
 ```
 
 ## Design principles
@@ -78,10 +78,8 @@ python examples/advanced/06_agentic_retriever.py   # offline
 2. **Run it, see one clear output**
 3. **Docstring says when to use the pattern**
 4. **Progressive** — unique numeric prefixes; `01` is simplest in each folder
-5. **High-level Loomable API** — prefer `from loomable import Agent, Team, Workflow, …`.
-   Offline demos share `examples/_offline.py` (`scripted_model`) so examples are not
-   full of kernel `ModelRequest` / `ToolCall` boilerplate. Live demos use a provider.
+5. **Live models** — examples call a real provider via `examples/_provider.py`
+   (`GEMINI_API_KEY` / OpenAI / Azure). Copy `.env.example` → `.env`.
 6. **Agents understand prior output** — put `Agent`s on `Workflow.step` / `sequential` /
    `Team(mode="sequential")`. Do **not** add glue functions that parse `AgentOutput`
    between steps; the framework already passes the previous output as the next input.
-   Exam / stress scripts under `escalation_war_room/` may dig deeper on purpose.

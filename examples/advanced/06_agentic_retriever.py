@@ -1,7 +1,9 @@
-"""Pluggable agentic retriever → ``Agent(retrievers=[...])``.
+"""Pluggable agentic retriever → live ``Agent(retrievers=[...])``.
 
-Prefer ``Agent(knowledge_base=store_or_sources)`` when you only need a
-vector-DB search tool. Use this when you want rewrite / rerank / mode routing.
+Prefer ``Agent(knowledge_base=...)`` when you only need vector-DB search.
+Use this when you want rewrite / rerank / mode routing.
+
+Requires a real LLM key — see ``.env.example``.
 
 Run::
 
@@ -14,11 +16,15 @@ import asyncio
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from loomable import Agent, open_vector_store
 from loomable.retrieval import build_agentic_retriever, ingest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _offline import scripted_model  # noqa: E402
+from _provider import require_provider  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent / ".agentic_demo"
 ROOT.mkdir(parents=True, exist_ok=True)
@@ -53,14 +59,10 @@ async def main() -> None:
         compress="off",
     )
     agent = Agent(
-        model=scripted_model(
-            [
-                {"tool": "search_docs", "args": {"query": "OAuth2 login", "k": 2}},
-                "Agentic retrieve complete.",
-            ]
-        ),
+        model=require_provider(),
         retrievers=[retriever],
-        use_llm_summarizer=False,
+        instructions="Use search_docs before answering.",
+        max_tool_iterations=4,
     )
     result = await agent.arun("How do we authenticate?")
     print(result.output.text())
