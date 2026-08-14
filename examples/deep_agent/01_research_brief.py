@@ -132,8 +132,17 @@ class _ScriptedDeepProvider:
 
 
 def _resolve_model() -> ModelSpec | str:
-    if os.environ.get("DEEP_AGENT_LIVE"):
-        # Prefer Gemini, then OpenAI shorthand
+    # Prefer a live provider whenever a key is present; set
+    # DEEP_AGENT_SCRIPTED=1 to force the offline scripted path (CI).
+    live = bool(os.environ.get("DEEP_AGENT_LIVE")) or (
+        not os.environ.get("DEEP_AGENT_SCRIPTED")
+        and bool(
+            os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+        )
+    )
+    if live:
         if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
             from loomable.providers.gemini import GeminiProvider
 
@@ -144,12 +153,13 @@ def _resolve_model() -> ModelSpec | str:
             )
         if os.environ.get("OPENAI_API_KEY"):
             return "openai:gpt-4o-mini"
-        raise SystemExit("DEEP_AGENT_LIVE=1 but no GEMINI_API_KEY/OPENAI_API_KEY set")
+        raise SystemExit("live deep agent requested but no GEMINI_API_KEY/OPENAI_API_KEY set")
     return ModelSpec(provider="scripted", provider_impl=_ScriptedDeepProvider())
 
 
 async def main() -> None:
-    live = bool(os.environ.get("DEEP_AGENT_LIVE"))
+    model = _resolve_model()
+    live = not (isinstance(model, ModelSpec) and model.provider == "scripted")
     agent = create_deep_agent(
         _resolve_model(),
         workspace=ROOT,

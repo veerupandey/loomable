@@ -20,9 +20,11 @@ load_dotenv()
 
 from loomable.agent import Agent, tool, Image
 from loomable.display import pp
-from loomable.providers.openai import AzureOpenAIProvider
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _provider import require_provider  # noqa: E402
 
-provider = AzureOpenAIProvider()
+provider = require_provider()
 
 
 # ============================================================
