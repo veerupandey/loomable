@@ -9,7 +9,7 @@ Happy path (no low-level graph types)::
     from loomable import Agent, Workflow, Step
 
     wf = (
-        Workflow("sev1", session_id="inc-1", checkpointer=cp, memory=True)
+        Workflow("sev1", session_id="inc-1", checkpointer=cp)
         .step("gather", gatherer)
         .parallel(Step("analyst", analyst), Step("visual", visual))
         .branch(when=needs_human, then=approver, else_=auto_close)
@@ -71,6 +71,59 @@ def _wrap_runnable(value: Any, *, default_name: str | None = None) -> Any:
             name = None
         name = str(name) if name else "step"
     return Step(name, value)
+
+
+def _collect_confirm_names(steps: list[Any]) -> list[str]:
+    """Names of steps marked ``confirm=True`` / ``require_confirmation``."""
+    names: list[str] = []
+    for element in steps:
+        if getattr(element, "require_confirmation", False):
+            name = getattr(element, "name", None) or getattr(element, "_name", None)
+            names.append(str(name) if name else "step")
+        nested = getattr(element, "_steps", None)
+        if nested:
+            names.extend(_collect_confirm_names(list(nested)))
+        for attr in ("_then_steps", "_else_steps"):
+            child = getattr(element, attr, None)
+            if child:
+                names.extend(_collect_confirm_names(list(child)))
+        body = getattr(element, "_body", None)
+        if body is not None:
+            names.extend(_collect_confirm_names([body]))
+    return names
+
+
+def _unsupported_confirm_sites(steps: list[Any]) -> list[str]:
+    """HITL sites that compile but never pause (branch / loop / parallel)."""
+    from loomable.flow.condition import Condition
+    from loomable.flow.loop import Loop
+    from loomable.flow.parallel_group import Parallel_Group
+    from loomable.flow.step import Step
+
+    sites: list[str] = []
+    for element in steps:
+        if isinstance(element, Parallel_Group):
+            names = _collect_confirm_names(list(element._steps))
+            if names:
+                sites.append(f"parallel ({', '.join(names)})")
+        elif isinstance(element, Condition):
+            nested: list[Any] = list(element._then_steps or [])
+            nested.extend(element._else_steps or [])
+            names = _collect_confirm_names(nested)
+            if names:
+                sites.append(f"branch ({', '.join(names)})")
+        elif isinstance(element, Loop):
+            body = getattr(element, "_body", None)
+            names = _collect_confirm_names([body] if body is not None else [])
+            if names:
+                sites.append(f"loop ({', '.join(names)})")
+        elif isinstance(element, Step):
+            inner = getattr(element, "_agent", None)
+            if inner is not None and hasattr(inner, "_steps"):
+                sites.extend(_unsupported_confirm_sites(list(inner._steps)))
+        elif type(element).__name__ == "Workflow" and hasattr(element, "_steps"):
+            sites.extend(_unsupported_confirm_sites(list(element._steps)))
+    return sites
 
 
 class Workflow:
@@ -260,6 +313,14 @@ class Workflow:
             elements.append(Step(key, value))
         if not elements:
             raise ValueError("parallel() requires at least one step")
+        for el in elements:
+            if getattr(el, "require_confirmation", False):
+                from loomable.flow.nodes import FlowConfigError
+
+                raise FlowConfigError(
+                    "confirm=True is not supported inside Workflow.parallel(); "
+                    "put HITL on a sequential .step(..., confirm=True) after the group."
+                )
         self._steps.append(Parallel_Group(*elements, name=name))
         self._invalidate()
         return self
@@ -387,6 +448,23 @@ class Workflow:
                     self._steps,
                     require_tools=self._require_tools or None,
                     strict_require_tools=self._strict_require_tools or None,
+                )
+            unsupported = _unsupported_confirm_sites(self._steps)
+            if unsupported:
+                from loomable.flow.nodes import FlowConfigError
+
+                raise FlowConfigError(
+                    "confirm=True is not supported inside Workflow.parallel(), "
+                    ".branch(), or .loop(); put HITL on a sequential "
+                    f".step(..., confirm=True). Found: {'; '.join(unsupported)}"
+                )
+            confirm_names = _collect_confirm_names(self._steps)
+            if confirm_names and (self._checkpointer is None or not self._session_id):
+                from loomable.flow.nodes import FlowConfigError
+
+                raise FlowConfigError(
+                    "confirm=True requires Workflow(..., checkpointer=..., session_id=...); "
+                    f"HITL steps: {', '.join(confirm_names)}"
                 )
             self._compiled_flow = WorkflowCompiler.compile(
                 self._steps,

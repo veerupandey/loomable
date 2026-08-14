@@ -179,6 +179,9 @@ async def spawn_specialist(
     tool_hooks: list[Any] | None = None,
     think_tool: bool = False,
     require_tools: list[str] | None = None,
+    strict_require_tools: bool | None = None,
+    require_confirmation: list[str] | None = None,
+    approver: Any | None = None,
     resilience: Any | None = None,
     tool_timeout: float | None = None,
     tool_concurrency: int | None = None,
@@ -240,6 +243,12 @@ async def spawn_specialist(
         kwargs["tool_hooks"] = tool_hooks
     if require_tools is not None:
         kwargs["require_tools"] = require_tools
+    if strict_require_tools:
+        kwargs["strict_require_tools"] = True
+    if require_confirmation is not None:
+        kwargs["require_confirmation"] = require_confirmation
+    if approver is not None:
+        kwargs["approver"] = approver
     if resilience is not None:
         kwargs["resilience"] = resilience
     if tool_timeout is not None:

@@ -118,6 +118,17 @@ async def test_memory_compose_conversation_and_user_auto_extract() -> None:
     assert agent._memory_tool is True
     assert agent._memory_auto_extract is True
 
+    kwargs = memory.to_agent_kwargs()
+    assert kwargs.get("memory_auto_extract") is True
+    flat = Agent(
+        model=_model(),
+        session_id="compose-flat",
+        user_id="alice",
+        modalities="text",
+        **{k: v for k, v in kwargs.items() if k != "memory"},
+    )
+    assert flat._memory_auto_extract is True
+
     await agent.arun("My name is Alex and I prefer dark mode.")
     # Auto-extract should have written scoped notes
     listed = await agent._note_store.list()

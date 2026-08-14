@@ -186,3 +186,56 @@ async def test_astream_with_tools_preserves_tool_loop() -> None:
     )
     assert "pong-done" in text
     assert "streamed-no-tools" not in text
+
+
+def test_create_deep_agent_case_kwargs_without_mode_raises(tmp_path) -> None:
+    from loomable.agent import create_deep_agent
+
+    with pytest.raises(AgentConfigError, match="mode='case'"):
+        create_deep_agent(
+            _model(),
+            workspace=tmp_path,
+            web_search=False,
+            url_fetch=False,
+            citations=False,
+            images=False,
+            enable_task_tool=False,
+            think_tool=False,
+            use_llm_summarizer=False,
+            modalities="text",
+            checkpointer=object(),
+        )
+
+
+def test_case_from_agent_copies_require_tools_and_hitl() -> None:
+    from loomable.case import Case
+
+    def allow(_call: object) -> bool:
+        return True
+
+    agent = Agent(
+        model=_model(),
+        mode="case",
+        modalities="text",
+        require_tools=["search_docs"],
+        strict_require_tools=True,
+        require_confirmation=["run_python"],
+        approver=allow,
+        max_rounds=1,
+        max_plan_steps=1,
+        board=False,
+    )
+    case = Case.from_agent(agent)
+    rt = case._kwargs.get("agent_runtime") or {}
+    assert rt.get("require_tools") == ["search_docs"]
+    assert rt.get("strict_require_tools") is True
+    assert rt.get("require_confirmation") == ["run_python"]
+    assert rt.get("approver") is allow
+
+
+def test_agent_approver_kwarg_reaches_built_agent() -> None:
+    def allow(_call: object) -> bool:
+        return True
+
+    built = Agent(model=_model(), approver=allow, modalities="text").build()
+    assert built.approver is allow

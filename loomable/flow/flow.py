@@ -432,9 +432,20 @@ class Flow:
                 ctx,
                 **engine_kwargs,
             )
-        except TypeError:
-            # Custom engine doesn't accept checkpoint kwargs — run without them
-            result = await engine.run(optimized_flow, input, state, ctx)
+        except TypeError as exc:
+            unexpected = "unexpected keyword argument" in str(exc)
+            if unexpected and engine_kwargs:
+                if self._checkpointer is not None or pending_decisions is not None:
+                    from loomable.flow.nodes import FlowConfigError
+
+                    raise FlowConfigError(
+                        "This Flow engine does not accept checkpoint/HITL kwargs "
+                        f"({', '.join(engine_kwargs)}). Use the built-in sequential "
+                        "engine, or add those parameters to engine.run()."
+                    ) from exc
+                result = await engine.run(optimized_flow, input, state, ctx)
+            else:
+                raise
         finally:
             if self._active_ctx is ctx:
                 self._active_ctx = None

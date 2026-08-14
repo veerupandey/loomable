@@ -49,6 +49,12 @@
 - `strict_require_tools=True` raises `RequireToolsError` (WR-021)
 - `Workflow(require_tools=...)` / `.step(..., require_tools=)` inherit onto Agent steps (WR-022)
 - Soft `Team(mode="coordinate")` auto-requires `delegate_to_*` and falls back to running skipped members (WR-020)
+- Workflow branch join preserves `AgentOutput` (so `result.output.text()` is the branch text)
+- `Case.from_agent` copies `require_tools` / `strict_require_tools` / `require_confirmation` / `approver`
+- `Agent(approver=)` is applied on `build()`
+- `confirm=True` without `checkpointer=` + `session_id=` raises; HITL is rejected inside `.parallel()` / `.branch()` / `.loop()`
+- `Memory.to_agent_kwargs()` forwards `UserMemory(auto_extract=True)` as `memory_auto_extract`
+- Custom Flow engines with a checkpointer fail loud instead of silently dropping HITL/checkpoint kwargs
 
 ### Removed (greenfield clean — no compatibility shims)
 

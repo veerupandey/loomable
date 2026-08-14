@@ -226,3 +226,23 @@ class TestCustomEngineRunsFlowUnchanged:
         resolved = flow._resolve_engine()
 
         assert resolved is custom_engine
+
+
+@pytest.mark.asyncio
+async def test_custom_engine_with_checkpointer_raises() -> None:
+    from loomable.flow.nodes import FlowConfigError
+    from loomable.persist import InMemoryCheckpointer
+
+    custom_engine = CustomEngine()
+
+    async def step(input):  # noqa: A002
+        return f"done:{input}"
+
+    flow = Flow(
+        [step],
+        engine=custom_engine,
+        checkpointer=InMemoryCheckpointer(),
+        session_id="t1",
+    )
+    with pytest.raises(FlowConfigError, match="checkpoint/HITL"):
+        await flow.arun("x")

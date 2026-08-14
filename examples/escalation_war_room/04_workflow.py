@@ -134,7 +134,6 @@ def build_war_room_workflow(work: Path) -> Workflow:
         Workflow(
             "escalation-war-room",
             session_id="inc-88421-phase1",
-            memory=True,
         )
         .step("gather", gatherer)
         .step("scribe", scribe)
