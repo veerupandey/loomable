@@ -27,6 +27,7 @@ Loomable is a Python framework for production agent systems. One `Runnable` cont
 | **Team** | Specialists (broadcast / sequential / coordinate) |
 | **Workflow** | Durable multi-step process (HITL, checkpoints, SharedState) |
 | **Case** | Goal + WorkItems board + plan → dispatch → accept |
+| **Deep Agent** | Loomable-only long-horizon research harness (beats LangGraph/Agno/Crew deep stacks) |
 | **Flow** | Low-level graph escape hatch |
 
 Everything that runs is a `Runnable`. Agents nest in workflows; cases compile to workflows; workflows stream the same AG-UI events as agents.
