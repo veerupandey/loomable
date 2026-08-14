@@ -30,6 +30,7 @@ from loomable.providers.resilient import RetryPolicy
 __all__ = [
     "DEEP_AGENT_INSTRUCTIONS",
     "DEEP_DISCOVERY_CORE_TOOLS",
+    "DEEP_DISCOVERY_CORE_SLIM",
     "SpecialistSpec",
     "create_deep_agent",
     "create_research_agent",
@@ -75,6 +76,40 @@ DEEP_DISCOVERY_CORE_TOOLS: frozenset[str] = frozenset(
         "plan",
     }
 )
+
+# Schema-budget profile: keep planning + workspace + search/fetch + register_source.
+# Activate verify/claim/bibliography/images/pdf via search_tools when needed.
+DEEP_DISCOVERY_CORE_SLIM: frozenset[str] = frozenset(
+    {
+        "write_todos",
+        "read_todos",
+        "update_todo",
+        "write_file",
+        "read_file",
+        "edit_file",
+        "ls",
+        "grep",
+        "glob",
+        "delete_file",
+        "web_search",
+        "fetch_url",
+        "register_source",
+        "task",
+        "think",
+        "compact_conversation",
+    }
+)
+
+
+def _resolve_discovery_core(
+    discovery_core: str | Sequence[str] | None,
+) -> list[str]:
+    if discovery_core is None or discovery_core == "research":
+        return list(DEEP_DISCOVERY_CORE_TOOLS)
+    if discovery_core == "research-slim":
+        return list(DEEP_DISCOVERY_CORE_SLIM)
+    return [str(x) for x in discovery_core]
+
 
 DEEP_AGENT_INSTRUCTIONS = """\
 You are a loomable deep agent: a long-horizon agent built solely on loomable
@@ -516,6 +551,7 @@ def create_deep_agent(
     enable_task_batch: bool = True,
     task_tools: Sequence[Any] | None = None,
     discovery: bool = True,
+    discovery_core: str | Sequence[str] | None = "research",
     mode: str | None = None,
     dispatch: str = "reuse",
     accept: Any = None,
@@ -546,6 +582,11 @@ def create_deep_agent(
     ``profile="research"`` loads the bundled research skill (any topic) and
     turns on research kits + deliverable gates. Prefer that over a second
     factory — research is a skill, not a separate agent type.
+
+    ``discovery_core`` controls the always-advertised tool allowlist when
+    ``discovery=True`` (default): ``"research"`` (correctness-first),
+    ``"research-slim"`` (smaller schema budget), or an explicit name sequence.
+    Workspace FS is local-only in the beta cut.
     """
     from loomable.skills import resolve_skills
     from loomable.toolkits.citation_tools import CitationTools
@@ -715,7 +756,9 @@ def create_deep_agent(
                 # Specialists share the same (large) research/toolkit surface as
                 # the parent — wire discovery so their schema budget stays small.
                 discovery=discovery if discovery else None,
-                discovery_core_tools=list(DEEP_DISCOVERY_CORE_TOOLS) if discovery else None,
+                discovery_core_tools=(
+                    _resolve_discovery_core(discovery_core) if discovery else None
+                ),
                 defer_local_tools=True if discovery else None,
                 lazy_mcp=agent_kwargs.get("lazy_mcp"),
                 activation_allowlist=agent_kwargs.get("activation_allowlist"),
@@ -758,7 +801,7 @@ def create_deep_agent(
         subagents=subagents,
         skills=resolved_skills,
         discovery=discovery,
-        discovery_core_tools=list(DEEP_DISCOVERY_CORE_TOOLS),
+        discovery_core_tools=_resolve_discovery_core(discovery_core),
         # Progressive skills: metadata in prompt; load_skill for full body.
         # Callers can pass eager_skills=True via agent_kwargs for legacy behavior.
         eager_skills=agent_kwargs.pop("eager_skills", None),
@@ -825,6 +868,14 @@ def create_research_agent(
     ``skills=[\"research\"]``. Research is a **skill** (any topic), not a
     separate agent type — this wrapper stays for back-compat.
     """
+    import warnings
+
+    warnings.warn(
+        "create_research_agent is deprecated; use "
+        "create_deep_agent(..., profile='research') instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     kwargs.pop("profile", None)
     return create_deep_agent(
         model,

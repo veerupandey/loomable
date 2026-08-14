@@ -31,6 +31,7 @@
 ```
 examples/
 ├── agents/
+├── deep_agent/          # create_deep_agent + discovery cookbook + live Gemini gate
 ├── subagents/
 ├── patterns/
 ├── memory/

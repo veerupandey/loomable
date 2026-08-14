@@ -82,17 +82,22 @@ Loomable already has the enterprise spine. We beat them by combining:
       `activate_tool` walk, no network required.
 - [x] **Live Gemini research gate**: `examples/deep_agent/04_live_gemini_gate.py`
       passed (`stop_reason=final`, accept ok, ≥1 source, report written).
-      Schema reduction vs all-eager measured at **17%** with the current
-      research core allowlist (images/PDF deferred); ≥50% remains an optional
-      follow-up (slimmer core profile), not a correctness blocker.
+      Schema reduction vs all-eager measured at **17%** with the default
+      `discovery_core="research"` allowlist (images/PDF deferred).
+- [x] **Slim schema profile**: `discovery_core="research-slim"` ships a smaller
+      always-advertised allowlist (planning + workspace + search/fetch +
+      `register_source` + `task`/`think`). ≥50% schema reduction is the
+      **slim-profile target**; default research core stays correctness-first.
 
 ## Success metrics
 
-- **Schema tokens / turn** on `create_deep_agent(profile=research)` ↓ ≥50% vs all-eager
-  - **Live (2026-08-14, `gemini-flash-latest`)**: advertised **30** / catalog **36**
-    → **17%** schema reduction with the current research core allowlist
-    (images/PDF deferred). Hitting ≥50% needs a slimmer core profile (optional
-    follow-up); correctness gate already green.
+- **Schema tokens / turn** ↓ ≥50% vs all-eager — **slim-profile target**
+  (`create_deep_agent(..., discovery_core="research-slim")`)
+  - **Default research core** (`discovery_core="research"`): correctness-first.
+    **Live (2026-08-14, `gemini-flash-latest`)**: advertised **30** / catalog **36**
+    → **17%** schema reduction (images/PDF deferred). Not a ≥50% gate.
+  - **Slim profile**: fewer always-advertised tools (`DEEP_DISCOVERY_CORE_SLIM`);
+    verify/claim/bibliography activate via `search_tools` when needed.
 - **Live Gemini research brief**: `stop_reason=final`, accept ok, ≥1 cited source —
   **PASS** via `examples/deep_agent/04_live_gemini_gate.py`
   (`DEEP_AGENT_LIVE=1`, ~52s): `accept_ok=true`, `reports/gate.md` written,
