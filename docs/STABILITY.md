@@ -9,12 +9,14 @@ API. Prefer the high-level path; treat advanced Flow types as an escape hatch.
 |---------|--------|
 | `Agent`, `BuiltAgent`, `Team` | Core runnable agents |
 | `Workflow`, `Step`, `Loop`, `Condition`, `Parallel_Group` | Durable multi-step |
-| `Case`, `Board`, `WorkItem` | Goal + WorkItems board |
-| `Memory`, `MemoryScope`, `ConversationMemory`, `UserMemory`, `KnowledgeMemory`, `WorkingMemory`, `open_session_store`, `open_vector_store` | Composable memory + vector store factory |
+| `Verifier`, `VerdictResult`, `FlowPaused` | Loop / HITL helpers |
+| `Case`, `Board`, `WorkItem`, `build_case_workflow`, `map_specialists` | Goal + WorkItems board |
+| `Memory`, `MemoryScope`, `ConversationMemory`, `UserMemory`, `KnowledgeMemory`, `open_session_store`, `open_vector_store` | Composable Agent memory |
+| `WorkingMemory` | Workflow blackboard helper — use `Workflow(memory=True)` / `.store`; **not** for `Agent(memory=...)` |
 | `create_deep_agent` | Long-horizon harness (`profile="research"` / `"code"`) |
 | `tool`, `RunResult`, `ContextPolicy`, `spawn_specialist` | DX helpers |
 | `plan_and_execute` | Used by `Workflow.map`; also importable at top level |
-| Checkpointers (`JsonFile`, `SQLite`, `InMemory`, `Postgres`) | Durability |
+| `JsonFileCheckpointer`, `SQLiteCheckpointer`, `InMemoryCheckpointer`, `PostgresCheckpointer` | Durability |
 | `loomable.serve.mount_agent` / `mount_case` | AG-UI HTTP + SSE (optional `api_key=`) |
 | Bundled skills via `resolve_skills` / `list_bundled_skills` | Progressive skills |
 
@@ -31,6 +33,7 @@ API. Prefer the high-level path; treat advanced Flow types as an escape hatch.
 
 | Surface | Notes |
 |---------|--------|
+| `FlowClass` / `start` / `listen` / `router` | Decorator DSL; prefer `Workflow` — no examples yet |
 | `loomable.kernel.registry.ExtensionRegistry` | Not wired into Agent discovery |
 | `discovery_core="research-slim"` | Schema-budget profile; defaults may shift |
 | `loomable.sandbox` / `ShellTools` / Docker sandbox | Soft isolation; Docker experimental |

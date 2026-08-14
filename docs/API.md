@@ -1258,26 +1258,20 @@ from loomable.flow import SharedState, overwrite, append, merge
 
 ```python
 from loomable.flow import (
-    # Core
-    Runnable, FunctionRunnable,
-    # Tier 2
-    Loop, Verifier, VerdictResult, AlwaysOkVerifier, CallableVerifier,
-    # Tier 3
-    Flow, FlowPlan, Node, Edge, MapNode, RouterNode,
-    # State
+    # Preferred process API
+    Workflow, Step, Condition, Parallel_Group, Loop,
+    Verifier, VerdictResult, AlwaysOkVerifier, CallableVerifier,
+    # Advanced graph escape hatch
+    Flow, FlowPlan, Node, Edge, MapNode, RouterNode, FlowConfigError,
+    FlowClass, start, listen, router,  # experimental decorator DSL
+    # State / engines
     SharedState, Reducer, overwrite, append, merge,
-    # Engines
     ExecutionEngine, SequentialEngine, ParallelEngine, HierarchicalEngine,
-    # Optimizer
     Optimizer, OptimizationRule,
-    # Memory
     MemoryStore, Tier, TieredMemoryStore,
-    # HITL
     FlowPaused,
-    # Observability
     ContextSnapshotConfig, MessageDisposition, MessageSnapshot,
-    # Workflow.map helper
-    plan_and_execute,
+    plan_and_execute,  # used by Workflow.map
 )
 # Advanced Flow helpers: from loomable.flow.helpers import sequential, parallel, ...
 ```
@@ -1668,7 +1662,7 @@ print(mermaid_graph(my_flow))
 
 - **Lean**: no mandatory deps beyond stdlib + httpx; flow-engine adds zero new mandatory dependencies
 - **Decoupled**: every feature is a Protocol with a zero-dep default
-- **Plug-and-play**: swap backends (vector DB, checkpointer, channels) without code changes
+- **Plug-and-play**: swap backends (vector DB, checkpointer) without code changes
 - **Kernel independence**: `loomable.kernel` imports nothing from edge layers; the flow-engine does not modify kernel
 - **Opt-in everything**: unconfigured features have zero overhead
 - **Fault isolation**: one tool/subagent/server failure never cascades

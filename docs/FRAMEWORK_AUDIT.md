@@ -1,6 +1,6 @@
 # Framework audit
 
-Date: 2026-08-13. Case + AG-UI + Postgres pass.
+Date: 2026-08-14. Case + AG-UI + Postgres pass (updated for Memory.compose).
 
 ## Gates
 
@@ -28,15 +28,16 @@ Date: 2026-08-13. Case + AG-UI + Postgres pass.
 
 | API | Role |
 |-----|------|
-| `open_session_store("sqlite"\|"file"\|"postgres"\|"memory")` | L1/L2 via `session_store=` |
-| `Agent(..., memory_backend=...)` | L1/L2 via any `MemoryBackend` |
+| `Memory.compose(conversation=ConversationMemory(store=open_session_store(...)))` | L1/L2 (preferred) |
+| `Memory.compose(user=UserMemory(...))` | L3 notes |
+| `open_session_store("sqlite"\|"file"\|"postgres"\|"memory")` | Session store factory |
 | `PostgresCheckpointer` | Workflow/Case resume |
-| `PgVectorBackend` | L3 vectors for `NoteStore` / `LongTermStore` |
+| `PgVectorBackend` / `LongTermStore()` | L3 vectors |
 
-Custom backends: implement `MemoryBackend` (`read`/`write`/`delete`/`exists`).
+Flat `session_store=` / `memory_backend=` remain available when not using compose.
+Do not pass both `memory=` and flat store kwargs.
 
 ## Notes
 
 - Accept loop re-runs synthesizer only (by design).
-- Case Workflow is sequential (plan → act → accept).
-- `Agent.user_id` + `scopes=` (e.g. `claim_id`) isolate long-term notes via `MemoryScope` / `ScopedNoteStore`. Postgres backends still take their own `user_id=` tenant for L1/L2 KV rows.
+- `WorkingMemory` is for `Workflow(memory=True)` blackboards — not `Agent(memory=...)`.
