@@ -181,7 +181,8 @@ class ZvecVectorBackend:
             # Default HNSW cosine returns similarity (1 = identical, 0 = orthogonal).
             similarity = float(hit.score if hit.score is not None else 0.0)
             orig = str(meta.pop(_ORIG_ID_KEY, hit.id))
-            row = {"id": orig, "score": similarity, **meta}
+            meta.pop("score", None)
+            row = {**meta, "id": orig, "score": similarity}
             out.append(row)
         return out
 

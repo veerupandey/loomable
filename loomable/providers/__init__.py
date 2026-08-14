@@ -25,7 +25,14 @@ Example
 """
 
 from .anthropic import AnthropicProvider
-from .embedders import AzureOpenAIEmbedder, Embedder, OpenAIEmbedder
+from .embedders import (
+    AzureOpenAIEmbedder,
+    Embedder,
+    GeminiEmbedder,
+    HuggingFaceEmbedder,
+    OpenAIEmbedder,
+    embed_many,
+)
 from .errors import PermanentProviderError, TransientProviderError
 from .gemini import GeminiProvider
 from .groq import GroqProvider
@@ -44,6 +51,9 @@ __all__ = [
     "Embedder",
     "OpenAIEmbedder",
     "AzureOpenAIEmbedder",
+    "GeminiEmbedder",
+    "HuggingFaceEmbedder",
+    "embed_many",
     "TransientProviderError",
     "PermanentProviderError",
     "ResilientModel",

@@ -34,13 +34,18 @@ class VectorRetriever(Retriever):
         self._chunks = {c.id: c for c in (chunks or [])}
 
     async def index_chunks(self, chunks: Sequence[Chunk]) -> int:
+        from loomable.providers.embedders import embed_many
+
         n = 0
-        for chunk in chunks:
+        chunk_list = list(chunks)
+        if not chunk_list:
+            return 0
+        texts = [f"{c.name} {c.kind}\n{c.text}" for c in chunk_list]
+        vectors = await embed_many(self.embedder, texts)
+        for chunk, vector in zip(chunk_list, vectors):
             self._chunks[chunk.id] = chunk
-            vector = await self.embedder.embed(
-                f"{chunk.name} {chunk.kind}\n{chunk.text}"
-            )
             meta = chunk.as_result(score=0.0)
+            meta.pop("score", None)  # never persist score into vector metadata
             meta["text"] = chunk.text[:8_000]
             meta["source_type"] = "retrieval"
             await self.store.index(id=chunk.id, vector=vector, metadata=meta)

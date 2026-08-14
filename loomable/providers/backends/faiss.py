@@ -252,7 +252,9 @@ class FaissVectorBackend:
                 if item_id is None:
                     continue
                 meta = dict(self._metadata.get(item_id) or {})
-                out.append({"id": item_id, "score": float(score), **meta})
+                meta.pop("score", None)
+                # score must win over any score stored in metadata at index time
+                out.append({**meta, "id": item_id, "score": float(score)})
             return out
         except MemoryBackendError:
             raise

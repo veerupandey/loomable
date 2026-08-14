@@ -63,6 +63,7 @@ from loomable.retrieval.rerank import (
     IdentityReranker,
     LLMCompressor,
     LLMReranker,
+    MMRReranker,
     ScoreReranker,
 )
 from loomable.retrieval.retrievers import HybridRetriever, LexicalRetriever, VectorRetriever
@@ -117,6 +118,7 @@ __all__ = [
     "HyDERewriter",
     "IdentityReranker",
     "ScoreReranker",
+    "MMRReranker",
     "LLMReranker",
     "IdentityCompressor",
     "LLMCompressor",
