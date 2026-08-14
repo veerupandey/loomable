@@ -204,12 +204,38 @@ class WorkspaceTools(Toolkit):
         """List files and directories in the workspace (virtual filesystem)."""
         return json.dumps({"path": path or "/", "entries": self._store.ls(path)}, indent=2)
 
-    async def _read_file(self, path: str) -> str:
-        """Read a workspace file. Prefer this over stuffing long drafts into chat."""
+    async def _read_file(
+        self,
+        path: str,
+        offset: int = 0,
+        limit: int = 0,
+    ) -> str:
+        """Read a workspace file. Prefer this over stuffing long drafts into chat.
+
+        Optional ``offset`` (0-based line) and ``limit`` (max lines) return a
+        slice — use for offloaded dumps instead of reloading the whole file.
+        """
         data = self._store.read(path)
         if data is None:
             return f"Error: File not found or invalid path: {path}"
-        return data
+        try:
+            off = max(0, int(offset or 0))
+        except (TypeError, ValueError):
+            off = 0
+        try:
+            lim = int(limit or 0)
+        except (TypeError, ValueError):
+            lim = 0
+        if off == 0 and lim <= 0:
+            return data
+        lines = data.splitlines()
+        total = len(lines)
+        if lim > 0:
+            chunk = lines[off : off + lim]
+        else:
+            chunk = lines[off:]
+        header = f"[lines {off + 1}-{off + len(chunk)} of {total}]\n" if off or lim > 0 else ""
+        return header + "\n".join(chunk)
 
     async def _write_file(self, path: str, content: str) -> str:
         """Write/overwrite a workspace file (create parents as needed)."""

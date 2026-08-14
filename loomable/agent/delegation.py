@@ -156,6 +156,9 @@ async def spawn_specialist(
     memory_tool: bool = False,
     knowledge: list[str] | None = None,
     embedder: Any = None,
+    max_tool_iterations: int | None = None,
+    token_budget: int | None = None,
+    max_run_tokens: int | None = None,
 ) -> str:
     """Create an ephemeral specialist Agent, run ``task``, and discard it.
 
@@ -188,6 +191,12 @@ async def spawn_specialist(
         kwargs["knowledge"] = knowledge
     if embedder is not None:
         kwargs["embedder"] = embedder
+    if max_tool_iterations is not None:
+        kwargs["max_tool_iterations"] = max_tool_iterations
+    if token_budget is not None:
+        kwargs["token_budget"] = token_budget
+    if max_run_tokens is not None:
+        kwargs["max_run_tokens"] = max_run_tokens
     agent = Agent(**kwargs)
     result = await agent.arun(task)
     return result.output.text()

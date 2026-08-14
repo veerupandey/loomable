@@ -417,11 +417,11 @@ LangGraph-style long-horizon harness (`create_deep_agent` / `create_research_age
 on top of `Agent` — designed to match and beat langchain-ai/deepagents for research:
 
 1. **Planning** — `TodoTools` (`write_todos` / `read_todos` / `update_todo`)
-2. **Workspace FS** — `WorkspaceTools` (`ls` / `read_file` / `write_file` / `edit_file` / `glob` / `grep`)
-3. **Subagents** — `task` tool with **shared workspace** (plus optional `subagents=` / `mode="case"`)
+2. **Workspace FS** — `WorkspaceTools` (`ls` / `read_file` / `write_file` / `edit_file` / `glob` / `grep`) with sliced reads (`offset`/`limit`)
+3. **Subagents** — `task` tool with **shared workspace** + inherited budgets (plus optional `subagents=` / `mode="case"`)
 4. **Context** — think/plan, `Memory.compose`, LLM summarizer, **large-tool offload** to `.offload/`
-5. **Research defaults** — `WebSearchTools`, `URLTools`, `ImageTools`, `CitationTools`
-6. **Skills / HITL** — `skills=`, `require_confirmation=`
+5. **Research defaults** — `WebSearchTools`, `URLTools` (capped + SSRF guard), `ImageTools`, `CitationTools`
+6. **Skills / HITL** — `skills=`, `require_confirmation=`, `require_tools=`
 
 ```python
 from pathlib import Path
@@ -439,8 +439,10 @@ agent = create_research_agent(
 await agent.arun("Research X and write reports/x.md with citations")
 ```
 
-Defaults: `modalities="text+image"`, `use_llm_summarizer=True`, `max_tool_iterations=40`,
-`token_budget=128000` (Agent default 8192 is too low for research tool loops).
+Industry defaults: `modalities="text+image"`, `use_llm_summarizer=True`,
+`max_tool_iterations=40`, `token_budget=128000` (context window),
+`max_run_tokens=0` (unbounded cumulative spend), `url_max_length=8000`,
+research agents `require_tools=["write_file"]`.
 
 See `examples/deep_agent/` (including `03_live_multimodal_research.py`).
 

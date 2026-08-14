@@ -68,6 +68,9 @@ class RunContext:
     events: AgentEvents = field(default_factory=NoOpEvents)
     max_steps: int = 6
     token_budget: int | None = None
+    #: Cumulative spend stop for the run. ``None`` falls back to ``token_budget``
+    #: (legacy). ``0`` or negative means unbounded spend (industry deep agents).
+    max_run_tokens: int | None = None
     loop_repeat_threshold: int = 3
 
     # --- Flow-engine extensions (additive, defaults preserve existing behavior) ---
@@ -129,10 +132,18 @@ class RunContext:
         self._tokens_used += n
 
     def token_budget_exceeded(self) -> bool:
-        """Return ``True`` when cumulative tokens have reached the budget.
+        """Return ``True`` when cumulative spend has reached the run budget.
 
-        If ``token_budget`` is ``None`` (unbounded), always returns ``False``.
+        Spend limit resolution:
+        - ``max_run_tokens > 0`` → that hard cap
+        - ``max_run_tokens <= 0`` → unbounded (never exceeded)
+        - ``max_run_tokens is None`` → fall back to ``token_budget`` (legacy)
+        - both unset → unbounded
         """
+        if self.max_run_tokens is not None:
+            if self.max_run_tokens <= 0:
+                return False
+            return self._tokens_used >= self.max_run_tokens
         if self.token_budget is None:
             return False
         return self._tokens_used >= self.token_budget
