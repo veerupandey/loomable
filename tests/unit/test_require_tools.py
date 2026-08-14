@@ -488,3 +488,51 @@ async def test_deliverable_complete_forces_final_after_todo_spam() -> None:
     assert "Done" in (result.output.text() or "")
     # Must not burn the full iteration budget.
     assert provider.call_count < 12
+
+
+@pytest.mark.asyncio
+async def test_strict_require_tools_raises_when_still_missing() -> None:
+    from loomable.agent.errors import RequireToolsError
+
+    class _NeverWrite:
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            return ModelResponse(content="done without tools", usage={"input_tokens": 1, "output_tokens": 1})
+
+    agent = Agent(
+        model=ModelSpec(provider="scripted", provider_impl=_NeverWrite()),
+        tools=[write_side_effect],
+        require_tools=["write_side_effect"],
+        strict_require_tools=True,
+        max_tool_iterations=6,
+        modalities="text",
+    )
+    with pytest.raises(RequireToolsError, match="write_side_effect"):
+        await agent.arun("just answer")
+
+
+def test_workflow_require_tools_inherited_by_agent_steps() -> None:
+    from loomable import Workflow
+
+    scribe = Agent(
+        model=ModelSpec(provider="scripted", provider_impl=_SkipWriteThenNudgeProvider()),
+        tools=[write_side_effect],
+        modalities="text",
+    )
+    assert scribe._require_tools == []
+    Workflow("w", require_tools=["write_side_effect"], strict_require_tools=True).step(
+        "scribe", scribe
+    )
+    assert scribe._require_tools == ["write_side_effect"]
+    assert scribe._strict_require_tools is True
+
+
+def test_workflow_step_require_tools_sets_agent() -> None:
+    from loomable import Workflow
+
+    scribe = Agent(
+        model=ModelSpec(provider="scripted", provider_impl=_SkipWriteThenNudgeProvider()),
+        tools=[write_side_effect],
+        modalities="text",
+    )
+    Workflow("w").step("scribe", scribe, require_tools=["write_side_effect:out.txt"])
+    assert scribe._require_tools == ["write_side_effect:out.txt"]

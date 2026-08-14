@@ -232,9 +232,21 @@ def _register_agent_routes(
         return None
 
     def _cancel_agent() -> None:
-        for target in (agent, getattr(agent, "_built", None), getattr(agent, "_agent", None)):
-            if target is None:
+        seen: set[int] = set()
+        targets: list[Any] = [
+            agent,
+            getattr(agent, "_built", None),
+            getattr(agent, "_agent", None),
+            getattr(agent, "_case", None),
+            getattr(agent, "_workflow", None),
+        ]
+        members = getattr(agent, "_members", None)
+        if members:
+            targets.extend(list(members))
+        for target in targets:
+            if target is None or id(target) in seen:
                 continue
+            seen.add(id(target))
             cancel = getattr(target, "cancel", None)
             if callable(cancel):
                 try:

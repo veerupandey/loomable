@@ -933,6 +933,13 @@ class Case:
         result.metadata = meta
         return result
 
+    def cancel(self) -> bool:
+        """Request cooperative cancellation of the in-flight Case workflow."""
+        wf = self._workflow
+        if wf is not None and hasattr(wf, "cancel"):
+            return bool(wf.cancel())
+        return False
+
     def _hydrate_board_from_state(self, shared: Any) -> None:
         if self.board is None or shared is None:
             return

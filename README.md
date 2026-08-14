@@ -205,7 +205,8 @@ async for ev in agent.astream_events(prompt):
 ```
 
 Prefer AG-UI SSE (`/run/events`). NDJSON at `POST /run/stream` is **Agent-only**
-(requires `astream`); `mount_case` does not register it.
+(requires `astream`); `mount_case` does not register it. Disconnect calls
+`cancel()` on Agent, Case, Workflow, and Team.
 
 ## Features
 
@@ -213,7 +214,7 @@ Prefer AG-UI SSE (`/run/events`). NDJSON at `POST /run/stream` is **Agent-only**
 |---------|--------------|
 | **Function tools** | `@tool` — JSON schema from type hints |
 | **Tool-use loop** | Automatic tool iteration until final answer |
-| **Require tools** | Path-constrained side-effect enforcement |
+| **Require tools** | Path-constrained side-effects; `strict_require_tools=True` fail-closed; Workflow inherit |
 | **Memory** | `Memory.compose` (conversation / user / knowledge) + compaction |
 | **Knowledge base** | Vector store → `search_*` tools (`knowledge_base=`); optional passive `knowledge=` + `embedder=` |
 | **Retrieval builders** | `loomable.retrieval` helpers are experimental; prefer `knowledge_base=` / `retrievers=` on Agent |

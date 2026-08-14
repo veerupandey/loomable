@@ -102,6 +102,9 @@ class SequentialEngine:
         last_result: RunResult | None = None
 
         for node_id in order:
+            if context.cancelled:
+                break
+
             # Skip nodes already completed in a previous run (Req 13.2)
             if node_id in completed:
                 continue
@@ -212,6 +215,10 @@ class SequentialEngine:
             plan=getattr(last_result, "plan", None),
             reasoning=list(getattr(last_result, "reasoning", None) or []),
         )
+        if context.cancelled:
+            from loomable.agent.context import StopReason
+
+            final.metadata["stop_reason"] = StopReason.CANCELLED
         return final
 
     # ------------------------------------------------------------------

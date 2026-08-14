@@ -44,7 +44,11 @@
 - `BuiltAgent.astream` falls back to `arun` when tools / complexity router are present (no silent tool skip)
 - Reject unknown `Agent(mode=...)`, invalid `dispatch=`, and case-only `checkpointer=`/`max_rounds=` without `mode="case"`
 - Remove unused `ConversationMemory.scope`; wire `Agent(description=)` into the system prompt
-- Docs honesty: complexity router is opt-in; cancel-on-disconnect is Agent/BuiltAgent; Team has no `scopes=`
+- Docs honesty: complexity router is opt-in; Team has no `scopes=`
+- Cooperative `cancel()` on Workflow / Case / Team / `Agent(mode="case")`; serve disconnect walks those targets
+- `strict_require_tools=True` raises `RequireToolsError` (WR-021)
+- `Workflow(require_tools=...)` / `.step(..., require_tools=)` inherit onto Agent steps (WR-022)
+- Soft `Team(mode="coordinate")` auto-requires `delegate_to_*` and falls back to running skipped members (WR-020)
 
 ### Removed (greenfield clean — no compatibility shims)
 

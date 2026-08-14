@@ -66,8 +66,8 @@ Peers treat **durable state + cancel + budgets** as the demo→prod divide.
 | SSE disconnect | FastAPI disconnect → cancel in-flight run |
 | Cancel tests | Unit + serve integration: stop_reason cancelled |
 | Budget defaults | Document token/step/tool iteration defaults for deep vs simple Agent |
-| Fail-closed option | Opt-in `strict_require_tools` (war-room WR-021) |
-| Team coordinate | Soften LLM-only failure modes or document as best-effort (WR-020) |
+| Fail-closed option | `Agent(strict_require_tools=True)` / `Workflow(strict_require_tools=True)` (WR-021) |
+| Team coordinate | Soft `require_tools` on delegates + deterministic fallback for uncalled members (WR-020) |
 
 ### W3 — Serve / security baseline
 

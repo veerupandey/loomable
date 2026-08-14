@@ -4,11 +4,7 @@ Historical stress findings. Fixed items stay for audit; open items are next work
 
 ## Open
 
-| ID | Issue | Severity |
-|----|-------|----------|
-| WR-020 | Soft Team (`coordinate`) still LLM-dependent for tool counts | P2 |
-| WR-021 | Optional `strict_require_tools` fail-closed mode | P2 |
-| WR-022 | Workflow-level `require_tools` propagation | P2 |
+_None. Stress findings from the war-room exams are closed or promoted into the framework._
 
 ## Fixed
 
@@ -20,3 +16,6 @@ Historical stress findings. Fixed items stay for audit; open items are next work
 | WR-013 | JsonFile approve race | Timestamp refresh on `put` |
 | WR-014 | Plan steps not reaching MapNode | SharedState `state_updates` glue |
 | WR-015 | No Case / board / AG-UI SSE | `Case`, `Board`, `astream_events`, `mount_*` |
+| WR-020 | Soft Team coordinate LLM-only | Auto `require_tools` on delegates + member fallback |
+| WR-021 | No fail-closed require_tools | `strict_require_tools=True` raises `RequireToolsError` |
+| WR-022 | Workflow-level require_tools | `Workflow(require_tools=...)` / `.step(..., require_tools=)` |

@@ -21,13 +21,11 @@
 | Conditional branches | `Workflow.branch` | `advanced/02_workflow_branch.py` |
 | Checkpoint / resume | `Workflow` + `JsonFileCheckpointer` | `advanced/03_checkpointing.py`, `escalation_war_room/05_checkpoint_resume.py` |
 | Multimodal I/O | `Image` / tool media | `advanced/04_multimodal.py` |
-| Build retrievers (docs/code) | `build_retriever` | `advanced/05_build_retriever.py` |
-| Agentic retriever (pluggable) | `ingest` + `build_agentic_retriever` | `advanced/06_agentic_retriever.py` |
-| Ship any Retriever ABC | `Agent(retrievers=[...])` | `advanced/07_ship_any_retriever.py` |
-| Complex multi-format RAG | `Agent(knowledge_base={docs, code})` + Workflow | `advanced/08_complex_agentic_rag.py` |
 | RAG (searchable vector DB) | `knowledge_base=` on Agent / create_deep_agent | `agents/07_knowledge_base.py` |
 | RAG (Team / Workflow inherit KB) | `Team(..., knowledge_base=...)` | `agents/08_team_knowledge_base.py` |
 | RAG (passive snippets) | `knowledge` + embedder | `agents/05_with_knowledge.py` |
+| Complex multi-format RAG | `Agent(knowledge_base={docs, code})` + Workflow | `advanced/08_complex_agentic_rag.py` |
+| Custom retriever builders (experimental) | `build_retriever` / `Agent(retrievers=)` | `advanced/05_build_retriever.py`, `06_agentic_retriever.py`, `07_ship_any_retriever.py` |
 | Production hardening | resilience + hooks | `agents/06_production.py` |
 | Specialists | `Team` / subagents | `subagents/` |
 | Quality gate | Agent verifier / `Workflow.loop` | `patterns/01_retry_loop.py` |

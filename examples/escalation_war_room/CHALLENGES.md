@@ -53,4 +53,6 @@ share the same AG-UI event vocabulary over SSE.
 - Empty final after `write_json` → recover structured from last write
 - HITL only on low-level `Node` → fluent `confirm=True`
 - JsonFileCheckpointer approve race → refresh timestamp on `put`
-- Soft Team flakiness → prefer `hard=True` + broadcast/sequential for SEV rooms
+- Soft Team flakiness → prefer `hard=True` + broadcast/sequential for SEV rooms;
+  `mode="coordinate"` now nudges every `delegate_to_*` and falls back to running
+  skipped members instead of silently finishing coordinator-only

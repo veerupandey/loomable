@@ -606,6 +606,9 @@ class BuiltAgent:
     # Entries may be plain names ("write_file") or path constraints
     # ("write_file:output/brief.md") matched against the tool's path argument.
     require_tools: list[str] = field(default_factory=list)
+    # When True, raise RequireToolsError if required tools are still missing
+    # after nudges (fail-closed). Default is best-effort (metadata only).
+    strict_require_tools: bool = False
 
     # Per-tool timeout and concurrency cap for gated dispatch (Req 2.1–2.4).
     # When set, each tool call in a batch is bounded by asyncio.wait_for and
@@ -2276,6 +2279,10 @@ class BuiltAgent:
         )
         if still_missing:
             metadata["required_tools_missing"] = still_missing
+            if self.strict_require_tools:
+                from loomable.agent.errors import RequireToolsError
+
+                raise RequireToolsError(still_missing)
 
         provider_reasoning: list[str] = []
         if response is not None:
@@ -2886,6 +2893,7 @@ class Agent:
         max_tool_iterations: int | None = None,
         require_final_text: bool = True,
         require_tools: list[str] | None = None,
+        strict_require_tools: bool = False,
         max_delegations: int | None = None,
         max_depth: int = 4,
         # Tiered model routing:
@@ -3044,6 +3052,7 @@ class Agent:
         self._max_tool_iterations = max_tool_iterations
         self._require_final_text = require_final_text
         self._require_tools = list(require_tools) if require_tools else []
+        self._strict_require_tools = bool(strict_require_tools)
         self._max_delegations = max_delegations
         self._max_depth = max_depth
 
@@ -3430,6 +3439,7 @@ class Agent:
             built.max_tool_iterations = self._max_tool_iterations
         built.require_final_text = self._require_final_text
         built.require_tools = list(self._require_tools)
+        built.strict_require_tools = self._strict_require_tools
 
         # --- Wire debug mode: use a console-friendly tracer ---
         if self._debug and self._events is None:
@@ -3560,10 +3570,19 @@ class Agent:
         return result
 
     def cancel(self) -> bool:
-        """Request cooperative cancellation of the active built-agent run."""
+        """Request cooperative cancellation of the active run.
+
+        ``mode="case"`` cancels the underlying Case/Workflow. Otherwise cancels
+        the BuiltAgent tool loop.
+        """
+        hit = False
+        if self._mode == "case" and self._case is not None:
+            cancel = getattr(self._case, "cancel", None)
+            if callable(cancel):
+                hit = bool(cancel()) or hit
         if self._built is not None:
-            return self._built.cancel()
-        return False
+            hit = self._built.cancel() or hit
+        return hit
 
     def run(
         self,
