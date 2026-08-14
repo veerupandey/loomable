@@ -163,6 +163,8 @@ await agent.arun("Research the topic; write reports/brief.md")
 agent = create_deep_agent(model, profile="code", repo="./my-app")
 ```
 
+`arun()` builds the agent. Call `agent.build()` only when you need the `BuiltAgent` (inspect tools, attach listeners).
+
 Planning (`TodoTools`), local workspace FS, `task` / `task_batch` specialists, skills (`load_skill`), discovery (`search_tools` / `activate_tool`). `discovery_core="research-slim"` is experimental. Sandbox: `code_exec=True` / `shell=True`. Case-only kwargs (`dispatch`, `max_rounds`, `checkpointer`) require `mode="case"`. `board=False` is allowed without case mode.
 
 ---

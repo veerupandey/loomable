@@ -11,7 +11,7 @@ from typing import Any, Sequence
 from loomable.codeindex.chunking import CodeChunk, iter_code_chunks
 from loomable.codeindex.embedders import HashingEmbedder
 from loomable.kernel.contracts import VectorBackend
-from loomable.kernel.long_term import LongTermStore
+from loomable.kernel.long_term import InMemoryVectorBackend, LongTermStore
 from loomable.providers.vector_store import open_vector_store  # noqa: F401
 
 
@@ -37,17 +37,30 @@ class CodeHit:
         )
 
 
+def _store_for_index(
+    *, persist_path: str | Path | None, repo_root: Path
+) -> LongTermStore:
+    """Alibaba zvec on disk when installed; in-memory otherwise."""
+    try:
+        import zvec  # noqa: F401
+    except ImportError:
+        return LongTermStore(backend=InMemoryVectorBackend(), backend_name="memory")
+    path = Path(persist_path) if persist_path is not None else repo_root / ".loomable" / "codeindex_zvec"
+    return LongTermStore(path=path, backend_name="zvec")
+
+
 class CodeIndex:
     """Indexed view of a repository for agent code understanding.
 
     Default file store is **Alibaba zvec** (``pip install loomable[zvec]``)
-    under ``persist_path`` or ``<repo>/.loomable/codeindex_zvec``. Pass
-    ``store=`` / ``backend=`` for Postgres (:class:`PgVectorBackend`) or any
+    under ``persist_path`` or ``<repo>/.loomable/codeindex_zvec``. Without zvec
+    the index uses an in-memory store so ``profile="code"`` still runs.
+    Pass ``store=`` / ``backend=`` for Postgres or any
     :class:`~loomable.kernel.contracts.VectorBackend`.
 
     Usage::
 
-        index = await CodeIndex.build("./repo")  # Alibaba zvec on disk
+        index = await CodeIndex.build("./repo")  # zvec when installed
         index = await CodeIndex.build(
             "./repo",
             store=open_vector_store(postgres_url=DSN, dimensions=1536),
@@ -70,11 +83,10 @@ class CodeIndex:
             self.store = store
         elif backend is not None:
             self.store = LongTermStore(backend=backend, backend_name="custom")
-        elif persist_path is not None:
-            self.store = LongTermStore(path=persist_path, backend_name="zvec")
         else:
-            cache = self.root / ".loomable" / "codeindex_zvec"
-            self.store = LongTermStore(path=cache, backend_name="zvec")
+            self.store = _store_for_index(
+                persist_path=persist_path, repo_root=self.root
+            )
         self._chunks: list[CodeChunk] = list(chunks or [])
         self._by_id: dict[str, CodeChunk] = {c.chunk_id: c for c in self._chunks}
 

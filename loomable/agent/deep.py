@@ -738,6 +738,8 @@ def create_deep_agent(
                     resolved_index.repo_map(max_entries=60),
                     *resolved_index.as_knowledge(max_chunks=12),
                 ]
+                if embedder is None:
+                    embedder = resolved_index.embedder
         except Exception as exc:  # noqa: BLE001
             missing.append(f"code_tools ({exc})")
             logger.warning("create_deep_agent: CodeTools unavailable: %s", exc)
