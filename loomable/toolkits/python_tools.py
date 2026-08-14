@@ -6,8 +6,6 @@ Executes Python via a :class:`~loomable.sandbox.types.Sandbox` (default:
 
 from __future__ import annotations
 
-from typing import Any
-
 from loomable.agent.tools import FunctionTool
 from loomable.sandbox import SubprocessSandbox
 from loomable.sandbox.types import Sandbox

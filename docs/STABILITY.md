@@ -33,6 +33,7 @@ the declared scope. Breaking changes are rare and require a deprecation note in
 | `discovery_core="research-slim"` | Schema-budget profile; defaults may shift |
 | `loomable.sandbox` / `ShellTools` / Docker sandbox | Soft isolation; Docker experimental |
 | Bundled `browser` skill | Assumes Lightpanda (or compatible) MCP |
+| `loomable.codeindex` / `CodeTools` / `profile="code"` | Deep code; zvec default, pluggable store |
 
 ## Beta limits
 

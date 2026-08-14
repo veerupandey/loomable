@@ -15,6 +15,7 @@ Usage::
 
 from loomable.toolkits._base import Toolkit
 from loomable.toolkits.citation_tools import CitationStore, CitationTools
+from loomable.toolkits.code_tools import CodeTools
 from loomable.toolkits.file_tools import FileTools
 from loomable.toolkits.image_tools import ImageTools
 from loomable.toolkits.python_tools import PythonTools
@@ -44,6 +45,7 @@ __all__ = [
     "Toolkit",
     "CitationTools",
     "CitationStore",
+    "CodeTools",
     "FileTools",
     "ImageTools",
     "PDFTools",

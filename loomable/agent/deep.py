@@ -31,6 +31,7 @@ __all__ = [
     "DEEP_AGENT_INSTRUCTIONS",
     "DEEP_DISCOVERY_CORE_TOOLS",
     "DEEP_DISCOVERY_CORE_SLIM",
+    "DEEP_DISCOVERY_CORE_CODE",
     "SpecialistSpec",
     "create_deep_agent",
     "create_research_agent",
@@ -100,6 +101,32 @@ DEEP_DISCOVERY_CORE_SLIM: frozenset[str] = frozenset(
     }
 )
 
+# Deep-code profile: planning + workspace + code nav + sandbox exec.
+DEEP_DISCOVERY_CORE_CODE: frozenset[str] = frozenset(
+    {
+        "write_todos",
+        "read_todos",
+        "update_todo",
+        "write_file",
+        "read_file",
+        "edit_file",
+        "ls",
+        "grep",
+        "glob",
+        "delete_file",
+        "repo_map",
+        "code_search",
+        "find_symbol",
+        "run_python",
+        "run_python_file",
+        "run_shell",
+        "task",
+        "task_batch",
+        "think",
+        "compact_conversation",
+    }
+)
+
 
 def _resolve_discovery_core(
     discovery_core: str | Sequence[str] | None,
@@ -108,6 +135,8 @@ def _resolve_discovery_core(
         return list(DEEP_DISCOVERY_CORE_TOOLS)
     if discovery_core == "research-slim":
         return list(DEEP_DISCOVERY_CORE_SLIM)
+    if discovery_core == "code":
+        return list(DEEP_DISCOVERY_CORE_CODE)
     return [str(x) for x in discovery_core]
 
 
@@ -528,6 +557,8 @@ def create_deep_agent(
     embedder: Any = None,
     skills: Sequence[str | Path] | None = None,
     profile: str = "general",
+    repo: str | Path | None = None,
+    code_index: Any | None = None,
     user_id: str | None = None,
     scopes: dict[str, str] | None = None,
     require_confirmation: list[str] | None = None,
@@ -586,10 +617,15 @@ def create_deep_agent(
     turns on research kits + deliverable gates. Prefer that over a second
     factory — research is a skill, not a separate agent type.
 
+    ``profile="code"`` loads the ``coding`` skill, indexes ``repo=`` (zvec
+    :class:`~loomable.codeindex.CodeIndex`), attaches :class:`~loomable.toolkits.CodeTools`,
+    and enables sandbox ``code_exec`` / ``shell``. Pass a prebuilt
+    ``code_index=`` or a custom embedder/store via :meth:`CodeIndex.build`.
+
     ``discovery_core`` controls the always-advertised tool allowlist when
     ``discovery=True`` (default): ``"research"`` (correctness-first),
-    ``"research-slim"`` (smaller schema budget), or an explicit name sequence.
-    Workspace FS is local-only in the beta cut.
+    ``"research-slim"`` (smaller schema budget), ``"code"`` (nav + sandbox),
+    or an explicit name sequence. Workspace FS is local-only in the beta cut.
 
     ``code_exec`` / ``shell`` attach :class:`~loomable.toolkits.PythonTools` /
     :class:`~loomable.toolkits.ShellTools` on a shared sandbox (default
@@ -604,8 +640,10 @@ def create_deep_agent(
     from loomable.toolkits.workspace_tools import WorkspaceTools
 
     profile_key = (profile or "general").strip().lower()
-    if profile_key not in {"general", "research"}:
-        raise ValueError(f"profile must be 'general' or 'research', got {profile!r}")
+    if profile_key not in {"general", "research", "code"}:
+        raise ValueError(
+            f"profile must be 'general', 'research', or 'code', got {profile!r}"
+        )
 
     skill_list = list(skills or [])
     if profile_key == "research" and "research" not in {
@@ -613,6 +651,11 @@ def create_deep_agent(
         for s in skill_list
     }:
         skill_list.append("research")
+    if profile_key == "code" and "coding" not in {
+        str(s).strip().lower() if not isinstance(s, Path) else s.name.lower()
+        for s in skill_list
+    }:
+        skill_list.append("coding")
     resolved_skills = resolve_skills(skill_list) or None
 
     # Research profile defaults (caller kwargs still win via explicit args below).
@@ -631,6 +674,26 @@ def create_deep_agent(
                 "analyze images, deliver briefs under reports/"
             )
 
+    if profile_key == "code":
+        # Deep-code defaults: sandbox on, code discovery core, lighter research kits.
+        code_exec = True
+        shell = True
+        if discovery_core == "research":
+            discovery_core = "code"
+        web_search = False if web_search is True else web_search
+        url_fetch = False if url_fetch is True else url_fetch
+        citations = False if citations is True else citations
+        if images is None:
+            images = False
+        if name == "deep-agent":
+            name = "code-agent"
+        if goal == "Complete hard, long-horizon tasks with planning and delegation":
+            goal = (
+                "Understand and change the target codebase: map, search, "
+                "edit, and verify with sandboxed tests"
+            )
+        modalities = "text" if modalities == "text+image" else modalities
+
     root = Path(workspace)
     root.mkdir(parents=True, exist_ok=True)
 
@@ -647,6 +710,39 @@ def create_deep_agent(
         shared_for_task.append(citation_kit)
 
     missing: list[str] = []
+
+    # Deep code: index repo (zvec by default) and attach CodeTools.
+    resolved_index = code_index
+    if resolved_index is None and repo is not None:
+        try:
+            from loomable.codeindex import CodeIndex
+
+            persist = root / ".loomable" / "codeindex.zvec.json"
+            resolved_index = CodeIndex.build_sync(
+                repo,
+                embedder=embedder,
+                persist_path=persist,
+            )
+        except Exception as exc:  # noqa: BLE001
+            missing.append(f"code_index ({exc})")
+            logger.warning("create_deep_agent: CodeIndex build failed: %s", exc)
+            resolved_index = None
+    if resolved_index is not None:
+        try:
+            from loomable.toolkits.code_tools import CodeTools
+
+            code_kit = CodeTools(resolved_index)
+            bundled.append(code_kit)
+            shared_for_task.append(CodeTools(resolved_index))
+            # Seed knowledge with a compact map if caller did not pass knowledge.
+            if knowledge is None:
+                knowledge = [
+                    resolved_index.repo_map(max_entries=60),
+                    *resolved_index.as_knowledge(max_chunks=12),
+                ]
+        except Exception as exc:  # noqa: BLE001
+            missing.append(f"code_tools ({exc})")
+            logger.warning("create_deep_agent: CodeTools unavailable: %s", exc)
 
     if web_search:
         try:
