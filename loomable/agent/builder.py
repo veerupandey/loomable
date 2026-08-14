@@ -153,6 +153,14 @@ def _input_text(agent_input: AgentInput) -> str:
     return "".join(pieces)
 
 
+def _is_run_context(value: Any) -> bool:
+    """True when ``value`` is a Flow/Workflow :class:`~loomable.agent.context.RunContext`."""
+    if value is None or isinstance(value, dict):
+        return False
+    # Duck-type to avoid import cycles with flow engines.
+    return hasattr(value, "shared_state") and hasattr(value, "memory")
+
+
 # ---------------------------------------------------------------------------
 # Media coercion dispatch (Req 3.1–3.5, 4.1–4.2)
 # ---------------------------------------------------------------------------
@@ -2884,6 +2892,39 @@ class Agent:
     # Run flow (high-level wrappers delegating to BuiltAgent)
     # ------------------------------------------------------------------
 
+    def bind_session(self, session_id: str | None, *, resume: bool | None = None) -> None:
+        """Bind a client ``session_id`` for L1/L2 (and Case checkpoints).
+
+        Same idea as :meth:`loomable.case.Case.bind_session`: HTTP/stream callers
+        change the conversation thread without reconstructing the Agent.
+
+        When ``resume`` is omitted, auto-resumes if ``session_store`` /
+        ``memory_backend`` already has that id; otherwise starts a fresh session
+        on the next :meth:`build`. Requires an explicit durable store for chat
+        history to survive across process requests (default in-memory SQLite is
+        per build).
+        """
+        if not session_id:
+            return
+        changed = session_id != self._session_id
+        self._session_id = session_id
+        if self._case is not None and hasattr(self._case, "bind_session"):
+            self._case.bind_session(session_id)
+
+        if resume is not None:
+            self._resume = bool(resume)
+        else:
+            self._resume = False
+            try:
+                store = self._resolve_session_store()
+                store.resume(session_id)
+                self._resume = True
+            except Exception:  # noqa: BLE001 — missing session → create on build
+                self._resume = False
+
+        if changed or self._built is not None:
+            self._built = None
+
     def _get_built(self) -> BuiltAgent:
         """Build the agent once and cache it for subsequent runs."""
         if self._built is None:
@@ -2898,7 +2939,7 @@ class Agent:
         videos: "list[str | Path | Any] | None" = None,
         audio: "list[str | Path | Any] | None" = None,
         output_schema: type | None = None,
-        context: dict[str, Any] | None = None,
+        context: "Any | None" = None,
     ) -> RunResult:
         """Build (once) and run the agent, returning a :class:`RunResult` (Req 1.4).
 
@@ -2915,7 +2956,9 @@ class Agent:
         output_schema:
             Optional per-call structured output schema (overrides response_model).
         context:
-            Optional runtime context dict accessible during the run.
+            Optional :class:`~loomable.agent.context.RunContext` (Flow/Workflow)
+            or a plain dict. RunContext is forwarded so Agent-in-Flow behaves
+            like a standalone BuiltAgent run.
         """
         # Case mode: plan → dispatch → synthesize → accept.
         if self._mode == "case":
@@ -2929,7 +2972,15 @@ class Agent:
         built = self._get_built()
         # Use response_model as default output_schema when not overridden per-call
         schema = output_schema or self._response_model
-        result = await built.arun(input, images=images, videos=videos, audio=audio, output_schema=schema)
+        run_ctx = context if _is_run_context(context) else None
+        result = await built.arun(
+            input,
+            images=images,
+            videos=videos,
+            audio=audio,
+            output_schema=schema,
+            context=run_ctx,
+        )
         # Lifecycle callback: on_complete
         if self._on_complete is not None:
             self._on_complete(result)
@@ -2971,28 +3022,38 @@ class Agent:
         videos: "list[str | Path | Any] | None" = None,
         audio: "list[str | Path | Any] | None" = None,
         output_schema: type | None = None,
-        context: dict[str, Any] | None = None,
+        context: "Any | None" = None,
+        session_id: str | None = None,
     ) -> "AsyncIterator[Any]":
         """Yield AG-UI-compatible stream events (lifecycle, tools, text).
 
         When ``mode="case"``, streams Case pipeline events.
         """
+        if session_id:
+            self.bind_session(session_id)
+
         if self._mode == "case":
             case = self._get_case()
             text = self._coerce_run_text(input)
-            async for event in case.astream_events(text):
+            async for event in case.astream_events(text, session_id=session_id):
                 yield event
             return
 
         built = self._get_built()
         schema = output_schema or self._response_model
-        async for event in built.astream_events(
-            input,
-            images=images,
-            videos=videos,
-            audio=audio,
-            output_schema=schema,
-        ):
+        kwargs: dict[str, Any] = {
+            "images": images,
+            "videos": videos,
+            "audio": audio,
+            "output_schema": schema,
+        }
+        # BuiltAgent.astream_events may not take context yet — only pass if supported.
+        import inspect
+
+        params = inspect.signature(built.astream_events).parameters
+        if "context" in params and _is_run_context(context):
+            kwargs["context"] = context
+        async for event in built.astream_events(input, **kwargs):
             yield event
 
     def _coerce_run_text(self, value: Any) -> str:

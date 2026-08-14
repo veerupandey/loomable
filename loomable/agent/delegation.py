@@ -152,6 +152,10 @@ async def spawn_specialist(
     instructions: str | None = None,
     tools: list[Any] | None = None,
     modalities: str | None = None,
+    note_store: Any | None = None,
+    memory_tool: bool = False,
+    knowledge: list[str] | None = None,
+    embedder: Any = None,
 ) -> str:
     """Create an ephemeral specialist Agent, run ``task``, and discard it.
 
@@ -162,6 +166,9 @@ async def spawn_specialist(
             role="Cert Auditor",
             task="Review CHG-55219 for pool saturation risk",
         )
+
+    Optional L3 kwargs (``note_store`` / knowledge) match Agent so Case spawn
+    dispatch shares long-term memory with the parent Case.
     """
     from .builder import Agent
 
@@ -174,6 +181,13 @@ async def spawn_specialist(
     }
     if modalities is not None:
         kwargs["modalities"] = modalities
+    if note_store is not None:
+        kwargs["note_store"] = note_store
+        kwargs["memory_tool"] = memory_tool
+    if knowledge is not None:
+        kwargs["knowledge"] = knowledge
+    if embedder is not None:
+        kwargs["embedder"] = embedder
     agent = Agent(**kwargs)
     result = await agent.arun(task)
     return result.output.text()

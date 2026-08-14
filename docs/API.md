@@ -614,6 +614,27 @@ Agent
 
 `resume=True` means “this session row must already exist.” First turn: omit it (or create the session). Later Agents: pass `resume=True`.
 
+### Same kwargs on Team / Case / Agent-in-Flow
+
+| Surface | Conversation L1/L2 | Long-term L3 | Notes |
+|---------|--------------------|--------------|-------|
+| **Agent** | `session_store` / `memory_backend` | `note_store` / `knowledge` | Canonical API |
+| **Team** | Same kwargs → **coordinator** Agent | Same → coordinator | Members keep the memory you gave each member Agent |
+| **Case** | Same kwargs → default planner/worker/synth (role-scoped `session_id`) | Shared `note_store` / knowledge | `Case.from_agent` copies Agent memory; `checkpointer` stays separate |
+| **Flow / Workflow step** | Agent’s own store | Agent’s own `note_store` | `Flow(memory=True)` is TieredMemory (blackboard), **not** Agent chat |
+| **mount_agent** | `bind_session(session_id)` reloads L1/L2 when a durable store is set | unchanged | Same bind path as Case checkpoints |
+
+```python
+# Team — identical memory knobs as Agent (on the coordinator)
+Team(members, model=..., session_store=store, note_store=notes, memory_tool=True)
+
+# Case — identical knobs; roles get session_id "{id}:planner" etc.
+Case(model=..., session_id="c1", session_store=store, note_store=notes, memory_tool=True)
+
+# Flow — wrap Agents that already have memory configured
+wf.step("research", Agent(model=..., session_id="r1", session_store=store))
+```
+
 ### Minimal chat (same process)
 
 ```python
