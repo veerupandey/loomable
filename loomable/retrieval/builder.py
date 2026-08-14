@@ -8,7 +8,7 @@ from typing import Any, Sequence
 
 from loomable.codeindex.embedders import HashingEmbedder
 from loomable.kernel.contracts import Retriever, VectorBackend
-from loomable.kernel.long_term import LongTermStore
+from loomable.kernel.long_term import InMemoryVectorBackend, LongTermStore
 from loomable.retrieval.chunking.base import ChunkStrategy, resolve_strategy
 from loomable.retrieval.ingest import load_sources
 from loomable.retrieval.retrievers import HybridRetriever, LexicalRetriever, VectorRetriever
@@ -51,7 +51,8 @@ def _make_store(
         return LongTermStore(backend=backend, backend_name="custom")
     if persist_path is not None:
         return LongTermStore(path=persist_path, backend_name="zvec")
-    return LongTermStore()  # in-memory (no Alibaba zvec required)
+    # Ephemeral retrieval corpus — not agent L3; keep zero-dep in-memory.
+    return LongTermStore(backend=InMemoryVectorBackend(), backend_name="memory")
 
 
 async def build_retriever(

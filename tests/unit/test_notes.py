@@ -7,7 +7,7 @@ import json
 import pytest
 
 from loomable.agent.notes import Note, NoteStore, make_memory_tool
-from loomable.kernel.long_term import LongTermStore
+from loomable.kernel.long_term import LongTermStore, open_vector_store
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +35,7 @@ def embedder() -> FakeEmbedder:
 
 @pytest.fixture
 def long_term_store() -> LongTermStore:
-    return LongTermStore()  # in-memory (no Alibaba zvec required)
+    return open_vector_store(engine="memory")  # in-memory (no Alibaba zvec required)
 
 
 @pytest.fixture

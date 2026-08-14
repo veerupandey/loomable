@@ -1,10 +1,10 @@
 """loomable.kernel.long_term - Long-Term Store with pluggable vector backend.
 
-Default **file** backend is Alibaba **zvec** (``pip install loomable[zvec]``).
-Pass ``backend=`` / ``engine=`` for Postgres, FAISS (CPU/GPU), or any object
-satisfying :class:`~loomable.kernel.contracts.VectorBackend`.
+**Default (agent memory L3):** Alibaba **zvec** on disk under
+``.loomable/memory_zvec`` (``pip install loomable[zvec]``).
 
-Zero-dependency tests / ephemeral use: :class:`InMemoryVectorBackend`.
+Swap with ``backend=`` / ``open_vector_store(engine=...)`` for FAISS, Postgres,
+or in-memory tests.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from loomable.kernel.errors import MemoryBackendError
 from loomable.kernel.zvec_backend import ZvecVectorBackend
 
 __all__ = [
+    "DEFAULT_ZVEC_PATH",
     "InMemoryVectorBackend",
     "LongTermStore",
     "ZvecVectorBackend",
@@ -27,11 +28,14 @@ __all__ = [
 EngineKind = Literal["zvec", "faiss", "postgres", "memory"]
 FaissDevice = Literal["cpu", "gpu", "auto"]
 
+# Default on-disk Alibaba zvec collection for agent L3 notes / LongTermStore().
+DEFAULT_ZVEC_PATH = Path(".loomable") / "memory_zvec"
+
 
 class InMemoryVectorBackend:
     """Simple in-process cosine store (tests / no optional deps).
 
-    Not for production corpora — use :class:`ZvecVectorBackend` (Alibaba zvec),
+    Not the product default — use :class:`ZvecVectorBackend` (Alibaba zvec),
     :class:`~loomable.providers.backends.faiss.FaissVectorBackend`, or
     :class:`~loomable.providers.backends.postgres.PgVectorBackend`.
     """
@@ -63,9 +67,9 @@ class LongTermStore:
     """Long-term memory store backed by a pluggable VectorBackend.
 
     Resolution order:
-    1. Explicit ``backend=`` (Postgres, custom, …)
-    2. ``path=`` → Alibaba :class:`ZvecVectorBackend` (file-based)
-    3. else → :class:`InMemoryVectorBackend`
+    1. Explicit ``backend=`` (FAISS, Postgres, in-memory, custom, …)
+    2. ``path=`` → Alibaba :class:`ZvecVectorBackend` at that directory
+    3. else → Alibaba zvec at :data:`DEFAULT_ZVEC_PATH` (``.loomable/memory_zvec``)
     """
 
     def __init__(
@@ -83,8 +87,8 @@ class LongTermStore:
             self.backend = ZvecVectorBackend(path, dimensions=dimensions)
             self.backend_name = "zvec"
         else:
-            self.backend = InMemoryVectorBackend()
-            self.backend_name = "memory" if backend_name == "zvec" else backend_name
+            self.backend = ZvecVectorBackend(DEFAULT_ZVEC_PATH, dimensions=dimensions)
+            self.backend_name = "zvec"
 
     async def index(self, id: str, vector: list[float], metadata: dict[str, Any]) -> None:
         try:
@@ -136,20 +140,19 @@ def open_vector_store(
     device: FaissDevice = "cpu",
     gpu_id: int = 0,
 ) -> LongTermStore:
-    """Factory: Alibaba zvec, FAISS (CPU/GPU), Postgres, or explicit backend.
+    """Factory for agent L3 / retrieval vector stores.
+
+    Defaults to **Alibaba zvec** (``path`` or :data:`DEFAULT_ZVEC_PATH`).
 
     ::
 
-        open_vector_store(path="./.loomable/vectors")                    # Alibaba zvec
+        open_vector_store()                                             # zvec default path
+        open_vector_store(path="./.loomable/notes_zvec")                # zvec custom path
         open_vector_store(engine="faiss", path="./.loomable/faiss",
                           dimensions=1536, device="auto")               # FAISS
         open_vector_store(postgres_url=DSN, dimensions=1536)            # Postgres
+        open_vector_store(engine="memory")                              # tests / ephemeral
         open_vector_store(backend=my_backend)                           # anything VectorBackend
-
-    ``engine`` selects the store when multiple options could apply. Defaults:
-    ``postgres_url`` → postgres; ``path`` → zvec; else memory. Pass
-    ``engine="faiss"`` to use FAISS (``pip install loomable[faiss]``; for GPU
-    install ``faiss-gpu`` instead of ``faiss-cpu``).
     """
     if backend is not None:
         return LongTermStore(backend=backend, backend_name="custom")
@@ -182,12 +185,17 @@ def open_vector_store(
             backend_name="faiss",
         )
     if eng == "memory":
-        return LongTermStore(backend_name="memory")
-    if eng == "zvec" or (path is not None and eng is None):
-        if path is None:
-            raise ValueError("engine='zvec' requires path=")
-        return LongTermStore(path=path, dimensions=dimensions, backend_name="zvec")
-    return LongTermStore(backend_name="memory")
+        return LongTermStore(
+            backend=InMemoryVectorBackend(),
+            backend_name="memory",
+        )
+    if eng == "zvec" or eng is None:
+        return LongTermStore(
+            path=path if path is not None else DEFAULT_ZVEC_PATH,
+            dimensions=dimensions,
+            backend_name="zvec",
+        )
+    raise ValueError(f"unknown engine={engine!r}; use zvec|faiss|postgres|memory")
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:

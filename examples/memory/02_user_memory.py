@@ -38,7 +38,7 @@ class _FakeEmbedder:
 
 async def main() -> None:
     print(f"Using conversation store: {label}")
-    # Optional long-term layer (skip if you only need chat history)
+    # L3 default = Alibaba zvec (.loomable/memory_zvec); pip install loomable[zvec]
     notes = NoteStore(long_term=LongTermStore(), embedder=_FakeEmbedder())
     memory = Memory.compose(
         conversation=ConversationMemory(store=store, window=8),

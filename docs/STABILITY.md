@@ -36,6 +36,7 @@ the declared scope. Breaking changes are rare and require a deprecation note in
 | `loomable.codeindex` / `CodeTools` / `profile="code"` | Deep code; Alibaba zvec file store by default, pluggable `VectorBackend` |
 | `loomable.retrieval` (`build_retriever`, chunk strategies) | Framework RAG; Alibaba zvec / FAISS / Postgres / custom store |
 | `FaissVectorBackend` / `open_vector_store(engine="faiss")` | Optional FAISS CPU/GPU ANN |
+| Agent L3 / `LongTermStore()` | Defaults to Alibaba zvec at `.loomable/memory_zvec` |
 
 ## Beta limits
 

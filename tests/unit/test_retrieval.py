@@ -79,14 +79,14 @@ async def test_build_retriever_vector_and_lexical(tmp_path: Path) -> None:
     (docs_dir / "billing.md").write_text(
         "# Billing\n\nInvoices and discounts.\n", encoding="utf-8"
     )
-    from loomable.kernel.long_term import LongTermStore
+    from loomable.kernel.long_term import LongTermStore, open_vector_store
 
     vector = await build_retriever(
         [docs_dir],
         name="docs",
         mode="vector",
         strategy="markdown",
-        store=LongTermStore(),  # in-memory for unit speed
+        store=open_vector_store(engine="memory"),  # in-memory for unit speed
     )
     hits = await vector.retrieve("OAuth2 login", k=3)
     assert hits

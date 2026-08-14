@@ -658,23 +658,23 @@ Compose memory layers and pass **one object** to the Agent:
 ```python
 from loomable import Agent, Memory, ConversationMemory, UserMemory, open_session_store
 from loomable.agent import NoteStore
-from loomable.kernel.long_term import LongTermStore
+from loomable.kernel.long_term import LongTermStore  # default = Alibaba zvec
+from loomable.providers import OpenAIEmbedder
+
+# L3 default: Alibaba zvec at .loomable/memory_zvec  (pip install loomable[zvec])
+notes = NoteStore(long_term=LongTermStore(), embedder=OpenAIEmbedder())
 
 memory = Memory.compose(
-    # short-term / thread (L1+L2)
     conversation=ConversationMemory(
         store=open_session_store("postgres", url=DSN, user_id="alice"),
         window=8,
         compaction_threshold=16,
     ),
-    # long-term user facts (L3) — scoped by Agent(user_id=...)
     user=UserMemory(
-        note_store=NoteStore(LongTermStore(), embedder),
-        memory_tool=True,    # agentic tool
-        auto_extract=True,   # Always-mode lite (heuristic facts from user text)
+        note_store=notes,
+        memory_tool=True,
+        auto_extract=True,
     ),
-    # optional RAG
-    # knowledge=KnowledgeMemory(documents=[...], embedder=embedder),
 )
 
 agent = Agent(
@@ -773,33 +773,31 @@ agent = Agent(
 )
 ```
 
-### Long-term (L3): Alibaba zvec, Postgres, or any VectorBackend
+### Long-term (L3): Alibaba zvec by default; FAISS / Postgres optional
 
-**zvec** means [Alibaba Zvec](https://github.com/alibaba/zvec) — a real
-file-based embedded vector DB (`pip install loomable[zvec]`). Postgres or any
-object satisfying `VectorBackend` can replace it when provided.
+**Default:** [Alibaba Zvec](https://github.com/alibaba/zvec) on disk at
+``.loomable/memory_zvec`` (`pip install loomable[zvec]`).
+`LongTermStore()` and `open_vector_store()` both use that default.
+Pass FAISS, Postgres, or `engine="memory"` when you want something else.
 
 ```python
 from loomable.agent import NoteStore
 from loomable.kernel.long_term import LongTermStore, open_vector_store
 from loomable.providers import OpenAIEmbedder
 
-# Ephemeral (in-memory — no optional deps)
-notes = NoteStore(long_term=LongTermStore(), embedder=OpenAIEmbedder())
+embedder = OpenAIEmbedder()
 
-# Alibaba zvec on disk
+# Default L3 — Alibaba zvec under .loomable/memory_zvec
+notes = NoteStore(long_term=LongTermStore(), embedder=embedder)
+# same as: open_vector_store()  or  open_vector_store(path="./.loomable/memory_zvec")
+
+# Custom zvec directory
 notes = NoteStore(
-    long_term=open_vector_store(path="./.loomable/notes_zvec", dimensions=1536),
-    embedder=OpenAIEmbedder(),
+    long_term=open_vector_store(path="./.loomable/notes_zvec"),
+    embedder=embedder,
 )
 
-# Postgres vectors
-notes = NoteStore(
-    long_term=open_vector_store(postgres_url=DSN, dimensions=1536, user_id="alice"),
-    embedder=OpenAIEmbedder(),
-)
-
-# FAISS (CPU by default; device="gpu"|"auto" with faiss-gpu)
+# FAISS (CPU / GPU)
 notes = NoteStore(
     long_term=open_vector_store(
         engine="faiss",
@@ -807,7 +805,19 @@ notes = NoteStore(
         dimensions=1536,
         device="auto",
     ),
-    embedder=OpenAIEmbedder(),
+    embedder=embedder,
+)
+
+# Postgres vectors
+notes = NoteStore(
+    long_term=open_vector_store(postgres_url=DSN, dimensions=1536, user_id="alice"),
+    embedder=embedder,
+)
+
+# Tests / ephemeral only
+notes = NoteStore(
+    long_term=open_vector_store(engine="memory"),
+    embedder=embedder,
 )
 ```
 
@@ -815,10 +825,11 @@ notes = NoteStore(
 
 | Want | Conversation | User / L3 |
 |------|--------------|-----------|
-| Local demo | default / file / memory | in-memory `LongTermStore()` |
-| File-backed notes | any | Alibaba zvec via `path=` / `open_vector_store(path=...)` |
-| Local ANN (CPU/GPU) | any | FAISS via `engine="faiss"` / `FaissVectorBackend` |
-| Prod chat + durable notes | postgres | `PgVectorBackend` / `open_vector_store(postgres_url=...)` |
+| Default product | any | **Alibaba zvec** via `LongTermStore()` / `open_vector_store()` |
+| Custom zvec dir | any | `open_vector_store(path=...)` |
+| Local ANN (CPU/GPU) | any | FAISS via `engine="faiss"` |
+| Prod durable SQL vectors | postgres | `open_vector_store(postgres_url=...)` |
+| Unit tests | memory | `open_vector_store(engine="memory")` |
 | Case/Workflow resume | — | `PostgresCheckpointer` (separate) |
 
 ### Knobs
@@ -843,7 +854,8 @@ docker compose up -d
 
 `PostgresCheckpointer` is for Case/Workflow resume — not Agent chat history.  
 `memory_tool=True` without a note store is a no-op.  
-`knowledge` RAG builds its own zvec store today — separate from `note_store`.
+Install L3 default: `pip install 'loomable[zvec]'`.  
+`knowledge` RAG uses its own store when configured — separate from `note_store`.
 
 ---
 

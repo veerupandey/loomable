@@ -124,14 +124,14 @@ def test_session_store_default_still_sqlite() -> None:
 async def test_compose_conversation_store_with_zvec_notes() -> None:
     """L1/L2 session store and L3 NoteStore(zvec) are independent axes."""
     from loomable.agent import NoteStore
-    from loomable.kernel.long_term import LongTermStore
+    from loomable.kernel.long_term import LongTermStore, open_vector_store
 
     class _Emb:
         async def embed(self, text: str) -> list[float]:
             return [float(len(text) % 5), 1.0, 0.0]
 
     store = open_session_store("memory")
-    notes = NoteStore(long_term=LongTermStore(), embedder=_Emb())
+    notes = NoteStore(long_term=open_vector_store(engine="memory"), embedder=_Emb())
 
     a1 = Agent(
         model=_model(),
