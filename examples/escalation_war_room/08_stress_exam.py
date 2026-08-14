@@ -242,7 +242,6 @@ async def run_stress() -> FinalPacket:
         "stress-gather",
         session_id=SESSION,
         checkpointer=cp,
-        memory=True,
     ).step("gather", gatherer)
 
     t0 = time.monotonic()
@@ -278,7 +277,7 @@ async def run_stress() -> FinalPacket:
     scribe = make_scribe(work, resumed=True)
 
     wf2 = (
-        Workflow("stress-full", session_id=SESSION, checkpointer=cp, memory=True)
+        Workflow("stress-full", session_id=SESSION, checkpointer=cp)
         .step("gather", gather2)
         .step("specialists", specialists)
         .step("cert", cert)

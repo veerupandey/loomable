@@ -9,7 +9,7 @@
 | Structured JSON | `response_model` | `agents/03_structured_io.py` |
 | Conversation memory | `session_id` (+ optional `Memory.compose`) | `agents/04_with_memory.py`, `memory/01_session_memory.py` |
 | User / long-term memory | `Memory.compose` + `UserMemory` | `memory/02_user_memory.py` |
-| Shared memory across a Workflow | `Workflow(..., memory=True)` | `memory/03_workflow_shared_memory.py` |
+| Shared Workflow blackboard (callable steps) | `Workflow(..., memory=True)` | `memory/03_workflow_shared_memory.py` |
 | Compose Postgres L1/L2 + zvec L3 | `Memory.compose` + Postgres / zvec | `memory/04_compose_postgres_zvec.py` |
 | Unified Memory.compose | `Memory.compose(conversation=..., user=..., knowledge=...)` | `memory/05_compose_memory.py` |
 | Claim / custom scopes | `scopes={"claim_id": "..."}` | `memory/06_claim_scopes.py` |
@@ -19,7 +19,8 @@
 | Deep code (repo index + coding) | `profile="code"` / `CodeIndex` | `deep_agent/07_deep_code.py` |
 | MCP servers | `Agent(mcp_servers=[...])` | `advanced/01_mcp_servers.py` |
 | Conditional branches | `Workflow.branch` | `advanced/02_workflow_branch.py` |
-| Checkpoint / resume | `Workflow` + `JsonFileCheckpointer` | `advanced/03_checkpointing.py`, `escalation_war_room/05_checkpoint_resume.py` |
+| Checkpoint persist | `Workflow` + `JsonFileCheckpointer` | `advanced/03_checkpointing.py` |
+| Checkpoint kill / resume | `Workflow` + incomplete checkpoint + `resume=True` | `escalation_war_room/05_checkpoint_resume.py` |
 | Multimodal I/O | `Image` / tool media | `advanced/04_multimodal.py` |
 | RAG (searchable vector DB) | `knowledge_base=` on Agent / create_deep_agent | `agents/07_knowledge_base.py` |
 | RAG (Team / Workflow inherit KB) | `Team(..., knowledge_base=...)` | `agents/08_team_knowledge_base.py` |

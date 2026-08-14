@@ -289,6 +289,14 @@ async def map_specialists(
     max_run_tokens: int | None = None,
     tool_hooks: list[Any] | None = None,
     skills: list[Any] | None = None,
+    think_tool: bool = False,
+    require_tools: list[str] | None = None,
+    strict_require_tools: bool | None = None,
+    require_confirmation: list[str] | None = None,
+    approver: Any | None = None,
+    resilience: Any | None = None,
+    tool_timeout: float | None = None,
+    tool_concurrency: int | None = None,
 ) -> list[str]:
     """Dispatch: spawn one ephemeral specialist per plan step (parallel)."""
     from loomable.agent.delegation import spawn_specialist
@@ -316,6 +324,14 @@ async def map_specialists(
                 max_run_tokens=max_run_tokens,
                 tool_hooks=tool_hooks,
                 skills=skills,
+                think_tool=think_tool,
+                require_tools=require_tools,
+                strict_require_tools=strict_require_tools,
+                require_confirmation=require_confirmation,
+                approver=approver,
+                resilience=resilience,
+                tool_timeout=tool_timeout,
+                tool_concurrency=tool_concurrency,
             )
 
         if sem is None:
@@ -381,6 +397,9 @@ def _default_agent(
             "resilience",
             "think_tool",
             "require_tools",
+            "strict_require_tools",
+            "require_confirmation",
+            "approver",
         ):
             if key in runtime and runtime[key] is not None:
                 kwargs[key] = runtime[key]
@@ -539,6 +558,14 @@ def build_case_workflow(
                 max_run_tokens=rt.get("max_run_tokens"),
                 tool_hooks=rt.get("tool_hooks"),
                 skills=rt.get("skills"),
+                think_tool=bool(rt.get("think_tool", False)),
+                require_tools=rt.get("require_tools"),
+                strict_require_tools=rt.get("strict_require_tools"),
+                require_confirmation=rt.get("require_confirmation"),
+                approver=rt.get("approver"),
+                resilience=rt.get("resilience"),
+                tool_timeout=rt.get("tool_timeout"),
+                tool_concurrency=rt.get("tool_concurrency"),
             )
         else:
             async def _work(step: str) -> str:
@@ -866,6 +893,14 @@ class Case:
             "tool_concurrency": getattr(agent, "_tool_concurrency", None),
             "resilience": getattr(agent, "_resilience", None),
             "think_tool": bool(getattr(agent, "_think_tool", False)),
+            "require_tools": list(getattr(agent, "_require_tools", None) or []) or None,
+            "strict_require_tools": bool(getattr(agent, "_strict_require_tools", False))
+            or None,
+            "require_confirmation": list(
+                getattr(agent, "_require_confirmation", None) or []
+            )
+            or None,
+            "approver": getattr(agent, "_approver", None),
         }
         return cls(
             model=getattr(agent, "_model", None),

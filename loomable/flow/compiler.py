@@ -295,6 +295,8 @@ class _PassthroughRunnable:
     """A Runnable that passes its input through unchanged.
 
     Used as a join node after Condition branches to reconnect the flow.
+    Preserves :class:`~loomable.content.AgentOutput` so ``result.output.text()``
+    is the branch agent's text, not ``str(AgentOutput(...))``.
     """
 
     async def arun(
@@ -303,13 +305,25 @@ class _PassthroughRunnable:
         from loomable.agent.run import RunResult
         from loomable.content import AgentOutput, MediaPart, Modality
 
-        text = str(input) if input is not None else ""
+        if isinstance(input, AgentOutput):
+            return RunResult(output=input, session_id="")
+        output_attr = getattr(input, "output", None)
+        if isinstance(output_attr, AgentOutput):
+            return RunResult(output=output_attr, session_id="")
+        text_fn = getattr(input, "text", None)
+        if callable(text_fn):
+            try:
+                text = text_fn() or ""
+            except TypeError:
+                text = str(input) if input is not None else ""
+        else:
+            text = str(input) if input is not None else ""
         output = AgentOutput(
             parts=[
                 MediaPart(
                     modality=Modality.TEXT,
                     media_type="text/plain",
-                    data=text.encode("utf-8"),
+                    data=str(text).encode("utf-8"),
                 )
             ]
         )

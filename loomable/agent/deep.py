@@ -987,13 +987,33 @@ def create_deep_agent(
         modalities=modalities,
         debug=debug,
         mode=mode,
-        dispatch=dispatch,
         accept=accept,
-        board=board,
-        max_rounds=max_rounds,
-        max_plan_steps=max_plan_steps,
-        checkpointer=checkpointer,
     )
+    if mode != "case":
+        case_only = []
+        if dispatch != "reuse":
+            case_only.append("dispatch")
+        if board is not True:
+            case_only.append("board")
+        if max_rounds is not None:
+            case_only.append("max_rounds")
+        if max_plan_steps != 8:
+            case_only.append("max_plan_steps")
+        if checkpointer is not None:
+            case_only.append("checkpointer")
+        if case_only:
+            from loomable.agent.errors import AgentConfigError
+
+            raise AgentConfigError(
+                f"{', '.join(case_only)} only apply with "
+                "create_deep_agent(..., mode='case') (or construct Case directly)."
+            )
+    else:
+        kwargs["dispatch"] = dispatch
+        kwargs["board"] = board
+        kwargs["max_rounds"] = max_rounds
+        kwargs["max_plan_steps"] = max_plan_steps
+        kwargs["checkpointer"] = checkpointer
     kwargs.update(agent_kwargs)
     # Drop Nones so Agent defaults apply cleanly
     return Agent(**{k: v for k, v in kwargs.items() if v is not None})

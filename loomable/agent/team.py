@@ -438,6 +438,19 @@ class Team:
         """
         # Soft / LLM-coordinated path: reuse Agent SSE (tools include delegates).
         if not (self._hard and self._mode in ("broadcast", "sequential")):
+            if session_id:
+                self.bind_session(session_id)
+            from loomable.stream import (
+                RUN_FINISHED,
+                TEXT_MESSAGE_CONTENT,
+                TEXT_MESSAGE_END,
+                TEXT_MESSAGE_START,
+                TOOL_CALL_START,
+                StreamEvent,
+            )
+
+            called: set[str] = set()
+            finished: Any = None
             async for ev in self._agent.astream_events(
                 input,
                 images=images,
@@ -445,8 +458,66 @@ class Team:
                 audio=audio,
                 output_schema=output_schema,
                 context=context,
+                session_id=session_id,
             ):
+                if getattr(ev, "type", None) == TOOL_CALL_START:
+                    data = getattr(ev, "data", None) or {}
+                    name = data.get("tool_name") or data.get("name") or ""
+                    if name:
+                        called.add(str(name))
+                if (
+                    getattr(ev, "type", None) == RUN_FINISHED
+                    and self._mode == "coordinate"
+                    and not self._hard
+                ):
+                    finished = ev
+                    continue
                 yield ev
+            if finished is not None:
+                from loomable.agent.run import RunResult
+                from loomable.content import AgentOutput, Text
+
+                from .delegation import delegation_tool_names
+
+                roster = delegation_tool_names(self._members)
+                missing = [name for _, name in roster if name not in called]
+                # Skip fallback when every delegate was already called. An empty
+                # synthetic RunResult has no tool_activity, which would otherwise
+                # make _coordinate_fallback re-run the full roster.
+                if missing:
+                    fake = RunResult(
+                        output=AgentOutput(parts=[Text("")]),
+                        metadata={"required_tools_missing": missing},
+                    )
+                    extra = await self._coordinate_fallback(
+                        _input_as_text(input), fake
+                    )
+                    extra_text = extra.output.text() if extra.output is not None else ""
+                else:
+                    extra = None
+                    extra_text = ""
+                if extra is not None and extra.metadata.get("team_coordinate_fallback") and extra_text:
+                    rid = getattr(finished, "run_id", "") or ""
+                    sid = getattr(finished, "session_id", "") or session_id or ""
+                    yield StreamEvent(
+                        type=TEXT_MESSAGE_START,
+                        run_id=rid,
+                        session_id=sid,
+                        data={"role": "assistant"},
+                    )
+                    yield StreamEvent(
+                        type=TEXT_MESSAGE_CONTENT,
+                        run_id=rid,
+                        session_id=sid,
+                        data={"delta": extra_text},
+                    )
+                    yield StreamEvent(
+                        type=TEXT_MESSAGE_END,
+                        run_id=rid,
+                        session_id=sid,
+                        data={},
+                    )
+                yield finished
             return
 
         import uuid

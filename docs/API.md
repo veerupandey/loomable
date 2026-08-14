@@ -140,7 +140,7 @@ Fluent builders for complex cases:
 
 ```python
 wf = (
-    Workflow("sev1", session_id="inc-1", memory=True)
+    Workflow("sev1", session_id="inc-1")
     .step("gather", gatherer)
     .parallel(analyst=analyst, visual=visual)          # concurrent
     .branch(when=needs_human, then=approver, else_=auto)  # conditional
@@ -158,7 +158,7 @@ Low-level `Flow` / `Edge` remain available as an advanced escape hatch
 
 ```python
 wf = (
-    Workflow("sev1", session_id="inc-1", memory=True)
+    Workflow("sev1", session_id="inc-1")
     .step("gather", gatherer)
     .parallel(analyst=analyst, visual=visual)
     .branch(when=needs_human, then=approver, else_=auto)
@@ -166,10 +166,12 @@ wf = (
 )
 ```
 
-### Level 6: Workflow with shared memory + checkpointer
+### Level 6: Workflow with checkpointer
 
-Prefer `Workflow` for production processes. Shared blackboard memory and durable
-checkpoints are opt-in kwargs — no `TieredMemoryStore` / Edge wiring required.
+Prefer `Workflow` for production processes. Agent-to-Agent sharing is sequential
+output chaining via SharedState. ``memory=True`` attaches a blackboard on
+``RunContext.memory`` for custom/callable steps — not Agent chat memory.
+Durable checkpoints are opt-in.
 
 ```python
 from loomable import Agent, Workflow
@@ -179,7 +181,6 @@ wf = (
     Workflow(
         "article",
         session_id="article-v1",
-        memory=True,  # shared working memory across steps
         checkpointer=JsonFileCheckpointer(".checkpoints"),
     )
     .step("research", researcher)
@@ -212,9 +213,13 @@ try:
     result = await wf.arun("Publish the quarterly report")
 except FlowPaused:
     # Checkpoint saved — process can exit. Later:
-    wf.approve("publish")
+    await wf.approve("publish")
     result = await wf.arun(resume=True)
 ```
+
+`confirm=True` requires `checkpointer=` and `session_id=`. It is not supported inside
+`Workflow.parallel()`, `.branch()`, or `.loop()`. Agent-tool HITL is a separate knob:
+`require_confirmation=` plus an `approver=` callback (default deny-all, headless-safe).
 
 Low-level `Flow` / `Node` / custom `ExecutionEngine` remain available as an
 advanced escape hatch; new code should stay on `Workflow`.
@@ -242,7 +247,7 @@ from loomable.agent import Agent
 
 agent = Agent(
     model="openai:gpt-4o-mini",       # model string or ModelSpec or provider instance
-    name="researcher",                  # optional name (used in tracing, orchestration)
+    name="researcher",                  # optional metadata on BuiltAgent
     role="Senior Researcher",           # who the agent is (used in system prompt + delegation)
     goal="Find accurate information",   # what it optimizes for
     instructions="Be concise.",         # additional system prompt instructions
@@ -633,7 +638,7 @@ agent = Agent(
 | Conversation | `ConversationMemory` | L1 turns + L2 summaries for `session_id` |
 | User | `UserMemory` | Cross-session facts via `NoteStore` (scoped) |
 | Knowledge | `KnowledgeMemory` | Passive RAG into the prompt, or `store`/`sources`/`knowledge_base` → `search_*` tools |
-| Working | `WorkingMemory` | `Workflow(..., memory=True)` blackboard (`TieredMemoryStore` internals) |
+| Working | `WorkingMemory` | `Workflow(..., memory=True)` blackboard on `RunContext.memory` for **callable** steps — Agent steps share via SharedState output chaining |
 
 ### Scopes (user_id, claim_id, …)
 
@@ -678,7 +683,7 @@ you pass a bare `note_store=` with `user_id`/`scopes`.
 | **Agent** | `Memory.compose` (or flat stores alone) | `UserMemory` notes layer | Prefer compose; `scopes=` / `user_id=` stamp UserMemory |
 | **Team** | Same memory kwargs → **coordinator** | Same → coordinator | No Team-level `scopes=`; set on members or coordinator `memory=` / `user_id=` |
 | **Case** | Same → role-scoped sessions | Shared notes | `from_agent` copies memory |
-| **Workflow step** | Agent’s own memory | Agent’s own notes | `Workflow(memory=True)` is working blackboard |
+| **Workflow step** | Agent’s own memory | Agent’s own notes | Cross-step sharing is SharedState; `Workflow(memory=True)` is a callable blackboard |
 | **mount_agent** | `bind_session` reloads L1/L2 | unchanged | |
 
 ### Minimal chat (same process)
@@ -1383,8 +1388,9 @@ agent = Agent(
     on_tool_call=lambda name, args: print(f"→ {name}"),
     on_complete=lambda r: log(r),
     
-    # Human-in-the-loop
+    # Human-in-the-loop (tool names; default approver denies — pass approver=)
     require_confirmation=["send_email", "deploy"],
+    approver=lambda call: True,  # or a real prompt / policy
 )
 ```
 
@@ -1398,7 +1404,7 @@ agent = Agent(
 | Token budget | Evict-then-admit with pinned system/schema messages |
 | Loop detection | Stop no-progress loops with explicit reason |
 | Idempotency | Non-idempotent tools never re-dispatched |
-| HITL | Require approval for dangerous tools |
+| HITL | Workflow `confirm=True` + `approve()`, or Agent `require_confirmation=` + `approver=` (default deny) |
 | Think tool | Zero-side-effect scratchpad |
 | Plan tool | Model can self-escalate to fan-out |
 
@@ -1606,13 +1612,13 @@ forked = await checkpointer.fork("original-thread", "what-if-branch")
 
 ### Durable HITL
 
-```python
-from loomable.persist import PendingAction, Checkpoint
+Two different surfaces:
 
-# Agent pauses with pending action → checkpointed
-# Process can die here safely
-# On restart: load checkpoint, see pending action, approve, resume
-```
+- **Workflow step:** `Workflow.step(..., confirm=True)` raises `FlowPaused`; call
+  `await wf.approve(name)` then `await wf.arun(resume=True)`. Requires checkpointer +
+  session_id. Not supported inside `.parallel()` / `.branch()` / `.loop()`.
+- **Agent tools:** `Agent(require_confirmation=[...], approver=...)`. Default approver
+  denies every listed tool (headless-safe). This is not `FlowPaused`.
 
 ---
 

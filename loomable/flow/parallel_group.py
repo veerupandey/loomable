@@ -52,6 +52,15 @@ class Parallel_Group:
             raise ValueError("At least one step is required")
 
         self._steps = list(steps)
+        for step in self._steps:
+            if getattr(step, "require_confirmation", False):
+                from loomable.flow.nodes import FlowConfigError
+
+                raise FlowConfigError(
+                    "confirm=True is not supported inside Parallel_Group / "
+                    "Workflow.parallel(); put HITL on a sequential "
+                    ".step(..., confirm=True) after the group."
+                )
 
         # Auto-generate name from step names if not provided.
         if name is not None:
