@@ -17,7 +17,7 @@ agent = create_deep_agent(model, profile="research", workspace="./.deep_workspac
 create_deep_agent(model, knowledge_base=store_or_sources, retrievers=[custom])
 ```
 
-See ``examples/agents/07_knowledge_base.py`` for an offline demo.
+See ``examples/agents/07_knowledge_base.py`` for a live ``knowledge_base=`` demo.
 
 | Pillar | Loomable |
 |--------|----------|

@@ -1,9 +1,10 @@
-"""Router — Intent-based routing to specialists.
+"""Router — intent-based routing via Team(mode="route").
 
-USE WHEN: Different types of input should go to different agents
-based on what the user is asking (intent classification).
+USE WHEN: Different inputs should go to different specialist Agents.
+The coordinator picks the single best member and delegates once.
 
-Uses the `route` flow helper with a chooser function.
+For deterministic keyword branching, see ``advanced/02_workflow_branch.py``
+(``Workflow.branch``).
 """
 
 import asyncio
@@ -17,12 +18,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _provider import require_provider  # noqa: E402
 
-from loomable.agent import Agent
-from loomable.flow.helpers import route
+from loomable import Agent, Team
 
 provider = require_provider()
-
-# --- Specialist agents ---
 
 code_agent = Agent(
     model=provider,
@@ -45,23 +43,11 @@ general_agent = Agent(
     instructions="Answer clearly and concisely.",
 )
 
-
-# --- Router: classifies intent ---
-
-def classify_intent(input_text) -> str:
-    """Simple keyword-based routing (use an LLM classifier in production)."""
-    text = str(input_text).lower()
-    if any(kw in text for kw in ["code", "python", "function", "program", "bug"]):
-        return "code"
-    if any(kw in text for kw in ["math", "calculate", "equation", "solve"]):
-        return "math"
-    return "general"
-
-
-router = route(
-    classify_intent,
-    {"code": code_agent, "math": math_agent, "general": general_agent},
+team = Team(
+    members=[code_agent, math_agent, general_agent],
+    model=provider,
+    mode="route",
 )
 
-result = asyncio.run(router.arun("Solve the quadratic equation x^2 - 5x + 6 = 0"))
+result = asyncio.run(team.arun("Solve the quadratic equation x^2 - 5x + 6 = 0"))
 print(result.output.text())

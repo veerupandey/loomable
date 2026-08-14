@@ -1,9 +1,7 @@
-"""Fan-Out — Same task, multiple perspectives.
+"""Fan-Out — same task, multiple perspectives via Workflow.parallel.
 
 USE WHEN: You want diverse viewpoints on the same question
 without any single agent dominating the analysis.
-
-Uses the `parallel` flow helper for concurrent execution.
 """
 
 import asyncio
@@ -17,8 +15,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _provider import require_provider  # noqa: E402
 
-from loomable.agent import Agent
-from loomable.flow.helpers import parallel
+from loomable import Agent, Workflow
+from loomable.display import pp, step_outputs
 
 provider = require_provider()
 
@@ -43,16 +41,16 @@ security_expert = Agent(
     instructions="Analyze the topic from a security perspective. 2-3 sentences.",
 )
 
-fan_out = parallel(frontend_expert, backend_expert, security_expert)
+fan_out = Workflow("fan-out").parallel(
+    frontend=frontend_expert,
+    backend=backend_expert,
+    security=security_expert,
+)
 
 result = asyncio.run(fan_out.arun("Should we adopt GraphQL for our public API?"))
 
-# Pretty-print with per-branch breakdown
-from loomable.display import pp, step_outputs
-
 pp(result)
 
-# Access individual branch outputs
 branches = step_outputs(result)
 for branch_name, text in branches.items():
     print(f"\n--- {branch_name} ---")

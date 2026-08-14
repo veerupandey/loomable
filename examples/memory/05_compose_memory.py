@@ -18,12 +18,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _provider import require_provider  # noqa: E402
+from _provider import make_embedder, require_provider  # noqa: E402
 
 from loomable import Agent, ConversationMemory, Memory, UserMemory, open_session_store
 from loomable.agent import NoteStore
 from loomable.kernel.long_term import LongTermStore
-from loomable.providers import GeminiEmbedder
 
 ROOT = Path(__file__).resolve().parent / ".compose_sessions"
 ROOT.mkdir(parents=True, exist_ok=True)
@@ -32,7 +31,7 @@ ROOT.mkdir(parents=True, exist_ok=True)
 async def main() -> None:
     model = require_provider()
     store = open_session_store("file", path=str(ROOT))
-    notes = NoteStore(long_term=LongTermStore(), embedder=GeminiEmbedder())
+    notes = NoteStore(long_term=LongTermStore(), embedder=make_embedder())
     memory = Memory.compose(
         conversation=ConversationMemory(store=store, window=8),
         user=UserMemory(note_store=notes, memory_tool=True, auto_extract=True),

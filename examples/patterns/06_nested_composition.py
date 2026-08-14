@@ -1,9 +1,8 @@
-"""Nested Composition — Flows containing other Flows.
+"""Nested composition — Workflow stages that nest.
 
-USE WHEN: You have a complex workflow where individual stages
-are themselves multi-step processes (composition of compositions).
-
-Flow nodes can be Loops, other Flows, or any Runnable — they nest.
+USE WHEN: Individual stages are themselves multi-step processes
+(composition of compositions). Nested Workflows / parallel groups
+are first-class Runnables.
 """
 
 import asyncio
@@ -17,12 +16,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _provider import require_provider  # noqa: E402
 
-from loomable.agent import Agent
-from loomable.flow.helpers import sequential, parallel
+from loomable import Agent, Workflow
 
 provider = require_provider()
-
-# --- Stage 1: Research (parallel perspectives) ---
 
 tech_researcher = Agent(
     model=provider,
@@ -38,10 +34,6 @@ market_researcher = Agent(
     instructions="Assess market viability in 2-3 sentences.",
 )
 
-research_stage = parallel(tech_researcher, market_researcher)
-
-# --- Stage 2: Analysis (sequential) ---
-
 analyst = Agent(
     model=provider,
     role="Business Analyst",
@@ -49,11 +41,16 @@ analyst = Agent(
     instructions="Given the research results, provide a clear go/no-go recommendation.",
 )
 
-# --- Full pipeline: parallel research → sequential analysis ---
+# Parallel research → sequential analysis
+pipeline = (
+    Workflow("product-decision")
+    .parallel(tech=tech_researcher, market=market_researcher)
+    .step("analyze", analyst)
+)
 
-pipeline = sequential(research_stage, analyst)
-
-result = asyncio.run(pipeline.arun(
-    "Should we build a real-time collaborative code editor as a SaaS product?"
-))
+result = asyncio.run(
+    pipeline.arun(
+        "Should we build a real-time collaborative code editor as a SaaS product?"
+    )
+)
 print(result.output.text())

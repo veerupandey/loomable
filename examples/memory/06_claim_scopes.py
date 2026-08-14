@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _provider import require_provider  # noqa: E402
+from _provider import make_embedder, require_provider  # noqa: E402
 
 from loomable import (
     Agent,
@@ -27,12 +27,11 @@ from loomable import (
 from loomable.agent import NoteStore
 from loomable.kernel.long_term import LongTermStore
 from loomable.memory import ScopedNoteStore
-from loomable.providers import GeminiEmbedder
 
 
 async def main() -> None:
     model = require_provider()
-    base = NoteStore(long_term=LongTermStore(), embedder=GeminiEmbedder())
+    base = NoteStore(long_term=LongTermStore(), embedder=make_embedder())
     store = open_session_store("memory")
 
     memory = Memory.compose(
