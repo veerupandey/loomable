@@ -72,7 +72,7 @@ Loomable already has the enterprise spine. We beat them by combining:
       groups; `search_namespaces` / `search_tools(namespace=...)` browse them.
 - [x] **Better ranking**: `rank_bm25` (BM25-lite over catalog document
       frequency) backs `search_skills` / `search_tools` / `search_mcp` /
-      `search_namespaces`; `rank_match` stays exported for back-compat.
+      `search_namespaces`.
 - [x] **Skill resources level-3** (`references/`, `assets/`) on demand:
       `list_skill_resources` / `read_skill_resource` (path-traversal safe,
       restricted to `SKILL.md` + `scripts/`/`references/`/`assets/`). Demo

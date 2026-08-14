@@ -145,7 +145,7 @@ wf = (
 
 Declarative style still works: `Workflow("pipe", steps=[Step("a", a), Step("b", b)])`.
 
-Low-level `Flow` / `sequential()` / `Edge` remain available as an advanced escape hatch
+Low-level `Flow` / `Edge` remain available as an advanced escape hatch
 (see [Flow Engine](#flow-engine)). Prefer the `Workflow` builders above.
 
 ### Level 5: Workflow parallel + branch (same object)
@@ -612,8 +612,8 @@ agent = Agent(
 
 | Layer | Class | What it stores |
 |-------|--------|----------------|
-| Conversation | `ConversationMemory` (`short=`) | L1 turns + L2 summaries for `session_id` |
-| User | `UserMemory` (`long=`) | Cross-session facts via `NoteStore` (scoped) |
+| Conversation | `ConversationMemory` | L1 turns + L2 summaries for `session_id` |
+| User | `UserMemory` | Cross-session facts via `NoteStore` (scoped) |
 | Knowledge | `KnowledgeMemory` | Passive RAG into the prompt, or `store`/`sources`/`knowledge_base` → `search_*` tools |
 | Working | `WorkingMemory` | `Workflow(..., memory=True)` blackboard (`TieredMemoryStore` internals) |
 
@@ -637,9 +637,8 @@ MemoryScope.of(user_id="alice", claim_id="CLM-4421")
   (e.g. `session_id=f"claim:{claim_id}"`) and/or Postgres `user_id=` tenant  
   (`scope.tenant_key()`).
 
-Prefer `Memory.compose` for new code. Flat kwargs (`session_store=`, `note_store=`,
-`memory_backend=`) still work and **override** the matching compose layer when both
-are set.
+Prefer `Memory.compose` for new code. Do not pass both `memory=` and flat
+store kwargs (`session_store=` / `note_store=` / `memory_backend=`) — that raises.
 
 `user_id` + `scopes` are applied automatically when using `Memory.compose` or when
 you pass a bare `note_store=` with `user_id`/`scopes`.
@@ -658,10 +657,10 @@ you pass a bare `note_store=` with `user_id`/`scopes`.
 
 | Surface | Conversation L1/L2 | Long-term L3 | Notes |
 |---------|--------------------|--------------|-------|
-| **Agent** | `memory=` compose or `session_store` | `UserMemory` / `note_store` | Canonical API |
+| **Agent** | `Memory.compose` (or flat stores alone) | `UserMemory` notes layer | Prefer compose |
 | **Team** | Same kwargs → **coordinator** | Same → coordinator | Members keep their own memory |
 | **Case** | Same → role-scoped sessions | Shared notes | `from_agent` copies memory |
-| **Flow step** | Agent’s own memory | Agent’s own notes | `Flow(memory=True)` is TieredMemory blackboard |
+| **Workflow step** | Agent’s own memory | Agent’s own notes | `Workflow(memory=True)` is working blackboard |
 | **mount_agent** | `bind_session` reloads L1/L2 | unchanged | |
 
 ### Minimal chat (same process)
@@ -691,8 +690,8 @@ await agent.arun("I prefer dark mode")
 agent2 = Agent(model=..., memory=memory, session_id="conv-1", resume=True)
 ```
 
-Flat kwargs (`session_store=`, `memory_backend=`) still work as overrides — prefer
-`Memory.compose` for new code.
+Flat store kwargs (`session_store=` / `memory_backend=`) remain available when you
+are not using `Memory.compose`. Prefer compose for new code.
 
 ### Long-term (L3): Alibaba zvec by default; FAISS / Postgres optional
 
@@ -938,7 +937,7 @@ agent = Agent(model="openai:gpt-4o-mini", text_only=True)
 Other examples: `modalities="text+image"`, `modalities=["text", "audio"]`,
 `capabilities="text+audio"`. Audio remains opt-in.
 
-`multimodal=True` emits `DeprecationWarning` and is a no-op (media is already default).
+Media is enabled by default. Use `modalities=` or `text_only=` to restrict.
 
 ### Input: passing images
 
@@ -1217,28 +1216,22 @@ The unified composition model. One primitive (`Runnable`), one composition path 
 | `SharedState` | Key/value blackboard for the run (node outputs, `plan_steps`, board, …) |
 | `Node` | A vertex in a Flow wrapping one Runnable |
 | `Edge` | A directed connection between nodes (optionally gated by a condition) |
-| `Map` | Fan-out one Runnable over a runtime list |
-| `Router` | Select which downstream node(s) run next |
+| `MapNode` | Fan-out one Runnable over a runtime list |
+| `RouterNode` | Select which downstream node(s) run next |
 
-### Convenience Constructors
+### Advanced Flow helpers
+
+Prefer `Workflow.step` / `.parallel` / `.branch` / `.map` and `Team(mode=...)`.
+Low-level Flow helpers live under `loomable.flow.helpers` if you need them:
 
 ```python
-from loomable.flow import sequential, parallel, route, coordinate, plan_and_execute
+from loomable.flow.helpers import sequential, parallel, route, coordinate, plan_and_execute
 
-# Sequential chain (replaces Pipeline)
 flow = sequential(step_a, step_b, step_c)
-
-# Concurrent broadcast (replaces Orchestrator PARALLEL)
 flow = parallel(researcher, analyst, writer)
-
-# Predicate routing (replaces Orchestrator ROUTE)
 flow = route(chooser_fn, {"research": researcher, "write": writer})
-
-# Hierarchical delegation (replaces Orchestrator COORDINATE)
 flow = coordinate(workers=[researcher, analyst], manager=synthesizer)
-
-# Plan → Map → Synthesize (replaces AutoPlan)
-flow = plan_and_execute(planner, worker, synthesizer)
+flow = plan_and_execute(planner, worker, synthesizer)  # also used by Workflow.map
 ```
 
 ### Engines
@@ -1270,7 +1263,7 @@ from loomable.flow import (
     # Tier 2
     Loop, Verifier, VerdictResult, AlwaysOkVerifier, CallableVerifier,
     # Tier 3
-    Flow, FlowPlan, Node, Edge, Map, Router,
+    Flow, FlowPlan, Node, Edge, MapNode, RouterNode,
     # State
     SharedState, Reducer, overwrite, append, merge,
     # Engines
@@ -1283,9 +1276,10 @@ from loomable.flow import (
     FlowPaused,
     # Observability
     ContextSnapshotConfig, MessageDisposition, MessageSnapshot,
-    # Helpers
-    sequential, parallel, route, coordinate, plan_and_execute,
+    # Workflow.map helper
+    plan_and_execute,
 )
+# Advanced Flow helpers: from loomable.flow.helpers import sequential, parallel, ...
 ```
 
 ---

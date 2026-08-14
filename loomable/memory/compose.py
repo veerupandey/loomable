@@ -26,10 +26,6 @@ Layers (any subset)::
         user_id="alice",
         scopes={"claim_id": "CLM-4421"},  # any extra isolation keys
     )
-
-Aliases: ``short=`` → conversation, ``long=`` → user.
-Legacy ``session_store=`` / ``note_store=`` / ``memory_backend=`` still work and
-override the matching layer when both are set.
 """
 
 from __future__ import annotations
@@ -263,13 +259,11 @@ class Memory:
         user: UserMemory | None = None,
         knowledge: KnowledgeMemory | None = None,
         working: WorkingMemory | None = None,
-        short: ConversationMemory | None = None,
-        long: UserMemory | None = None,
     ) -> Memory:
-        """Assemble layers. ``short``/``long`` are aliases for conversation/user."""
+        """Assemble memory layers for ``Agent(memory=...)``."""
         return cls(
-            conversation=conversation or short,
-            user=user or long,
+            conversation=conversation,
+            user=user,
             knowledge=knowledge,
             working=working,
         )
@@ -299,10 +293,6 @@ class Memory:
             ),
         )
 
-    def with_user_id(self, user_id: str | None) -> Memory:
-        """Back-compat alias for :meth:`with_scopes`."""
-        return self.with_scopes(user_id=user_id)
-
     def resolve_note_store(self) -> Any | None:
         """Materialize a (possibly scoped) NoteStore from the user layer."""
         if self.user is None:
@@ -325,7 +315,7 @@ class Memory:
         return store
 
     def to_agent_kwargs(self) -> dict[str, Any]:
-        """Flatten into legacy Agent constructor kwargs (no Nones)."""
+        """Flatten into Agent constructor store kwargs (no Nones)."""
         out: dict[str, Any] = {}
         if self.conversation is not None and self.conversation.enabled:
             c = self.conversation
@@ -371,22 +361,16 @@ class Memory:
 
 
 class ScopedNoteStore:
-    """Wrap a NoteStore so note ids/tags are namespaced by a :class:`MemoryScope`.
-
-    Back-compat: ``ScopedNoteStore(inner, user_id="alice")`` still works.
-    """
+    """Wrap a NoteStore so note ids/tags are namespaced by a :class:`MemoryScope`."""
 
     def __init__(
         self,
         inner: Any,
         *,
-        scope: MemoryScope | None = None,
-        user_id: str | None = None,
+        scope: MemoryScope,
     ) -> None:
-        if scope is None and user_id:
-            scope = MemoryScope.of(user_id=user_id)
         if scope is None or not scope:
-            raise ValueError("ScopedNoteStore requires a non-empty scope or user_id")
+            raise ValueError("ScopedNoteStore requires a non-empty MemoryScope")
         self._inner = inner
         self._scope = scope
         self._prefix = scope.prefix

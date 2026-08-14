@@ -1,8 +1,7 @@
 # Loomable API stability
 
-Loomable **0.2.0b0** is a **public beta**. The surface below is feature-complete for
-the declared scope. Breaking changes are rare and require a deprecation note in
-`CHANGELOG.md` before removal.
+Loomable **0.2.0b0** is a **public beta**. The surface below is the supported
+API. Prefer the high-level path; treat advanced Flow types as an escape hatch.
 
 ## Stable (supported in beta)
 
@@ -12,40 +11,34 @@ the declared scope. Breaking changes are rare and require a deprecation note in
 | `Workflow`, `Step`, `Loop`, `Condition`, `Parallel_Group` | Durable multi-step |
 | `Case`, `Board`, `WorkItem` | Goal + WorkItems board |
 | `Memory`, `MemoryScope`, `ConversationMemory`, `UserMemory`, `KnowledgeMemory`, `WorkingMemory`, `open_session_store`, `open_vector_store` | Composable memory + vector store factory |
-| `create_deep_agent` | Long-horizon / research harness (`profile="research"` / `"code"`) |
+| `create_deep_agent` | Long-horizon harness (`profile="research"` / `"code"`) |
 | `tool`, `RunResult`, `ContextPolicy`, `spawn_specialist` | DX helpers |
+| `plan_and_execute` | Used by `Workflow.map`; also importable at top level |
 | Checkpointers (`JsonFile`, `SQLite`, `InMemory`, `Postgres`) | Durability |
 | `loomable.serve.mount_agent` / `mount_case` | AG-UI HTTP + SSE (optional `api_key=`) |
 | Bundled skills via `resolve_skills` / `list_bundled_skills` | Progressive skills |
 
-## Removed from public API (this beta cut)
-
-| Symbol | Replacement |
-|--------|-------------|
-| `create_research_agent` | `create_deep_agent(..., profile="research")` |
-| `Channel` / `ChannelMessage` / `InMemoryChannel` | Use `Team` / `Workflow` / subagents |
-| `DEEP_AGENT_INSTRUCTIONS` (package export) | Internal to `create_deep_agent` |
-
-## Deprecated (warn, still accepted)
-
-| Symbol | Replacement |
-|--------|-------------|
-| `Agent(multimodal=True)` | No-op; media is default. Use `modalities=` / `text_only=` |
-
-## Experimental / kernel-internal
+## Advanced escape hatch (not primary DX)
 
 | Surface | Notes |
 |---------|--------|
-| `loomable.kernel.registry.ExtensionRegistry` | Not wired into Agent discovery; may change |
-| Flow optimizer (`loomable.flow.optimizer`) | Advanced; not part of beta DX |
-| Low-level `Flow` / `Node` / `Edge` / `TieredMemoryStore` | Escape hatch; prefer `Workflow` |
+| `Flow`, `Node`, `Edge`, `MapNode`, `RouterNode` | Low-level graph |
+| `TieredMemoryStore` | Internal blackboard for `Workflow(memory=True)` |
+| `loomable.flow.helpers` (`sequential` / `parallel` / `route` / `coordinate`) | Prefer `Workflow` / `Team` |
+| Flow optimizer / custom engines | Power users only |
+
+## Experimental / may change
+
+| Surface | Notes |
+|---------|--------|
+| `loomable.kernel.registry.ExtensionRegistry` | Not wired into Agent discovery |
 | `discovery_core="research-slim"` | Schema-budget profile; defaults may shift |
 | `loomable.sandbox` / `ShellTools` / Docker sandbox | Soft isolation; Docker experimental |
 | Bundled `browser` skill | Assumes Lightpanda (or compatible) MCP |
-| `loomable.codeindex` / `CodeTools` / `profile="code"` | Deep code; Alibaba zvec file store by default, pluggable `VectorBackend` |
-| `loomable.retrieval` (`ingest`, `KnowledgeBase`, `build_agentic_retriever`, chunk strategies) | Framework RAG; pluggable agentic stages |
-| `Agent(knowledge_base=)` / `create_deep_agent(knowledge_base=)` | Vector-DB knowledge base + optional `retrievers=`; inherited by Team / Case / Workflow / Flow |
-| `AgenticRetriever` / `CompositeRetriever` | Rewrite / route / rerank / multi-corpus — all Protocol-pluggable |
+| `loomable.codeindex` / `CodeTools` / `profile="code"` | Deep code; Alibaba zvec by default |
+| `loomable.retrieval` | Framework RAG; pluggable agentic stages |
+| `Agent(knowledge_base=)` / `create_deep_agent(knowledge_base=)` | Vector-DB knowledge base + optional `retrievers=` |
+| `AgenticRetriever` / `CompositeRetriever` | Rewrite / route / rerank / multi-corpus |
 | `FaissVectorBackend` / `open_vector_store(engine="faiss")` | Optional FAISS CPU/GPU ANN |
 | Agent L3 / `LongTermStore()` | Defaults to Alibaba zvec at `.loomable/memory_zvec` |
 

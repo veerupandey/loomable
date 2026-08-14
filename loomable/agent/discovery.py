@@ -46,7 +46,6 @@ __all__ = [
     "format_skill_catalog_for_prompt",
     "make_discovery_tools",
     "rank_bm25",
-    "rank_match",
     "tool_schema_payload",
 ]
 
@@ -187,31 +186,6 @@ def format_skill_catalog_for_prompt(skills: list[SkillStub]) -> str:
     return "\n".join(lines)
 
 
-def rank_match(query: str, name: str, description: str = "") -> float:
-    """Simple relevance score for discovery ranking (kept for back-compat)."""
-    q = (query or "").strip().lower()
-    if not q:
-        return 0.1
-    blob = f"{name} {description}".lower()
-    score = 0.0
-    if q == name.lower():
-        score += 5.0
-    if name.lower().startswith(q):
-        score += 2.0
-    if q in name.lower():
-        score += 1.5
-    for token in re.split(r"\W+", q):
-        if not token:
-            continue
-        if token in name.lower():
-            score += 1.0
-        if token in description.lower():
-            score += 0.5
-        if token in blob:
-            score += 0.25
-    return score
-
-
 def _tokenize(text: str) -> list[str]:
     return [t for t in re.split(r"\W+", (text or "").lower()) if t]
 
@@ -250,7 +224,7 @@ def rank_bm25(
     (e.g. "tool", "search") are weighted down relative to distinctive ones.
 
     Falls back to a single-document approximation when ``df`` is omitted so it
-    stays usable standalone, mirroring :func:`rank_match`.
+    stays usable standalone.
     """
     q_tokens = _tokenize(query)
     if not q_tokens:

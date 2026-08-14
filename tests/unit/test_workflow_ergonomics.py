@@ -138,13 +138,14 @@ class TestImports:
 # ---------------------------------------------------------------------------
 
 
-class TestBackwardCompatibilityHelpers:
-    """Existing sequential(), parallel(), route(), coordinate() helpers still work."""
+class TestFlowHelpersModule:
+    """``loomable.flow.helpers`` still builds working Flows (advanced escape hatch)."""
 
     @pytest.mark.asyncio
     async def test_sequential_still_works(self):
         """sequential(FunctionRunnable(fn)) produces a working Flow."""
-        from loomable.flow import sequential, FunctionRunnable
+        from loomable.flow import FunctionRunnable
+        from loomable.flow.helpers import sequential
 
         flow = sequential(FunctionRunnable(echo_fn), FunctionRunnable(upper_fn))
         result = await flow.arun("hello")
@@ -155,7 +156,7 @@ class TestBackwardCompatibilityHelpers:
     @pytest.mark.asyncio
     async def test_sequential_with_plain_callables(self):
         """sequential() still accepts plain callables and wraps them."""
-        from loomable.flow import sequential
+        from loomable.flow.helpers import sequential
 
         flow = sequential(echo_fn, upper_fn)
         result = await flow.arun("test")
@@ -165,7 +166,8 @@ class TestBackwardCompatibilityHelpers:
     @pytest.mark.asyncio
     async def test_parallel_still_works(self):
         """parallel(FunctionRunnable(fn1), FunctionRunnable(fn2)) works."""
-        from loomable.flow import parallel, FunctionRunnable
+        from loomable.flow import FunctionRunnable
+        from loomable.flow.helpers import parallel
 
         flow = parallel(FunctionRunnable(echo_fn), FunctionRunnable(upper_fn))
         result = await flow.arun("hi")
@@ -174,7 +176,7 @@ class TestBackwardCompatibilityHelpers:
     @pytest.mark.asyncio
     async def test_parallel_with_plain_callables(self):
         """parallel() still accepts plain callables."""
-        from loomable.flow import parallel
+        from loomable.flow.helpers import parallel
 
         flow = parallel(echo_fn, upper_fn)
         result = await flow.arun("data")
@@ -183,7 +185,7 @@ class TestBackwardCompatibilityHelpers:
     @pytest.mark.asyncio
     async def test_route_still_works(self):
         """route(chooser, choices) still works with callables."""
-        from loomable.flow import route
+        from loomable.flow.helpers import route
 
         def chooser(input):
             return "branch_a"
@@ -195,7 +197,7 @@ class TestBackwardCompatibilityHelpers:
     @pytest.mark.asyncio
     async def test_coordinate_still_works(self):
         """coordinate(workers, manager) still works."""
-        from loomable.flow import coordinate
+        from loomable.flow.helpers import coordinate
 
         def manager(input):
             return f"managed:{input}"
@@ -270,7 +272,8 @@ class TestComposabilityWithHelpers:
     @pytest.mark.asyncio
     async def test_step_in_sequential(self):
         """Step can be passed to sequential() as a Runnable."""
-        from loomable.flow import Step, sequential
+        from loomable.flow import Step
+        from loomable.flow.helpers import sequential
 
         step_a = Step("echo_step", echo_fn)
         step_b = Step("upper_step", upper_fn)
@@ -293,7 +296,8 @@ class TestComposabilityWithHelpers:
     @pytest.mark.asyncio
     async def test_workflow_in_sequential(self):
         """Workflow can be passed to sequential() as a Runnable."""
-        from loomable.flow import Step, Workflow, sequential
+        from loomable.flow import Step, Workflow
+        from loomable.flow.helpers import sequential
 
         wf = Workflow("inner", steps=[Step("step1", echo_fn)])
         flow = sequential(wf, FunctionRunnable(upper_fn))
@@ -542,7 +546,8 @@ class TestFlowClassComplexTopology:
     @pytest.mark.asyncio
     async def test_flowclass_as_sequential_node(self):
         """FlowClass can be used inside sequential() since it's a Runnable."""
-        from loomable.flow import FlowClass, start, listen, sequential
+        from loomable.flow import FlowClass, start, listen
+        from loomable.flow.helpers import sequential
 
         class InnerFlow(FlowClass):
             @start()
@@ -678,13 +683,13 @@ class TestExportsCoexist:
         ])
 
     def test_existing_helper_exports(self):
-        """Helper function exports are still available."""
-        from loomable.flow import (
+        """Advanced helpers remain on loomable.flow.helpers; plan_and_execute on flow."""
+        from loomable.flow import plan_and_execute
+        from loomable.flow.helpers import (
             sequential,
             parallel,
             route,
             coordinate,
-            plan_and_execute,
         )
 
         assert all(x is not None for x in [
@@ -717,9 +722,9 @@ class TestExportsCoexist:
             MemoryStore, Tier, TieredMemoryStore,
         ])
 
-    def test_aliases_still_work(self):
-        """Map and Router aliases still point to correct classes."""
-        from loomable.flow import Map, Router, MapNode, RouterNode
+    def test_map_and_router_nodes_exported(self):
+        """MapNode and RouterNode are the public node types."""
+        from loomable.flow import MapNode, RouterNode
 
-        assert Map is MapNode
-        assert Router is RouterNode
+        assert MapNode is not None
+        assert RouterNode is not None
