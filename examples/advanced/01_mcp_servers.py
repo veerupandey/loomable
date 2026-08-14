@@ -6,15 +6,22 @@ Model Context Protocol (MCP) servers (e.g. filesystem, database).
 MCP tools appear as regular tools to the agent — no special handling needed.
 """
 
+from __future__ import annotations
+
 import asyncio
+import sys
+from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from loomable.agent import Agent
-from loomable.providers.openai import AzureOpenAIProvider
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _provider import require_provider  # noqa: E402
 
-provider = AzureOpenAIProvider()
+from loomable import Agent
+
+provider = require_provider()
 
 # MCP servers are specified as connection configs.
 # Each server's tools are auto-discovered and registered.
@@ -29,7 +36,7 @@ provider = AzureOpenAIProvider()
 #     ],
 # )
 
-# Demo without an actual MCP server:
+# Demo without an actual MCP server (pattern only):
 agent = Agent(
     model=provider,
     role="Assistant",

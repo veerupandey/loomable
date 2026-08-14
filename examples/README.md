@@ -9,7 +9,7 @@
 | Structured JSON | `response_model` | `agents/03_structured_io.py` |
 | Conversation memory | `session_id` + `session_store` / `memory_backend` | `agents/04_with_memory.py`, `memory/01_session_memory.py` |
 | User / long-term memory | `Memory.compose` + `UserMemory` | `memory/02_user_memory.py` |
-| Shared memory across a flow | `TieredMemoryStore` / `sequential(..., memory=...)` | `memory/03_flow_shared_memory.py` |
+| Shared memory across a flow | `Workflow(..., memory=True)` | `memory/03_flow_shared_memory.py` |
 | Compose Postgres L1/L2 + zvec L3 (default) | `NoteStore(LongTermStore())` → Alibaba zvec | `memory/04_compose_postgres_zvec.py` |
 | Unified Memory.compose | `Memory.compose(conversation=..., user=...)` | `memory/05_compose_memory.py` |
 | Claim / custom scopes | `scopes={"claim_id": "..."}` | `memory/06_claim_scopes.py` |
@@ -42,7 +42,7 @@
 | Postgres memory / checkpoints | `PostgresCheckpointer` + backends | `memory/02_user_memory.py` |
 | Full SEV war room | tools → workflow → Case → SSE | `escalation_war_room/` |
 | Simple real-world Q&A | toolkits | `simple_use_cases/` |
-| Custom skill package | `skills/` layout | `skills/weather-lookup/` |
+| Custom skill package | `skills/` layout | `skills/weather-lookup/` (load via `create_deep_agent(..., skills=[...])`) |
 
 ## Structure
 

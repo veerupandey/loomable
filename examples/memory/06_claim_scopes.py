@@ -1,4 +1,4 @@
-"""Claim-scoped memory — same user, different claim_id, no leakage.
+"""Claim-scoped memory — same user, different claim_id, no leakage (live LLM).
 
 Shows MemoryScope / Agent(scopes=) for insurance-style isolation.
 """
@@ -6,6 +6,15 @@ Shows MemoryScope / Agent(scopes=) for insurance-style isolation.
 from __future__ import annotations
 
 import asyncio
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _provider import require_provider  # noqa: E402
 
 from loomable import (
     Agent,
@@ -15,30 +24,15 @@ from loomable import (
     UserMemory,
     open_session_store,
 )
-from loomable.agent import ModelSpec, NoteStore
+from loomable.agent import NoteStore
 from loomable.kernel.long_term import LongTermStore
-from loomable.kernel.models import ModelRequest, ModelResponse
 from loomable.memory import ScopedNoteStore
-
-
-class _Script:
-    async def complete(self, request: ModelRequest) -> ModelResponse:
-        blob = str(request.messages).lower()
-        if "known facts" in blob and "neck" in blob:
-            return ModelResponse(content="Claim notes: soft-tissue neck injury.")
-        if "known facts" in blob and "bumper" in blob:
-            return ModelResponse(content="Claim notes: rear bumper only.")
-        return ModelResponse(content="ack")
-
-
-class _Emb:
-    async def embed(self, text: str) -> list[float]:
-        return [float(hash(text) % 97) / 97.0, 1.0, 0.0]
+from loomable.providers import GeminiEmbedder
 
 
 async def main() -> None:
-    base = NoteStore(long_term=LongTermStore(), embedder=_Emb())
-    model = ModelSpec(provider="scripted", provider_impl=_Script())
+    model = require_provider()
+    base = NoteStore(long_term=LongTermStore(), embedder=GeminiEmbedder())
     store = open_session_store("memory")
 
     memory = Memory.compose(
@@ -59,8 +53,9 @@ async def main() -> None:
         user_id="alice",
         scopes={"claim_id": "CLM-1"},
         modalities="text",
+        instructions="Summarize only the facts for this claim. Do not invent other claims.",
     )
-    print("CLM-1:", (await a1.arun("Summarize this claim")).output.text())
+    print("CLM-1:", (await a1.arun("Summarize this claim's injury notes.")).output.text())
 
     a2 = Agent(
         model=model,
@@ -69,8 +64,9 @@ async def main() -> None:
         user_id="alice",
         scopes={"claim_id": "CLM-2"},
         modalities="text",
+        instructions="Summarize only the facts for this claim. Do not invent other claims.",
     )
-    print("CLM-2:", (await a2.arun("Summarize this claim")).output.text())
+    print("CLM-2:", (await a2.arun("Summarize this claim's injury notes.")).output.text())
 
 
 if __name__ == "__main__":
