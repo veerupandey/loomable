@@ -90,7 +90,7 @@ class AgentOutput:
 def to_agent_input(value: Any) -> AgentInput:
     """Coerce a supported input value into an :class:`AgentInput`.
 
-    Mirrors agno-style flexible input: an agent may be given a plain string, an
+    Accepts flexible input: an agent may be given a plain string, an
     already-built :class:`AgentInput`, an :class:`AgentOutput`, a ``RunResult``,
     a Pydantic model, a dataclass instance, or a plain ``dict``.
 

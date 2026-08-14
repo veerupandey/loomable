@@ -1,4 +1,4 @@
-"""loomable.agent - High-level, agno-style Agent builder and runtime.
+"""loomable.agent - High-level Agent builder and runtime.
 
 This package holds the ergonomic high-level API that composes existing kernel
 primitives without modifying ``loomable.kernel``:
@@ -23,7 +23,6 @@ from .context_policy import CompactionResult, ContextPolicy
 from .delegation import make_delegation_tools, spawn_specialist
 from .errors import (
     AgentConfigError,
-    HITLPause,
     InputValidationError,
     RequireToolsError,
     StructuredOutputError,
@@ -62,7 +61,6 @@ __all__ = [
     "StructuredOutputError",
     "InputValidationError",
     "ToolHookRejection",
-    "HITLPause",
     "RequireToolsError",
     "RunResult",
     "RunChunk",

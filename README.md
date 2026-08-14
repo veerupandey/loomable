@@ -163,7 +163,7 @@ try:
 except FlowPaused:
     await wf.approve("scribe")
     result = await wf.arun(resume=True)
-print(wf.state.get("gather"))
+print(wf.state.get("gather").text())
 ```
 
 ### Case (goal + board)
@@ -212,8 +212,8 @@ async for ev in agent.astream_events(prompt):
 ```
 
 Prefer AG-UI SSE (`/run/events`). NDJSON at `POST /run/stream` is **Agent-only**
-(requires `astream`); `mount_case` does not register it. Disconnect calls
-`cancel()` on Agent, Case, Workflow, and Team.
+(requires `astream`); `mount_case` does not register it. Disconnect on
+`mount_agent` / `mount_case` calls `cancel()` on the mounted Agent or Case.
 
 ## Features
 

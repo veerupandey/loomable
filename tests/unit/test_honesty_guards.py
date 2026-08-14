@@ -239,3 +239,48 @@ def test_agent_approver_kwarg_reaches_built_agent() -> None:
 
     built = Agent(model=_model(), approver=allow, modalities="text").build()
     assert built.approver is allow
+
+
+def test_removed_multimodal_kwarg_raises() -> None:
+    with pytest.raises(TypeError, match="multimodal"):
+        Agent(model=_model(), multimodal=True, modalities="text")  # type: ignore[call-arg]
+
+
+def test_removed_memory_compose_short_long_raises() -> None:
+    with pytest.raises(TypeError):
+        Memory.compose(short=object())  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        Memory.compose(long=object())  # type: ignore[call-arg]
+
+
+def test_removed_memory_with_user_id() -> None:
+    memory = Memory.compose()
+    assert not hasattr(memory, "with_user_id")
+
+
+def test_removed_loop_end_condition_raises() -> None:
+    from loomable.flow import Loop
+
+    with pytest.raises(TypeError, match="end_condition"):
+        Loop(body=lambda x: x, end_condition=lambda *_: True)  # type: ignore[call-arg]
+
+
+def test_removed_workflow_branch_name_raises() -> None:
+    from loomable import Workflow
+
+    with pytest.raises(TypeError, match="name"):
+        Workflow("job").branch(when=lambda _s: True, then=lambda x: x, name="x")  # type: ignore[call-arg]
+
+
+def test_removed_top_level_sequential_absent() -> None:
+    import loomable
+
+    assert "sequential" not in loomable.__all__
+    assert not hasattr(loomable, "sequential")
+
+
+def test_kernel_memory_manager_rejected_as_agent_memory() -> None:
+    from loomable.kernel.memory import MemoryManager
+
+    with pytest.raises(AgentConfigError, match="Memory.compose"):
+        Agent(model=_model(), memory=MemoryManager(), modalities="text")

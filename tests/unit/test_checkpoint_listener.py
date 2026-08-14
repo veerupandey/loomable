@@ -202,31 +202,3 @@ class TestDurableHITL:
         assert latest.complete
         assert latest.pending == []
         assert latest.step == 4
-
-
-# ---------------------------------------------------------------------------
-# HITLPause error tests
-# ---------------------------------------------------------------------------
-
-
-class TestHITLPauseError:
-    """Test the HITLPause exception."""
-
-    def test_hitl_pause_carries_pending_calls(self):
-        from loomable.agent.errors import HITLPause
-        from loomable.kernel.models import ToolCall
-
-        calls = [ToolCall(id="c1", tool_name="deploy", args={"env": "prod"})]
-        err = HITLPause(pending_calls=calls, thread_id="t1")
-
-        assert err.pending_calls == calls
-        assert err.thread_id == "t1"
-        assert "deploy" in str(err)
-        assert "t1" in str(err)
-
-    def test_hitl_pause_is_loomable_error(self):
-        from loomable.agent.errors import HITLPause
-        from loomable.kernel.errors import LoomableError
-
-        err = HITLPause(pending_calls=[], thread_id="t1")
-        assert isinstance(err, LoomableError)

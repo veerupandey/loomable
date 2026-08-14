@@ -100,7 +100,7 @@ class TestFlowPausedException:
 # ---------------------------------------------------------------------------
 
 
-class TestHITLPause:
+class TestFlowPausedBeforeConfirmation:
     """Verify the engine pauses before a require_confirmation node."""
 
     @pytest.mark.asyncio

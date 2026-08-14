@@ -1,7 +1,9 @@
 # Loomable — High-Level API Reference
 
-Public beta agent framework. Build agents in a few lines, scale to Teams,
-Workflows, and Cases with SharedState, HITL, checkpoints, and AG-UI SSE.
+Public beta (`0.2.0b0`). Canonical surface: `Agent`, `Team`, `Workflow`, `Case`,
+`Memory.compose`, `knowledge_base=` / `retrievers=`, `create_deep_agent(profile=...)`.
+Prefer `Workflow` / `Team` over low-level Flow helpers. Names removed in this
+cut (no compatibility shims) are listed in [CHANGELOG.md](../CHANGELOG.md).
 
 ---
 
@@ -27,6 +29,7 @@ Workflows, and Cases with SharedState, HITL, checkpoints, and AG-UI SSE.
 - [Serving](#serving)
 - [Checkpointing](#checkpointing)
 - [Display & Visualization](#display--visualization)
+- [Removed names (no shims)](#removed-names-no-shims)
 
 ---
 
@@ -46,7 +49,7 @@ result = agent.run("What is the capital of France?")
 print(result.output.text())
 ```
 
-No optimizer, no engine, no checkpointer, no verifier, no deps, no memory. Just works.
+No tools, no memory, no extra config. Just works.
 
 ### Level 1: Agent + Tools
 
@@ -78,7 +81,6 @@ Add a Verifier to gate outputs against a machine-readable success condition.
 
 ```python
 from loomable.agent import Agent
-from loomable.flow import Verifier, VerdictResult
 
 def check_citation(output, context) -> bool:
     """Ensure the output contains a citation."""
@@ -101,14 +103,14 @@ A plain callable `(output, context) -> bool` works. No import ceremony required 
 Wrap any Runnable in a Loop for iterative refinement with explicit termination.
 
 ```python
-from loomable.flow import Loop, Verifier, VerdictResult
+from loomable.flow import Loop, VerdictResult
 
 def quality_check(output, context):
     if "excellent" in str(output).lower():
         return VerdictResult(ok=True)
     return VerdictResult(ok=False, detail="Needs more polish")
 
-loop = Loop(agent, verifier=quality_check, max_iterations=3)
+loop = Loop(body=agent, verifier=quality_check, max_iterations=3)
 result = await loop.arun("Write an excellent summary of AI trends")
 # Repeats up to 3 times, feeding failure detail forward for self-correction
 ```
@@ -120,7 +122,7 @@ The Loop is itself a Runnable — usable standalone or as a step in a Workflow.
 Build multi-step processes without Edges, frozensets, or engine enums:
 
 ```python
-from loomable import Agent, Workflow, Step, JsonFileCheckpointer
+from loomable import Agent, Workflow, JsonFileCheckpointer
 
 researcher = Agent(model="openai:gpt-4o-mini", instructions="Research the topic.")
 writer = Agent(model="openai:gpt-4o-mini", instructions="Write a short brief.")
@@ -346,7 +348,8 @@ result.usage               # {"input_tokens": N, "output_tokens": M}
 result.structured          # parsed output when response_model is set
 result.tool_activity       # tool outcomes from this run
 result.metadata            # {"stop_reason": "final", ...}
-result.trace               # list of Event objects (when debug=True)
+result.verification        # VerdictResult when verifier= is set
+result.trace               # Event list when debug=True or events=JSONTracer()
 ```
 
 ---
@@ -404,8 +407,9 @@ built.cancel()   # or agent.cancel() / workflow.cancel() / case.cancel() / team.
 ```
 
 Cooperative at tool-loop and Workflow step boundaries (not a hard abort of in-flight
-provider HTTP). SSE / NDJSON disconnect on `mount_*` calls `cancel()` on the mounted
-runnable (Agent, Case, Workflow, Team).
+provider HTTP). SSE / NDJSON disconnect on `mount_agent` / `mount_case` calls
+`cancel()` on the mounted Agent or Case. `Workflow.cancel()` / `Team.cancel()` are
+in-process only — there is no `mount_team` / `mount_workflow`.
 
 See `examples/deep_agent/` and `loomable/skills/research/SKILL.md`.
 
@@ -664,7 +668,7 @@ you pass a bare `note_store=` with `user_id`/`scopes`.
 
 `resume=True` means “this session row must already exist.” First turn: omit it. Later Agents: pass `resume=True`.
 
-### Same kwargs on Team / Case / Agent-in-Flow
+### Same kwargs on Team / Case / Workflow steps
 
 | Surface | Conversation L1/L2 | Long-term L3 | Notes |
 |---------|--------------------|--------------|-------|
@@ -1312,7 +1316,7 @@ agent = Agent(
 # Extra retrievers on the same agent
 agent = Agent(model=..., knowledge_base=store, retrievers=[custom_retriever])
 
-create_deep_agent(model, knowledge_base=store, embedder=embedder)
+create_deep_agent(model, knowledge_base=store)  # embedder= only for ingest / passive knowledge=
 ```
 
 `knowledge_base` accepts a vector store (`open_vector_store` / URI), sources to ingest, a `KnowledgeBase`, a `Corpus`, a retriever, or a name→collection mapping. Team, Case, Workflow, and Flow take the same kwarg and inherit it onto Agent members that do not already have one.
@@ -1574,13 +1578,16 @@ checkpointer = PostgresCheckpointer("postgresql://loomable:loomable@127.0.0.1:54
 ### Event-Driven Triggers
 
 ```python
-from loomable.persist import CheckpointConfig
+from loomable.persist import CheckpointConfig, CheckpointListener, JsonFileCheckpointer
 
-config = CheckpointConfig(
-    on_events=["run_end", "tool_call"],  # checkpoint on these events
-    max_checkpoints=10,
+checkpointer = JsonFileCheckpointer(".checkpoints")
+listener = CheckpointListener(
+    checkpointer=checkpointer,
+    config=CheckpointConfig(on_events=["run_end", "tool_call"], max_checkpoints=10),
+    thread_id="session-123",
 )
-# Use with CheckpointListener wired to agent events
+built = agent.build()
+built.events = listener  # wraps AgentEvents; still traces while checkpointing
 ```
 
 ### Forking (explore alternatives)
@@ -1604,7 +1611,7 @@ Two different surfaces:
 
 ## Display & Visualization
 
-Pretty-print results and visualize flow graphs. Works in both terminal and Jupyter.
+Pretty-print results and visualize compiled Workflow graphs as Mermaid.
 
 ### Pretty-print any result
 
@@ -1619,7 +1626,8 @@ pp(result)
 # Tokens: 12 in / 8 out
 ```
 
-`pp()` auto-detects the result type (agent, flow, loop, subagent) and formats accordingly. In Jupyter, it renders styled HTML.
+`pp()` pretty-prints a `RunResult` (Agent, Workflow, Loop, and Team all return one).
+Anything else is `print(result)`.
 
 ### Access individual outputs
 
@@ -1632,11 +1640,12 @@ outputs = delegation_outputs(result)
 print(outputs["researcher"])    # researcher's output text
 print(outputs["writer"])        # writer's output text
 
-# Flow step results by node name:
-result = await pipeline.arun("...")
+# Workflow step results by step name (not node_0):
+wf = Workflow("pipe").step("research", researcher).step("draft", writer)
+result = await wf.arun("...")
 steps = step_outputs(result)
-print(steps["node_0"])          # first step output
-print(steps["node_1"])          # second step output
+print(steps["research"])
+print(steps["draft"])
 ```
 
 ### Visualize flow graphs
@@ -1644,16 +1653,13 @@ print(steps["node_1"])          # second step output
 ```python
 from loomable.display import show_graph, mermaid_graph
 
-# Terminal: prints Mermaid syntax (paste into mermaid.live)
-# Jupyter: renders interactive SVG via Mermaid.js CDN
-show_graph(my_flow, title="Research Pipeline")
-
-# Get the raw Mermaid definition:
-print(mermaid_graph(my_flow))
+# Workflow compiles to a Flow — pass wf.flow (or a raw Flow)
+show_graph(wf.flow, title="Research")  # prints Mermaid; paste into mermaid.live
+print(mermaid_graph(wf.flow))
 # graph TD
-#   researcher[researcher<br/><small>Researcher</small>]
-#   writer[writer<br/><small>Writer</small>]
-#   researcher --> writer
+#   research[research]
+#   draft[draft]
+#   research --> draft
 ```
 
 ### Output access patterns by primitive
@@ -1662,9 +1668,26 @@ print(mermaid_graph(my_flow))
 |-----------|-------------|-----------------|
 | Agent | `result.output.text()` | `result.tool_activity` (tools called) |
 | Agent + subagents | `result.output.text()` | `delegation_outputs(result)` → dict by name |
-| Flow (sequential/parallel) | `result.output.text()` | `result.sub_results` dict or `step_outputs(result)` |
+| Workflow | `result.output.text()` | `step_outputs(result)` keyed by `.step("name", ...)` |
+| Team | `result.output.text()` | `delegation_outputs(result)` |
 | Loop | `result.output.text()` | `result.metadata["loop_iterations"]`, `result.metadata["loop_verified"]` |
-| Team | `result.output.text()` | Same as subagents — `delegation_outputs(result)` |
+| Flow (escape hatch) | `result.output.text()` | `result.sub_results` or `step_outputs(result)` |
+
+---
+
+## Removed names (no shims)
+
+These raise `TypeError` / `ImportError` / `AgentConfigError` — see [CHANGELOG.md](../CHANGELOG.md):
+
+| Old | Use instead |
+|-----|-------------|
+| `Agent(multimodal=...)` | `modalities=` / `text_only=` (media is default) |
+| `Memory.compose(short=` / `long=`) | `conversation=` / `user=` |
+| `Memory.with_user_id()` | `with_scopes(user_id=...)` |
+| `Loop(end_condition=)` | `verifier=` (`Workflow.loop(..., until=)`) |
+| `from loomable import sequential` / `parallel` / `route` | `Workflow` / `Team` (`loomable.flow.helpers` if needed) |
+| `Agent(memory=MemoryManager())` | `Memory.compose(...)` |
+| `HITLPause` | `FlowPaused` |
 
 ---
 
