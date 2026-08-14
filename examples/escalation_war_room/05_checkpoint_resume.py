@@ -1,10 +1,10 @@
-"""Phase B gate — kill mid-workflow and resume from checkpoint.
+"""Phase B gate — kill mid-workflow and resume (live Agents).
 
-Agents are the Workflow steps. The framework passes each Agent the previous
-Agent's output — no parse helpers.
+Gather and scribe are real Agents. After gather finishes we write an incomplete
+checkpoint (simulate crash), then resume so gather is skipped and scribe runs
+on the prior Agent's output.
 
-This exam still simulates a crash by writing an incomplete checkpoint after
-the gather Agent finishes, then resumes so gather is skipped and scribe runs.
+Requires ``GEMINI_API_KEY`` (or OpenAI / Azure) — see ``.env.example``.
 """
 
 from __future__ import annotations
@@ -14,37 +14,35 @@ import shutil
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from loomable import Agent, JsonFileCheckpointer, Workflow
 from loomable.agent.context import RunContext
 from loomable.flow.state import SharedState
 from loomable.persist.checkpoint import Checkpoint
 
-from _common import ROOT
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _offline import scripted_model  # noqa: E402
+from _common import ROOT, make_provider
 
 CKPT_DIR = ROOT / ".checkpoints_phase_b"
 SESSION = "inc-88421-resume"
 
 
-def _counting_agent(role: str, steps: list, counter: dict[str, int], key: str) -> Agent:
-    """Agent whose model increments ``counter[key]`` each time it is invoked."""
-    base = scripted_model(steps)
-    inner = base.provider_impl
+class _CountingProvider:
+    """Wrap a live provider and count ``complete`` calls."""
 
-    class _Counting:
-        async def complete(self, request):
-            counter[key] += 1
-            return await inner.complete(request)
+    def __init__(self, inner, counter: dict[str, int], key: str) -> None:
+        self._inner = inner
+        self._counter = counter
+        self._key = key
 
-    from loomable.agent import ModelSpec
+    async def complete(self, request):
+        self._counter[self._key] += 1
+        return await self._inner.complete(request)
 
-    return Agent(
-        ModelSpec(provider=f"count-{key}", provider_impl=_Counting()),
-        role=role,
-        use_llm_summarizer=False,
-    )
+    def __getattr__(self, name: str):
+        return getattr(self._inner, name)
 
 
 async def main() -> None:
@@ -53,30 +51,39 @@ async def main() -> None:
     CKPT_DIR.mkdir(parents=True)
 
     cp = JsonFileCheckpointer(str(CKPT_DIR))
+    base = make_provider()
 
-    # --- Run 1: gather Agent completes, then we "kill" before scribe ---
     gatherer = Agent(
-        scripted_model(["EVIDENCE:SEV-1 email"]),
+        base,
         role="Gatherer",
-        goal="Collect incident evidence",
-        use_llm_summarizer=False,
+        goal="Collect incident evidence from the email",
+        instructions=(
+            "Summarize the incident in 2-4 short lines. "
+            "Start the first line with EVIDENCE: then key facts."
+        ),
     )
     scribe = Agent(
-        scripted_model([{"echo": "PACKET:{input}"}]),
+        base,
         role="Scribe",
         goal="Turn evidence into an escalation packet",
-        use_llm_summarizer=False,
+        instructions=(
+            "You receive the previous gatherer's output as your input. "
+            "Write a short escalation packet. Start with PACKET: then the summary."
+        ),
     )
-    wf1 = (
+    (
         Workflow("war-room-resume", session_id=SESSION, checkpointer=cp)
         .step("gather", gatherer)
         .step("scribe", scribe)
     )
 
-    # Drive gather only, then write incomplete checkpoint (simulate process kill).
+    # Drive gather only, then write incomplete checkpoint (simulate kill).
     state = SharedState()
     ctx = RunContext(shared_state=state)
-    gather_result = await gatherer.arun("SEV-1 email", context=ctx)
+    gather_result = await gatherer.arun(
+        "SEV-1: UPI settlement batches stuck since 18:40 IST for BharatNova.",
+        context=ctx,
+    )
     state.write("gather", gather_result.output)
     await cp.put(
         Checkpoint(
@@ -90,36 +97,42 @@ async def main() -> None:
         )
     )
     print("[kill] incomplete checkpoint after gather Agent")
+    print(f"    gather output={ (gather_result.output.text() or '')[:160]}")
 
-    # --- Run 2: resume — gather skipped; scribe reads prior Agent output ---
+    # Resume with fresh Agents; count model calls so we prove gather is skipped.
     calls = {"gather": 0, "scribe": 0}
-    gather2 = _counting_agent(
-        "Gatherer",
-        ["EVIDENCE:should-not-run"],
-        calls,
-        "gather",
+    gather2 = Agent(
+        _CountingProvider(make_provider(), calls, "gather"),
+        role="Gatherer",
+        goal="Collect incident evidence",
+        instructions="Start with EVIDENCE:",
     )
-    scribe2 = _counting_agent(
-        "Scribe",
-        [{"echo": "PACKET:{input}"}],
-        calls,
-        "scribe",
+    scribe2 = Agent(
+        _CountingProvider(make_provider(), calls, "scribe"),
+        role="Scribe",
+        goal="Turn evidence into an escalation packet",
+        instructions=(
+            "You receive the previous gatherer's output. "
+            "Start with PACKET: then summarize."
+        ),
     )
     wf2 = (
         Workflow("war-room-resume", session_id=SESSION, checkpointer=cp)
         .step("gather", gather2)
         .step("scribe", scribe2)
     )
-    result = await wf2.arun("SEV-1 email", resume=True)
+    result = await wf2.arun(
+        "SEV-1: UPI settlement batches stuck since 18:40 IST for BharatNova.",
+        resume=True,
+    )
 
     assert calls["gather"] == 0, f"gather Agent should be skipped, got {calls}"
-    assert calls["scribe"] == 1, f"scribe Agent should run once, got {calls}"
+    assert calls["scribe"] >= 1, f"scribe Agent should run, got {calls}"
     assert result.metadata.get("resumed") is True
     assert "gather" in (result.metadata.get("skipped_nodes") or [])
     out = result.output.text() or ""
-    assert "PACKET:" in out and "EVIDENCE:" in out, out
+    assert out.strip(), out
 
-    # resume=True with no incomplete CP must fail
     await wf2.clear_checkpoint()
     try:
         await wf2.arun("x", resume=True)
@@ -127,9 +140,9 @@ async def main() -> None:
     except RuntimeError as exc:
         assert "no incomplete checkpoint" in str(exc).lower()
 
-    print("[ok] Phase B kill/resume gate (Agents as steps)")
+    print("[ok] Phase B kill/resume gate (live Agents)")
     print(f"    skipped={result.metadata.get('skipped_nodes')}")
-    print(f"    output={out[:120]}")
+    print(f"    output={out[:200]}")
 
 
 if __name__ == "__main__":

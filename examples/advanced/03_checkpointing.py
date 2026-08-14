@@ -1,15 +1,11 @@
-"""Checkpointing — Agents as Workflow steps (framework passes outputs).
+"""Checkpointing — live Agents as Workflow steps.
 
-USE WHEN: A multi-step process needs pause/resume across restarts.
+Each Agent receives the previous Agent's output automatically.
+Requires a real LLM key (``GEMINI_API_KEY`` / OpenAI / Azure) — see ``.env.example``.
 
-Do **not** write parse helpers between steps. Put Agents on the Workflow;
-each Agent already receives the previous Agent's output as its input::
+Run::
 
-    Workflow(...).step("draft", drafter).step("review", reviewer)
-
-Same idea for ``sequential(drafter, reviewer)`` and ``Team(mode="sequential")``.
-
-Fuller kill/resume exam: ``escalation_war_room/05_checkpoint_resume.py``.
+    python examples/advanced/03_checkpointing.py
 """
 
 from __future__ import annotations
@@ -19,10 +15,14 @@ import shutil
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from loomable import Agent, JsonFileCheckpointer, Workflow
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _offline import scripted_model  # noqa: E402
+from _provider import require_provider  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent / ".checkpoint_demo"
 SESSION = "checkpoint-demo"
@@ -33,18 +33,22 @@ async def main() -> None:
         shutil.rmtree(ROOT)
     ROOT.mkdir(parents=True)
 
+    model = require_provider()
     drafter = Agent(
-        scripted_model(["DRAFT: Testing matters because flaky deployments hurt users."]),
+        model,
         role="Drafter",
         goal="Write a short draft on the topic",
-        use_llm_summarizer=False,
+        instructions="Write 2-3 clear sentences. No preamble.",
     )
-    # Reviewer sees the draft text automatically (prior AgentOutput → user turn).
     reviewer = Agent(
-        scripted_model([{"echo": "APPROVED: {input}"}]),
+        model,
         role="Reviewer",
         goal="Review the draft and approve or request changes",
-        use_llm_summarizer=False,
+        instructions=(
+            "You receive the previous agent's draft as your input. "
+            "Reply with APPROVED: followed by a one-line justification, "
+            "or CHANGES: with specific fixes."
+        ),
     )
 
     cp = JsonFileCheckpointer(str(ROOT / "checkpoints"))
@@ -53,7 +57,7 @@ async def main() -> None:
         .step("draft", drafter)
         .step("review", reviewer)
     )
-    result = await wf.arun("flaky deployments hurt users")
+    result = await wf.arun("Why testing matters for flaky deployments")
     print(result.output.text())
 
     saved = await cp.get(SESSION)

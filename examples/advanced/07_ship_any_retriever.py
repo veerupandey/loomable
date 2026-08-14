@@ -1,4 +1,6 @@
-"""Ship any Retriever — high-level ``Agent(retrievers=[...])``.
+"""Ship any Retriever — live ``Agent(retrievers=[...])``.
+
+Requires a real LLM key — see ``.env.example``.
 
 Run::
 
@@ -12,11 +14,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from loomable import Agent
 from loomable.kernel.contracts import Retriever
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _offline import scripted_model  # noqa: E402
+from _provider import require_provider  # noqa: E402
 
 
 class AcmeCatalogRetriever(Retriever):
@@ -39,16 +45,12 @@ class AcmeCatalogRetriever(Retriever):
 
 async def main() -> None:
     agent = Agent(
-        model=scripted_model(
-            [
-                {"tool": "search_acme", "args": {"query": "widget", "k": 1}},
-                "Acme catalog lookup done.",
-            ]
-        ),
+        model=require_provider(),
         retrievers=[AcmeCatalogRetriever()],
-        use_llm_summarizer=False,
+        instructions="Use search_acme to look up SKUs before answering.",
+        max_tool_iterations=4,
     )
-    result = await agent.arun("What is the widget SKU?")
+    result = await agent.arun("What is the widget SKU and price?")
     print(result.output.text())
 
 
