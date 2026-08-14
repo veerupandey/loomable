@@ -5,7 +5,7 @@ def test_import_loomable():
     """Verify the loomable package is importable."""
     import loomable
 
-    assert loomable.__version__ == "0.1.0"
+    assert loomable.__version__ == "0.2.0b0"
 
 
 def test_import_kernel():
