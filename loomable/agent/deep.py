@@ -62,8 +62,10 @@ Operating rules:
 8. Use think for brief private reasoning; use memory when durable facts should
    survive beyond this session (if the memory tool is available).
 9. Finish by writing the user-facing deliverable with write_file (e.g. reports/…),
-   then update todos to completed. Do not stop after format_bibliography alone —
-   the Markdown report file is required.
+   then mark todos completed in at most one update_todo call and STOP. Do not keep
+   updating todos after the report exists — emit your final answer summarizing the
+   deliverable path. Do not stop after format_bibliography alone — the Markdown
+   report file is required.
 
 Quality bar: be concrete, cite sources from tools when available, and verify
 the deliverable against the original goal before stopping.
