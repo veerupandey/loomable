@@ -25,7 +25,7 @@ Loomable already has the enterprise spine. We beat them by combining:
 |------------|----------|------------------|
 | **deepagents** | Skills progressive disclosure, FS middleware, create_deep_agent DX | Same skill model + citations/verify/accept + Case + no LangGraph lock-in |
 | **Claude Code / Agent SDK** | Tool search, MCP defer, skill metadata | Portable across providers; schema budget + MCP defer + skill catalog on any model |
-| **OpenAI Agents** | Hosted tool_search / namespaces / defer_loading | Provider-agnostic discovery meta-tools; namespaces later |
+| **OpenAI Agents** | Hosted tool_search / namespaces / defer_loading | Provider-agnostic discovery meta-tools + namespaces + lazy MCP |
 | **Agno / CrewAI** | Multi-agent DX, marketing surface | Stronger long-horizon research + Memory.compose + Workflow/Case |
 
 ## Implementation waves
