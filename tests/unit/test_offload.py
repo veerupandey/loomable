@@ -87,6 +87,8 @@ async def test_deep_agent_offloads_large_tool_result(tmp_path: Path) -> None:
         enable_task_tool=False,
         think_tool=False,
         modalities="text",
+        discovery=False,
+        board=False,
         offload_large_tools=True,
         offload_threshold=1000,
         tools=[FunctionTool(huge_page, name="huge_page")],

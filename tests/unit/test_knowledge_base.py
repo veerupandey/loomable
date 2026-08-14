@@ -35,7 +35,7 @@ def _seed(root: Path) -> tuple[Path, Path]:
     )
     (company / "runbook.md").write_text(
         "# Webhooks\n\n"
-        "Current webhook signing secret is KEY-WHSEC-4419. Rotate after any leak.\n",
+        "Current webhook signing secret is DEMO-WH-4419. Rotate after any leak.\n",
         encoding="utf-8",
     )
     return personal, company
@@ -86,20 +86,20 @@ class _ConflictSolver:
                     ToolCall(
                         id="2",
                         tool_name="search_company",
-                        args={"query": "staging .env credentials webhook KEY-WHSEC", "k": 5},
+                        args={"query": "staging .env credentials webhook DEMO-WH", "k": 5},
                     )
                 ],
             )
         blob = str(request.messages).lower()
         has_personal = "never commit" in blob or "no api tokens" in blob
-        has_key = "key-whsec-4419" in blob
+        has_key = "demo-wh-4419" in blob
         has_policy = ".env" in blob or "staging" in blob
         if has_personal and has_key:
             return ModelResponse(
                 content=(
-                    "Do not commit STAGING_API_TOKEN. Avery's personal notes forbid "
+                    "Do not commit the staging token. Avery's personal notes forbid "
                     "secrets in git, which is stricter than company .env policy. "
-                    "Rotate the webhook with KEY-WHSEC-4419 "
+                    "Rotate the webhook with DEMO-WH-4419 "
                     "(sources: prefs.md, runbook.md)."
                 )
             )
@@ -110,7 +110,7 @@ class _ConflictSolver:
         )
 
 
-def test_personalized_factory_is_not_public() -> None:
+def test_no_extra_agent_factory() -> None:
     import loomable
     import loomable.agent as agent_mod
 
@@ -136,12 +136,12 @@ async def test_agent_knowledge_base_named_collections(tmp_path: Path) -> None:
     assert "search_company" in built.tool_runtime._tools
     assert isinstance(built.tool_runtime._tools["search_personal"], RetrieverTool)
     result = await agent.arun(
-        "Can I commit STAGING_API_TOKEN=sk-live-99 per policy? "
+        "Can I commit STAGING_TOKEN=demo-not-a-secret per policy? "
         "Also what is the webhook signing secret? Cite sources."
     )
     text = (result.output.text() or "").lower()
     assert text.startswith("do not commit"), text
-    assert "key-whsec-4419" in text
+    assert "demo-wh-4419" in text
     assert "prefs.md" in text or "runbook.md" in text
 
 
@@ -169,11 +169,11 @@ async def test_deep_agent_knowledge_base_not_deferred(tmp_path: Path) -> None:
     assert "search_personal" in built.tool_runtime._tools
     assert "search_company" in built.tool_runtime._tools
     result = await agent.arun(
-        "Can I commit STAGING_API_TOKEN=sk-live-99? What is the webhook key?"
+        "Can I commit STAGING_TOKEN=demo-not-a-secret? What is the webhook key?"
     )
     text = (result.output.text() or "").lower()
     assert "do not commit" in text, text
-    assert "key-whsec-4419" in text
+    assert "demo-wh-4419" in text
     assert "search_personal" in solver.advertised
     assert "search_company" in solver.advertised
 
@@ -382,3 +382,125 @@ async def test_team_inherits_knowledge_base(tmp_path: Path) -> None:
     )
     built = member.build()
     assert "search_knowledge" in built.tool_runtime._tools
+
+
+@pytest.mark.asyncio
+async def test_knowledge_base_sources_become_search_knowledge(tmp_path: Path) -> None:
+    docs = tmp_path / "notes.md"
+    docs.write_text("# Notes\n\nAlpha protocol is required.\n", encoding="utf-8")
+    agent = Agent(
+        ModelSpec(provider="scripted", provider_impl=_ConflictSolver()),
+        knowledge_base=[docs],
+        use_llm_summarizer=False,
+        max_tool_iterations=2,
+    )
+    built = agent.build()
+    assert "search_knowledge" in built.tool_runtime._tools
+    assert isinstance(built.tool_runtime._tools["search_knowledge"], RetrieverTool)
+
+
+@pytest.mark.asyncio
+async def test_knowledge_base_object_and_memory_compose(tmp_path: Path) -> None:
+    from loomable.memory import KnowledgeMemory, Memory
+
+    docs = tmp_path / "faq.md"
+    docs.write_text("# FAQ\n\nOffice hours are 09:00 IST.\n", encoding="utf-8")
+    bundle = Memory.compose(
+        knowledge=KnowledgeMemory(sources=[docs], top_k=2),
+    )
+    agent = Agent(
+        ModelSpec(provider="scripted", provider_impl=_ConflictSolver()),
+        memory=bundle,
+        use_llm_summarizer=False,
+        max_tool_iterations=2,
+    )
+    built = agent.build()
+    assert "search_knowledge" in built.tool_runtime._tools
+
+
+@pytest.mark.asyncio
+async def test_duplicate_knowledge_and_retriever_names_fail(tmp_path: Path) -> None:
+    from loomable.agent.errors import AgentConfigError
+    from loomable.retrieval import AgenticRetriever
+
+    notes = tmp_path / "notes.md"
+    notes.write_text("# Notes\n\nDark mode.\n", encoding="utf-8")
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    (extra / "a.md").write_text("# A\n\nx\n", encoding="utf-8")
+    corpus = await ingest(
+        [extra],
+        name="notes",
+        store=open_vector_store(engine="memory"),
+        strategy="markdown",
+        base_mode="lexical",
+    )
+    rag = AgenticRetriever(corpus, name="search_notes", rewrite="off", rerank=False)
+    agent = Agent(
+        ModelSpec(provider="scripted", provider_impl=_ConflictSolver()),
+        knowledge_base={"notes": [notes]},
+        retrievers=[rag],
+        use_llm_summarizer=False,
+    )
+    with pytest.raises(AgentConfigError):
+        agent.build()
+
+
+@pytest.mark.asyncio
+async def test_flow_inherits_knowledge_base(tmp_path: Path) -> None:
+    from loomable.flow.flow import Flow
+
+    docs = tmp_path / "policy.md"
+    docs.write_text("# Policy\n\nNever ship without review.\n", encoding="utf-8")
+
+    class _Ping:
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            names = _tool_names(request)
+            if "search_knowledge" not in names:
+                return ModelResponse(content=f"FAIL {sorted(names)}")
+            return ModelResponse(content="kb visible")
+
+    worker = Agent(
+        ModelSpec(provider="scripted", provider_impl=_Ping()),
+        role="Worker",
+        use_llm_summarizer=False,
+        max_tool_iterations=2,
+    )
+    Flow(
+        [worker],
+        knowledge_base=KnowledgeBase(sources=[docs], name="knowledge"),
+    )
+    built = worker.build()
+    assert "search_knowledge" in built.tool_runtime._tools
+    result = await worker.arun("ping")
+    assert "visible" in (result.output.text() or "")
+
+
+def test_example_07_knowledge_base_runs() -> None:
+    import runpy
+
+    script = Path(__file__).resolve().parents[2] / "examples" / "agents" / "07_knowledge_base.py"
+    runpy.run_path(str(script), run_name="__main__")
+
+
+def test_env_files_are_not_committed() -> None:
+    import subprocess
+
+    root = Path(__file__).resolve().parents[2]
+    ignored = subprocess.run(
+        ["git", "check-ignore", "-q", ".env"],
+        cwd=root,
+    )
+    assert ignored.returncode == 0
+    tracked = subprocess.run(
+        ["git", "ls-files", ".env", ".env.*"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    tracked_files = [f for f in tracked.stdout.splitlines() if f and f != ".env.example"]
+    assert tracked_files == []
+    example = (root / ".env.example").read_text(encoding="utf-8")
+    assert "GEMINI_API_KEY=" in example
+    assert "sk-" not in example
+    assert "AIza" not in example

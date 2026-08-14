@@ -1,5 +1,8 @@
 """Build pluggable retrievers for docs / markdown / code and attach to Agent.
 
+``Agent(knowledge_base=sources)`` is the usual path. Use ``build_retriever``
+when you need an explicit hybrid/lexical/vector tool to pass as ``retrievers=``.
+
 Run::
 
     python examples/advanced/02_build_retriever.py

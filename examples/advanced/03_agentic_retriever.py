@@ -1,5 +1,9 @@
 """Pluggable agentic retriever: ingest → hybrid → auto-route → agent tool.
 
+Prefer ``Agent(knowledge_base=store_or_sources)`` when you only need a
+vector-DB search tool. Use this example when you want to tune rewrite /
+rerank / mode routing before shipping ``retrievers=[...]``.
+
 Run::
 
     python examples/advanced/03_agentic_retriever.py

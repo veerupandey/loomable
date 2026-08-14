@@ -2,7 +2,7 @@
   <h1>loomable</h1>
   <p>Enterprise AI agents — Agent · Team · Workflow · Case · AG-UI SSE</p>
   <p>
-    <a href="https://github.com/veerupandey/loomable/actions/workflows/ci.yml"><img src="https://github.com/veerupandey/loomable/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+    <a href="https://github.com/veerupandey/loomable/actions/workflows/ci.yml"><img src="https://github.com/veerupandey/loomable/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
     <img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+" />
     <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT" />
     <img src="https://img.shields.io/badge/status-beta-blue.svg" alt="Status: beta" />
@@ -71,15 +71,17 @@ pip install "loomable @ git+https://github.com/veerupandey/loomable.git@v0.2.0b0
 # or track main / editable
 pip install "loomable @ git+https://github.com/veerupandey/loomable.git"
 uv add "loomable @ git+https://github.com/veerupandey/loomable.git"
-git clone https://github.com/veerupandey/loomable.git && cd loomable && pip install -e ".[dev]"
+git clone https://github.com/veerupandey/loomable.git && cd loomable && pip install -e ".[dev,toolkits]"
 ```
 
 ### Provider credentials
 
+Copy [`.env.example`](.env.example) to `.env` in the repo root (gitignored — never commit it), or export:
+
 ```bash
 export GEMINI_API_KEY="..."          # Gemini
 # or
-export OPENAI_API_KEY="sk-..."       # OpenAI
+export OPENAI_API_KEY="..."          # OpenAI
 # or Azure: AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_API_KEY / AZURE_OPENAI_DEPLOYMENT_NAME
 ```
 
@@ -94,6 +96,12 @@ agent = Agent(model=GeminiProvider(), instructions="Be concise.")
 print(asyncio.run(agent.arun("Capital of France?")).output.text())
 ```
 
+Searchable knowledge base (vector store → `search_*` tools):
+
+```python
+agent = Agent(model=GeminiProvider(), knowledge_base=["./handbook.pdf", "./runbooks"])
+```
+
 ## Core primitives
 
 ### Agent
@@ -101,7 +109,12 @@ print(asyncio.run(agent.arun("Capital of France?")).output.text())
 ```python
 from loomable import Agent, tool
 
-agent = Agent(model=provider, tools=[multiply], response_model=Packet)
+agent = Agent(
+    model=provider,
+    tools=[multiply],
+    knowledge_base=["./handbook.pdf"],  # vector DB → search_knowledge
+    response_model=Packet,
+)
 result = await agent.arun("What is 7 * 8?")
 ```
 
@@ -174,7 +187,7 @@ Legacy NDJSON remains at `POST /run/stream`.
 | **Tool-use loop** | Automatic tool iteration until final answer |
 | **Require tools** | Path-constrained side-effect enforcement |
 | **Memory** | Session / user / tiered stores + compaction |
-| **Knowledge (RAG)** | Embed at build, recall at run |
+| **Knowledge base** | Vector store → `search_*` tools (`knowledge_base=`); optional passive `knowledge=` |
 | **Multimodal I/O** | Image / audio / video in and out |
 | **Structured I/O** | Pydantic / dataclass schemas |
 | **Verification** | Same verifier protocol on Agent, Loop, Case |
@@ -190,7 +203,7 @@ Legacy NDJSON remains at `POST /run/stream`.
 
 ```
 examples/
-├── agents/               # Start here
+├── agents/               # Start here (07 = knowledge_base vector DB)
 ├── deep_agent/           # Loomable-only deep research (beats peer deep agents)
 ├── subagents/            # Delegation & Team
 ├── patterns/             # Loop / pipeline / parallel / plan-execute
@@ -202,6 +215,7 @@ examples/
 
 ```bash
 python examples/agents/01_hello_world.py
+python examples/agents/07_knowledge_base.py
 python examples/deep_agent/03_live_multimodal_research.py
 python examples/escalation_war_room/10_case.py
 python examples/escalation_war_room/12_agent_agui_sse.py
@@ -220,6 +234,7 @@ loomable/
 ├── content/     # Media parts & coercion
 ├── kernel/      # Core primitives
 ├── providers/   # Models + backends (Postgres KV/vector)
+├── retrieval/   # ingest, KnowledgeBase, agentic retrievers
 ├── persist/     # JsonFile / SQLite / Postgres checkpointers
 ├── serve/       # FastAPI + MCP adapters
 └── media/       # Image / Audio / Video helpers
