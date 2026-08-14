@@ -32,8 +32,12 @@
 - CI installs `.[dev,toolkits]`; README badge pins `main`
 - Default zvec L3 store reuses an in-process collection handle (no exclusive-lock deadlock across `Agent()` builds)
 - Examples audited for 0.2.0 APIs: unique numbering, live `knowledge_base` / Team inherit demos, retrieval demos use live providers
-- Docs Level 6 teaches `Workflow(memory=True, checkpointer=...)` instead of `Flow` + `TieredMemoryStore`
+- Pattern examples teach `Workflow` / `Team` (not `sequential`/`parallel`/`route` helpers)
+- Docs Level 5–7 teach `Workflow` parallel/branch/HITL; Flow demoted to escape hatch
+- Root README teaches `Memory.compose` + `create_deep_agent(profile=...)`
 - Memory compose example uses `Memory.compose` (not flat `session_store=` / `note_store=`)
+- Shared provider helper adds `make_embedder()` aligned with chat credentials
+- Renamed `memory/03_workflow_shared_memory.py`, `advanced/02_workflow_branch.py`
 
 ### Removed
 

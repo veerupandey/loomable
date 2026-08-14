@@ -1,13 +1,10 @@
-"""Agent verifier retry — Quality gate with automatic retry.
+"""Agent verifier retry — quality gate with automatic retry.
 
 USE WHEN: You need verified output quality. The agent retries
 until a verifier function approves the result.
 
-This demo uses Agent-level ``verifier=`` + ``retry_on_failure=True``.
-For a Flow-level quality gate, use ``Loop`` from ``loomable.flow``::
-
-    from loomable.flow import Loop
-    loop = Loop(agent, verifier=verify_has_code, max_iterations=3)
+Agent-level ``verifier=`` + ``retry_on_failure=True``. For a process-level
+gate, use ``Workflow(...).loop(agent, until=verify, max_iterations=3)``.
 """
 
 import asyncio
@@ -44,7 +41,6 @@ agent = Agent(
 
 result = asyncio.run(agent.arun("Write a function to check if a string is a palindrome."))
 
-# Pretty-print with loop/verification info
 from loomable.display import pp
 
 pp(result)

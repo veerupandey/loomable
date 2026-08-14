@@ -30,10 +30,11 @@ Loomable is a Python framework for production agent systems. One `Runnable` cont
 | Primitive | Role |
 |-----------|------|
 | **Agent** | Model + tools + memory + structured I/O |
-| **Team** | Specialists (broadcast / sequential / coordinate) |
+| **Team** | Specialists (broadcast / sequential / coordinate / route) |
 | **Workflow** | Durable multi-step process (HITL, checkpoints, SharedState) |
 | **Case** | Goal + WorkItems board + plan → dispatch → accept |
-| **Deep Agent** | Loomable-only long-horizon research harness (beats LangGraph/Agno/Crew deep stacks) |
+| **Memory** | `Memory.compose` — conversation / user / knowledge layers |
+| **Deep Agent** | `create_deep_agent(profile="research"\|"code")` long-horizon harness |
 | **Flow** | Low-level graph escape hatch |
 
 Everything that runs is a `Runnable`. Agents nest in workflows; cases compile to workflows; workflows stream the same AG-UI events as agents.
@@ -100,6 +101,27 @@ Searchable knowledge base (vector store → `search_*` tools):
 
 ```python
 agent = Agent(model=GeminiProvider(), knowledge_base=["./handbook.pdf", "./runbooks"])
+```
+
+Composable memory:
+
+```python
+from loomable import Agent, ConversationMemory, Memory, UserMemory, open_session_store
+
+memory = Memory.compose(
+    conversation=ConversationMemory(store=open_session_store("sqlite", path="sessions.db")),
+    user=UserMemory(auto_extract=True, memory_tool=True),
+)
+agent = Agent(model=provider, memory=memory, session_id="chat-1", user_id="alice")
+```
+
+Deep research / code harness:
+
+```python
+from loomable import create_deep_agent
+
+agent = create_deep_agent(provider, profile="research", workspace="./.deep_workspace")
+# agent = create_deep_agent(provider, profile="code", repo="./my-app")
 ```
 
 ## Core primitives
@@ -186,7 +208,7 @@ Legacy NDJSON remains at `POST /run/stream`.
 | **Function tools** | `@tool` — JSON schema from type hints |
 | **Tool-use loop** | Automatic tool iteration until final answer |
 | **Require tools** | Path-constrained side-effect enforcement |
-| **Memory** | Session / user / tiered stores + compaction |
+| **Memory** | `Memory.compose` (conversation / user / knowledge) + compaction |
 | **Knowledge base** | Vector store → `search_*` tools (`knowledge_base=`); optional passive `knowledge=` |
 | **Multimodal I/O** | Image / audio / video in and out |
 | **Structured I/O** | Pydantic / dataclass schemas |
@@ -204,11 +226,11 @@ Legacy NDJSON remains at `POST /run/stream`.
 ```
 examples/
 ├── agents/               # Start here (07 = knowledge_base vector DB)
-├── deep_agent/           # Loomable-only deep research (beats peer deep agents)
+├── deep_agent/           # create_deep_agent(profile=research|code)
 ├── subagents/            # Delegation & Team
-├── patterns/             # Loop / pipeline / parallel / plan-execute
-├── memory/               # Session & shared memory
-├── advanced/             # MCP, checkpoints, multimodal
+├── patterns/             # Workflow step / parallel / Team route / map
+├── memory/               # Memory.compose & shared Workflow memory
+├── advanced/             # MCP, Workflow branch, checkpoints, RAG
 ├── simple_use_cases/     # News, research, docs
 └── escalation_war_room/  # Full SEV ladder (Case + SSE)
 ```
