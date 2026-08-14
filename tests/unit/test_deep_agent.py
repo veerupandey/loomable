@@ -158,7 +158,7 @@ async def test_create_deep_agent_registers_core_tools(tmp_path) -> None:
     assert getattr(agent, "_tool_timeout", None) == 60.0
     assert getattr(agent, "_resilience", None) is not None
 
-    # Multimodal research defaults register image tools
+    # Multimodal research defaults register image tools (deferred under discovery)
     vision = create_deep_agent(
         ModelSpec(provider="scripted", provider_impl=_Noop()),
         workspace=tmp_path / "v",
@@ -171,9 +171,15 @@ async def test_create_deep_agent_registers_core_tools(tmp_path) -> None:
         modalities="text+image",
         use_llm_summarizer=False,
     )
-    vnames = set(vision.build().tool_runtime._tools.keys())
+    vbuilt = vision.build()
+    vnames = set(vbuilt.tool_runtime._tools.keys())
+    deferred = {t.name for t in vbuilt.discovery.catalog.tools if not t.activated}
     for required in ("fetch_image", "analyze_image", "list_images", "discover_images"):
-        assert required in vnames, f"missing {required}"
+        assert required in deferred or required in vnames, f"missing {required}"
+        if required not in vnames:
+            assert required in deferred
+            assert vbuilt.discovery.activate_tool(required)["ok"]
+            assert required in vbuilt.tool_runtime._tools
 
 
 @pytest.mark.asyncio
@@ -330,6 +336,12 @@ def test_create_research_agent_alias(tmp_path) -> None:
         use_llm_summarizer=False,
     )
     assert agent._name == "research-agent"
-    names = set(agent.build().tool_runtime._tools.keys())
+    built = agent.build()
+    names = set(built.tool_runtime._tools.keys())
     assert "register_source" in names
-    assert "fetch_image" in names
+    # Image tools are deferred under discovery schema budget
+    deferred = {t.name for t in built.discovery.catalog.tools if not t.activated}
+    assert "fetch_image" in names or "fetch_image" in deferred
+    if "fetch_image" not in names:
+        assert built.discovery.activate_tool("fetch_image")["ok"]
+        assert "fetch_image" in built.tool_runtime._tools

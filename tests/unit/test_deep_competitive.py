@@ -225,9 +225,14 @@ async def test_code_exec_opt_in(tmp_path) -> None:
         use_llm_summarizer=False,
         modalities="text",
     )
-    names = set(agent.build().tool_runtime._tools.keys())
-    assert "run_python" in names
-    assert "run_python_file" in names
+    built = agent.build()
+    names = set(built.tool_runtime._tools.keys())
+    deferred = {t.name for t in built.discovery.catalog.tools if not t.activated}
+    assert "run_python" in names or "run_python" in deferred
+    assert "run_python_file" in names or "run_python_file" in deferred
+    if "run_python" not in names:
+        assert built.discovery.activate_tool("run_python")["ok"]
+        assert "run_python" in built.tool_runtime._tools
 
 
 @pytest.mark.asyncio
@@ -331,7 +336,9 @@ def test_profile_research_loads_bundled_skill(tmp_path) -> None:
         modalities="text",
     )
     prompt = agent.build().instructions or ""
-    assert "Skill: research" in prompt or "deep research" in prompt.lower()
+    # Progressive skills: metadata catalog, not full SKILL body unless eager_skills
+    assert "load_skill" in prompt.lower() or "Available skills" in prompt
+    assert "research" in prompt.lower()
     assert agent._require_tools == ["write_file:reports/", "register_source"]
     assert getattr(agent, "_verifier", None) is not None
 

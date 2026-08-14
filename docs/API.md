@@ -435,9 +435,10 @@ Pillars:
 2. **Workspace FS** — sliced reads, `delete_file`, token-aware offload
 3. **Subagents** — `task` / `task_batch` + named `specialists=`
 4. **Skills** — `skills=["research"]` or any catalog / skill dir (SkillLoader accepts both)
-5. **Discovery** — deep agents enable `discovery=True`: `search_skills` / `load_skill`,
-   `search_tools`, `search_mcp` / `activate_tool` (MCP tools deferred until activated).
-   Tool schemas refresh each tool-loop turn so activations take effect mid-run.
+5. **Discovery** — deep agents enable `discovery=True` with a **schema budget**:
+   core tools stay advertised; the rest (images, PDF, code, MCP, …) use
+   `search_tools` / `search_mcp` / `activate_tool`. Skills are **metadata-first**
+   (`load_skill`); see `docs/COMPETITIVE.md`.
 6. **Gates** — research profile requires `reports/` + `register_source` + accept verifier
 
 See `examples/deep_agent/` and `loomable/skills/research/SKILL.md`.
