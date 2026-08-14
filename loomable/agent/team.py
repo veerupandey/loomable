@@ -487,6 +487,9 @@ class Team:
                 if missing:
                     fake = RunResult(
                         output=AgentOutput(parts=[Text("")]),
+                        session_id=getattr(finished, "session_id", "")
+                        or session_id
+                        or "",
                         metadata={"required_tools_missing": missing},
                     )
                     extra = await self._coordinate_fallback(
