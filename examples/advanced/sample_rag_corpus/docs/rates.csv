@@ -1,0 +1,3 @@
+region,latency_ms,tier
+us-east,42,gold
+ap-south,118,silver

@@ -1545,8 +1545,9 @@ PDFs are handled inside ``ingest``: extract pages, then page-chunk (split
 oversized pages with overlap — never truncate). Pass the ``.pdf`` path; do not
 pre-split.
 
-See ``examples/advanced/06_agentic_retriever.py`` and
-``examples/advanced/08_complex_agentic_rag.py``.
+See ``examples/advanced/06_agentic_retriever.py`` and the live multi-format demo
+``examples/advanced/08_complex_agentic_rag.py`` (``Agent(knowledge_base=...)``).
+Picky offline ingest regressions live in ``tests/unit/test_complex_multiformat_rag.py``.
 
 ## MCP Integration
 
