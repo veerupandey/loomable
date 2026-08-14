@@ -784,9 +784,18 @@ Pass FAISS, Postgres, or `engine="memory"` when you want something else.
 from loomable.agent import NoteStore
 from loomable.kernel.long_term import LongTermStore
 from loomable.providers.vector_store import open_vector_store
-from loomable.providers import OpenAIEmbedder
+from loomable.providers import (
+    AzureOpenAIEmbedder,
+    GeminiEmbedder,
+    HuggingFaceEmbedder,
+    OpenAIEmbedder,
+)
 
-embedder = OpenAIEmbedder()
+# Industry embedders (pick one)
+embedder = GeminiEmbedder()                 # gemini-embedding-001
+# embedder = AzureOpenAIEmbedder(...)       # Azure deployment
+# embedder = HuggingFaceEmbedder()          # local MiniLM (pip install loomable[huggingface])
+# embedder = OpenAIEmbedder()
 
 # Default L3 — Alibaba zvec under .loomable/memory_zvec
 notes = NoteStore(long_term=LongTermStore(), embedder=embedder)
@@ -1421,22 +1430,24 @@ Ingest → chunk → pluggable base retrieve → **agentic** rewrite / route / r
 
 ```python
 from loomable import Agent
+from loomable.providers import GeminiEmbedder, HuggingFaceEmbedder  # or AzureOpenAIEmbedder
 from loomable.providers.vector_store import open_vector_store
 from loomable.retrieval import ingest, build_agentic_retriever
 
 corpus = await ingest(
     ["./docs", "./README.md", {"id": "note", "text": "Inline knowledge"}],
     name="docs",
-    store=open_vector_store(path="./.loomable/docs_zvec"),  # or faiss / postgres / memory
+    store=open_vector_store(engine="faiss", dimensions=3072, device="cpu"),
+    embedder=GeminiEmbedder(),  # or HuggingFaceEmbedder() / AzureOpenAIEmbedder(...)
     strategy="auto",       # text | markdown | code | html | pdf | auto | custom
-    base_mode="hybrid",    # vector | lexical | hybrid
+    base_mode="hybrid",    # vector | lexical | hybrid (RRF fusion)
 )
 
 retriever = await build_agentic_retriever(
     corpus,
     mode="auto",           # chunks | file | auto | custom ModeRouter
     rewrite="off",         # off | multi_query | hyde | custom QueryRewriter
-    rerank="score",        # off | score | llm | custom Reranker
+    rerank="mmr",          # off | score | mmr | llm | custom Reranker
     compress="off",        # off | llm | custom HitCompressor
     # llm=provider,       # needed for multi_query / hyde / llm rerank / llm mode
 )

@@ -7,6 +7,7 @@ from typing import Any, Sequence
 __all__ = [
     "IdentityReranker",
     "ScoreReranker",
+    "MMRReranker",
     "LLMReranker",
     "IdentityCompressor",
     "LLMCompressor",
@@ -46,6 +47,68 @@ class ScoreReranker:
             hits, key=lambda h: float(h.get("score") or 0.0), reverse=True
         )
         return ordered[: max(0, int(top_n))]
+
+
+class MMRReranker:
+    """Maximal Marginal Relevance — balance relevance vs diversity (industry RAG).
+
+    Uses token Jaccard as a cheap diversity signal when embeddings are absent.
+    ``lambda_mult`` closer to 1.0 favors relevance; closer to 0 favors diversity.
+    """
+
+    name = "mmr"
+
+    def __init__(self, *, lambda_mult: float = 0.7) -> None:
+        self.lambda_mult = min(1.0, max(0.0, float(lambda_mult)))
+
+    @staticmethod
+    def _tokens(text: str) -> set[str]:
+        import re
+
+        return {t.lower() for t in re.findall(r"[a-z0-9_]+", text or "", flags=re.I)}
+
+    def _sim(self, a: set[str], b: set[str]) -> float:
+        if not a or not b:
+            return 0.0
+        return len(a & b) / max(1, len(a | b))
+
+    async def rerank(
+        self,
+        query: str,
+        hits: Sequence[dict[str, Any]],
+        *,
+        top_n: int,
+    ) -> list[dict[str, Any]]:
+        top_n = max(0, int(top_n))
+        if not hits or top_n == 0:
+            return []
+        q_tok = self._tokens(query)
+        candidates = list(hits)
+        # relevance proxy: existing score + query overlap
+        scored: list[tuple[float, dict[str, Any], set[str]]] = []
+        for h in candidates:
+            toks = self._tokens(str(h.get("content") or ""))
+            rel = float(h.get("score") or 0.0) + 0.15 * self._sim(q_tok, toks)
+            scored.append((rel, h, toks))
+        selected: list[dict[str, Any]] = []
+        selected_toks: list[set[str]] = []
+        while scored and len(selected) < top_n:
+            best_i = -1
+            best_val = float("-inf")
+            for i, (rel, _h, toks) in enumerate(scored):
+                div = 0.0
+                if selected_toks:
+                    div = max(self._sim(toks, s) for s in selected_toks)
+                mmr = self.lambda_mult * rel - (1.0 - self.lambda_mult) * div
+                if mmr > best_val:
+                    best_val = mmr
+                    best_i = i
+            rel, hit, toks = scored.pop(best_i)
+            row = dict(hit)
+            row["score"] = float(best_val)
+            selected.append(row)
+            selected_toks.append(toks)
+        return selected
 
 
 class LLMReranker:
@@ -157,11 +220,13 @@ def resolve_reranker(spec: str | bool | Any | None, *, llm: Any | None = None) -
             return IdentityReranker()
         if key in {"score", "true", "on"}:
             return ScoreReranker()
+        if key == "mmr":
+            return MMRReranker()
         if key == "llm":
             if llm is None:
                 raise ValueError("rerank='llm' requires llm=")
             return LLMReranker(llm)
-        raise ValueError(f"unknown rerank={spec!r}; use off|score|llm|custom")
+        raise ValueError(f"unknown rerank={spec!r}; use off|score|mmr|llm|custom")
     return spec
 
 

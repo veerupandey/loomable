@@ -392,7 +392,9 @@ class PgVectorBackend(_PoolMixin):
         scored.sort(key=lambda x: x[0], reverse=True)
         out: list[dict[str, Any]] = []
         for score, item_id, metadata in scored[: max(0, int(k))]:
-            out.append({"id": item_id, "score": score, **metadata})
+            meta = dict(metadata)
+            meta.pop("score", None)
+            out.append({**meta, "id": item_id, "score": score})
         return out
 
     async def delete(self, id: str) -> None:

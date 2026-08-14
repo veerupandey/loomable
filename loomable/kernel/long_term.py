@@ -52,7 +52,7 @@ class InMemoryVectorBackend:
             scored.append((score, item_id, item["metadata"]))
         scored.sort(key=lambda x: x[0], reverse=True)
         return [
-            {"id": item_id, "score": score, **metadata}
+            {**metadata, "id": item_id, "score": score}
             for score, item_id, metadata in scored[:k]
         ]
 

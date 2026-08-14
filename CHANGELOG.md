@@ -12,6 +12,7 @@
 - **FAISS** vector backend (`loomable[faiss]` / `faiss-gpu`): `FaissVectorBackend` + `open_vector_store(engine="faiss", device="cpu"|"gpu"|"auto")`
 - Agent L3 memory **defaults to Alibaba zvec** at `.loomable/memory_zvec` (`LongTermStore()` / `open_vector_store()`); use `engine="memory"`|`faiss`|`postgres` to opt out
 - **Agentic retrieval**: `ingest` / `Corpus`, `AgenticRetriever`, `CompositeRetriever` with pluggable rewrite / mode router / rerank / compress / corpus router
+- Embedders: **Gemini**, **Azure OpenAI**, **Hugging Face** (local MiniLM / Inference API) + batch `embed_many`; MMR reranker for diversity
 - Stability policy ([docs/STABILITY.md](docs/STABILITY.md)), SECURITY.md, beta graduation plan
 - `BuiltAgent.cancel()` / `Agent.cancel()` with active `RunContext` tracking
 - SSE / stream client disconnect triggers cooperative cancel
