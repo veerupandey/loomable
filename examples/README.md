@@ -8,6 +8,7 @@
 | Tools | `Agent` + `@tool` | `agents/02_with_tools.py` |
 | Structured JSON | `response_model` | `agents/03_structured_io.py` |
 | Conversation memory | `session_id` + `session_store` / `memory_backend` | `agents/04_with_memory.py`, `memory/02_user_memory.py` |
+| Compose Postgres L1/L2 + zvec L3 | `session_store` + `NoteStore(LongTermStore())` | `memory/03_compose_postgres_zvec.py` |
 | RAG | `knowledge` + embedder | `agents/05_with_knowledge.py` |
 | Production hardening | resilience + hooks | `agents/06_production.py` |
 | Specialists | `Team` / subagents | `subagents/` |
