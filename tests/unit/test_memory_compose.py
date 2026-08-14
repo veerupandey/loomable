@@ -1,4 +1,4 @@
-"""Composable Memory API — unified short/long layers for Agent."""
+"""Composable Memory API — conversation / user / knowledge layers for Agent."""
 
 from __future__ import annotations
 

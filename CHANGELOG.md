@@ -57,6 +57,7 @@
 - Custom Flow engines with a checkpointer fail loud instead of silently dropping HITL/checkpoint kwargs
 - Soft `except: pass` on serve cancel / bind_session and discovery activation → logged
 - Docs: NDJSON demoted; Flow Engine Workflow-first; KnowledgeMemory in compose example
+- Docs: API.md matches 0.2.0b0 (`Loop(body=)`, CheckpointListener wiring, Workflow display, no Jupyter HTML / `mount_team`); removed names tabulated
 
 ### Removed (greenfield clean — no compatibility shims)
 
@@ -73,6 +74,7 @@
 - `Map` / `Router` aliases — use `MapNode` / `RouterNode`
 - `rank_match` discovery helper — use `rank_bm25`
 - Passing kernel `MemoryManager` as `Agent(memory=...)` — use `Memory.compose`
+- `HITLPause` — never raised; Workflow HITL uses `FlowPaused`
 - `ExtensionRegistry` removed from `loomable.kernel.__all__` (import `loomable.kernel.registry`)
 
 ### Limits (documented)

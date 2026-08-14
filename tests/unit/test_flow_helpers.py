@@ -1,16 +1,14 @@
-"""Tests for loomable.flow.helpers convenience constructors (Task 15.1).
+"""Tests for loomable.flow.helpers (advanced escape hatch under Workflow / Team).
 
-Validates:
-- Req 2.7: Pipeline/Orchestrator/AutoPlan capabilities expressible via Flow
-- Req 14.4: Removed classes reimplemented in terms of the Flow engine
-
-Tests cover:
-- sequential(a, b, c) creates a working Flow
-- parallel(a, b) creates a Flow that runs nodes concurrently
-- route(chooser, {"left": a, "right": b}) routes correctly
-- coordinate(workers=[a, b], manager=c) delegates and synthesizes
-- plan_and_execute(planner, workers, synthesizer) builds plan→map→synthesize
+Helpers still build working Flows:
+- sequential(a, b, c)
+- parallel(a, b)
+- route(chooser, {"left": a, "right": b})
+- coordinate(workers=[a, b], manager=c)
+- plan_and_execute(planner, workers, synthesizer)
 - All helpers return Flow instances that satisfy Runnable
+
+Prefer ``Workflow.step`` / ``.parallel`` / ``.branch`` / ``.map`` and ``Team(mode=...)``.
 """
 
 from __future__ import annotations

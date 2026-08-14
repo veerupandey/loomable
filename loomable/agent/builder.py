@@ -1,4 +1,4 @@
-"""loomable.agent.builder - High-level, agno-style Agent builder.
+"""loomable.agent.builder - High-level Agent builder.
 
 This module implements the ergonomic high-level entry point (:class:`Agent`) that
 assembles a runnable :class:`BuiltAgent` from a compact configuration, composing the
@@ -582,7 +582,7 @@ class BuiltAgent:
     # Kernel Summarizer instance used for automatic memory compaction (Req 6.1–6.5).
     summarizer: Summarizer | None = None
     # Optional Pydantic/dataclass schema used to validate dict/model inputs before a
-    # run (agno-style structured input). ``None`` disables input validation.
+    # run (structured dict/model input). ``None`` disables input validation.
     input_schema: type | None = None
     # Tool hooks / human-in-the-loop (task 9.2, Req 14):
     #   - tool_hooks: pre-hooks (a hook with ``phase == "post"`` is treated as a
@@ -933,7 +933,7 @@ class BuiltAgent:
         videos: list | None = None,
         audio: list | None = None,
     ) -> AgentInput:
-        """Normalize any supported input into an :class:`AgentInput` (agno-style).
+        """Normalize any supported input into an :class:`AgentInput`.
 
         Accepts a plain string, an :class:`AgentInput`, a Pydantic model, a dataclass
         instance, or a ``dict``. When an ``input_schema`` is configured, dict/model

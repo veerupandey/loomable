@@ -92,26 +92,3 @@ class RequireToolsError(LoomableError):
         self.missing = list(missing)
         joined = ", ".join(self.missing) if self.missing else "(unknown)"
         super().__init__(f"Required tools never called: {joined}")
-
-
-class HITLPause(LoomableError):
-    """Raised when a run pauses for human-in-the-loop approval.
-
-    This is not a failure — it signals that the agent needs external approval
-    before continuing. The pending actions are checkpointed so the run can
-    resume from where it paused after approval is granted, even across
-    process restarts.
-
-    Attributes:
-        pending_calls: The tool calls awaiting approval.
-        thread_id: The thread identifier for resuming.
-    """
-
-    def __init__(self, pending_calls: list, thread_id: str = "") -> None:
-        self.pending_calls = pending_calls
-        self.thread_id = thread_id
-        tool_names = [getattr(c, "tool_name", str(c)) for c in pending_calls]
-        super().__init__(
-            f"Run paused for approval: {', '.join(tool_names)}. "
-            f"Resume with thread_id='{thread_id}' after approving."
-        )

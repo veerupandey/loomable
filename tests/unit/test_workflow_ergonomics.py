@@ -1,14 +1,9 @@
-"""Integration tests for workflow ergonomics (Task 10.2).
+"""Integration tests for Workflow ergonomics.
 
-Validates backward compatibility and integration of the new workflow API:
-- Req 8.1: Existing helpers (sequential, parallel, route, coordinate) unchanged
-- Req 8.2: Existing Loop(body=runnable) constructor unchanged
-- Req 8.3: New classes accepted by existing helpers (Runnable protocol)
-- Req 8.4: New classes importable from loomable.flow
-- Req 8.5: New classes don't modify existing behavior
-- Req 9.1: Nested Workflow inside Workflow executes correctly
-- Req 9.2: Step used as Loop body
-- Req 9.3: Parallel_Group with nested elements compiles correctly
+- ``loomable.flow.helpers`` still builds working Flows (escape hatch)
+- ``Loop(body=runnable)`` constructor
+- Step / Workflow / FlowClass are Runnables (nestable)
+- Nested Workflow, Loop body, Parallel_Group compile and run
 """
 
 from __future__ import annotations
@@ -134,7 +129,7 @@ class TestImports:
 
 
 # ---------------------------------------------------------------------------
-# 2. Backward compatibility — Existing helpers unchanged
+# 2. Flow helpers (advanced escape hatch)
 # ---------------------------------------------------------------------------
 
 

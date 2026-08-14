@@ -62,9 +62,7 @@ examples/advanced/.checkpoint_demo/
 examples/agents/.personalized_demo/
 examples/agents/.knowledge_base_demo/
 examples/agents/.team_kb_demo/
-examples/deep_agent/.workspace_*/
 **/.loomable/
 
 examples/memory/.compose_sessions/
 examples/memory/.sessions_demo/
-examples/advanced/.checkpoint_demo/

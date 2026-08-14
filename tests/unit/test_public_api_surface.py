@@ -66,3 +66,34 @@ def test_stable_symbols_importable() -> None:
         if name == "__version__":
             continue
         assert hasattr(loomable, name), name
+
+
+# Names removed in 0.2.0b0 (CHANGELOG / docs/API.md). No compatibility shims.
+_REMOVED = {
+    "sequential",
+    "parallel",
+    "route",
+    "coordinate",
+    "HITLPause",
+    "Pipeline",
+    "Orchestrator",
+    "AutoPlan",
+    "create_personalized_agent",
+    "Map",
+    "Router",
+}
+
+
+def test_removed_symbols_absent_from_top_level() -> None:
+    for name in _REMOVED:
+        assert name not in loomable.__all__, name
+        assert not hasattr(loomable, name), name
+
+
+def test_hitlpause_not_public_on_agent() -> None:
+    import loomable.agent as agent_mod
+    import loomable.agent.errors as errors_mod
+
+    assert "HITLPause" not in agent_mod.__all__
+    assert not hasattr(agent_mod, "HITLPause")
+    assert not hasattr(errors_mod, "HITLPause")
