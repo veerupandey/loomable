@@ -16,7 +16,7 @@
 | Deep code (repo index + coding) | `profile="code"` / `CodeIndex` | `deep_agent/06_deep_code.py` |
 | Build retrievers (docs/code) | `build_retriever` | `advanced/02_build_retriever.py` |
 | Agentic retriever (pluggable) | `ingest` + `build_agentic_retriever` | `advanced/03_agentic_retriever.py` |
-| RAG | `knowledge` + embedder | `agents/05_with_knowledge.py` |
+| RAG | `knowledge_base=` (vector DB) or `knowledge` + embedder | `agents/07_knowledge_base.py`, `agents/05_with_knowledge.py` |
 | Production hardening | resilience + hooks | `agents/06_production.py` |
 | Specialists | `Team` / subagents | `subagents/` |
 | Quality gate | `Loop` / verifier | `patterns/01_retry_loop.py` |

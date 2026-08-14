@@ -213,11 +213,19 @@ class UserMemory:
 
 @dataclass
 class KnowledgeMemory:
-    """RAG documents injected into the prompt (separate from user notes)."""
+    """RAG layer: short documents (auto-recall) and/or a vector-DB knowledge base.
+
+    ``documents`` are embedded and injected into the prompt (passive recall).
+    ``store`` / ``sources`` / ``knowledge_base`` become searchable ``search_*``
+    tools on the Agent — same as ``Agent(knowledge_base=...)``.
+    """
 
     documents: list[str] = field(default_factory=list)
     embedder: Any = None
     top_k: int = 3
+    store: Any | None = None
+    sources: list[Any] | None = None
+    knowledge_base: Any | None = None
 
 
 @dataclass
@@ -340,11 +348,24 @@ class Memory:
             if self.user and self.user.memory_tool:
                 out["memory_tool"] = True
 
-        if self.knowledge is not None and self.knowledge.documents:
-            out["knowledge"] = list(self.knowledge.documents)
-            if self.knowledge.embedder is not None:
-                out["embedder"] = self.knowledge.embedder
-            out["knowledge_top_k"] = self.knowledge.top_k
+        if self.knowledge is not None:
+            k = self.knowledge
+            if k.documents:
+                out["knowledge"] = list(k.documents)
+            if k.embedder is not None:
+                out["embedder"] = k.embedder
+            out["knowledge_top_k"] = k.top_k
+            kb = k.knowledge_base
+            if kb is None and (k.store is not None or k.sources):
+                from loomable.retrieval.knowledge import KnowledgeBase
+
+                kb = KnowledgeBase(
+                    store=k.store,
+                    sources=k.sources,
+                    embedder=k.embedder,
+                )
+            if kb is not None:
+                out["knowledge_base"] = kb
 
         return out
 

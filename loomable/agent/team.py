@@ -113,8 +113,10 @@ class Team:
         note_store: Any | None = None,
         memory_tool: bool = False,
         knowledge: list[str] | None = None,
+        knowledge_base: Any = None,
         embedder: Any = None,
         knowledge_top_k: int = 3,
+        retrievers: list[Any] | None = None,
         user_id: str | None = None,
         # Composable memory bundle (same as Agent(memory=...))
         memory: Any | None = None,
@@ -155,8 +157,10 @@ class Team:
                     "note_store": note_store,
                     "memory_tool": memory_tool,
                     "knowledge": knowledge,
+                    "knowledge_base": knowledge_base,
                     "embedder": embedder,
                     "knowledge_top_k": knowledge_top_k,
+                    "retrievers": retrievers,
                 }
             ),
         }
@@ -171,6 +175,14 @@ class Team:
         # Stash budgets for build-time wiring (delegation tools rebuilt in arun soft path)
         self._agent._max_delegations = max_delegations  # type: ignore[attr-defined]
         self._agent._max_depth = max_depth  # type: ignore[attr-defined]
+        from .memory_opts import apply_knowledge_base
+
+        apply_knowledge_base(
+            self._members,
+            knowledge_base=knowledge_base,
+            retrievers=retrievers,
+            embedder=embedder,
+        )
 
     def bind_session(self, session_id: str | None, *, resume: bool | None = None) -> None:
         """Bind HTTP/stream session id — same semantics as :meth:`Agent.bind_session`."""

@@ -18,7 +18,7 @@
 - Vector engines: **zvec**, **FAISS**, **Chroma** (file/HTTP), **Milvus** (Lite `.db` / server), **Postgres/pgvector**; `uri=` shorthand + matrix integration tests
 - PDF ingest: page extract + bounded page chunks (no 8k truncation / overlap-shard bug); large-PDF quality matrix across all engines
 - Retrieval **metadata**: ingest-time fields on every chunk/hit (author, tags, page, filename, …) + `retrieve(..., filters=)`
-- `create_personalized_agent` (personal + company `search_*` KBs); deep agents keep retrievers advertised under discovery; `create_deep_agent(retrievers=)` / `spawn_specialist(retrievers=)`
+- `Agent(knowledge_base=)` / `create_deep_agent(knowledge_base=)` — knowledge base **is** a vector store (optional ingest); `retrievers=` for extra search tools; Team / Case / Workflow / Flow inherit the same object. Search tools stay advertised under discovery.
 - Stability policy ([docs/STABILITY.md](docs/STABILITY.md)), SECURITY.md, beta graduation plan
 - `BuiltAgent.cancel()` / `Agent.cancel()` with active `RunContext` tracking
 - SSE / stream client disconnect triggers cooperative cancel
