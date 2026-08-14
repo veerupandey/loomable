@@ -37,8 +37,13 @@ class HierarchicalEngine:
         session_id: str | None = None,
         pending_decisions: dict[str, str] | None = None,
     ) -> RunResult:
-        """Drive the flow using hierarchical delegation with optional resume."""
-        _ = pending_decisions
+        """Drive the flow using hierarchical delegation.
+
+        ``pending_decisions`` is accepted for ExecutionEngine protocol parity with
+        :class:`~loomable.flow.engines.sequential.SequentialEngine` (HITL resume).
+        Hierarchical graphs do not pause for confirmation today.
+        """
+        del pending_decisions  # protocol parity; HITL resume is SequentialEngine-only
         nodes: dict[str, Node] = flow._nodes
         completed: set[str] = set(completed_node_ids or [])
 
