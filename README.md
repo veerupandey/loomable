@@ -199,7 +199,7 @@ async for ev in agent.astream_events(prompt):
     print(ev.type)  # RUN_STARTED, TEXT_MESSAGE_CONTENT, TOOL_CALL_*, RUN_FINISHED
 ```
 
-Legacy NDJSON remains at `POST /run/stream`.
+Prefer AG-UI SSE (`/run/events`). NDJSON at `POST /run/stream` remains for simple stream clients.
 
 ## Features
 

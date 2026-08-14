@@ -55,6 +55,10 @@
 - `rank_match` discovery helper — use `rank_bm25`
 - Passing kernel `MemoryManager` as `Agent(memory=...)` — use `Memory.compose`
 
+- Soft `except: pass` on serve cancel / bind_session and discovery activation → logged
+- `ExtensionRegistry` removed from `loomable.kernel.__all__` (import `loomable.kernel.registry`)
+- Docs: NDJSON demoted; Flow Engine Workflow-first; KnowledgeMemory in compose example
+
 ### Limits (documented)
 
 - Local workspace FS only

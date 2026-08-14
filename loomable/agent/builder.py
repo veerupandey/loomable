@@ -10,9 +10,9 @@ constructs default implementations for every kernel subsystem that was not suppl
 Missing or invalid required fields raise :class:`AgentConfigError` naming the field
 before any run is attempted (Req 1.6).
 
-Multi-agent orchestration is now handled via ``loomable.flow.Flow``. The agent
-retains only single-agent auto-escalation: single-shot → tool-loop → self-plan
-(via the Flow engine) (Req 14.4, 17.3).
+Multi-agent orchestration is handled via ``Team`` / ``Workflow`` (and low-level
+``Flow``). The agent retains single-agent auto-escalation: single-shot →
+tool-loop → self-plan (Req 14.4, 17.3).
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import logging
 import time
 import uuid
 from collections.abc import Callable
@@ -1680,8 +1681,12 @@ class BuiltAgent:
                         )
                         try:
                             discovery_rt.ensure_tools_activated(missing_tool_names)
-                        except Exception:  # noqa: BLE001 — activation is best-effort
-                            pass
+                        except Exception as exc:  # noqa: BLE001 — activation is best-effort
+                            logging.getLogger("loomable.agent").warning(
+                                "discovery ensure_tools_activated failed for %s: %s",
+                                missing_tool_names,
+                                exc,
+                            )
                 if (
                     missing_required
                     and require_tools_nudges < max_require_tools_nudges
@@ -2983,9 +2988,14 @@ class Agent:
             self._modalities_raw = "text"
 
         if text_only and (modalities is not None or capabilities is not None):
-            raise AgentConfigError("text_only")
+            raise AgentConfigError(
+                "text_only (mutually exclusive with modalities= and capabilities=; "
+                "use modalities='text' instead)"
+            )
         if modalities is not None and capabilities is not None:
-            raise AgentConfigError("modalities")
+            raise AgentConfigError(
+                "modalities (mutually exclusive with capabilities=; pick one)"
+            )
         if text_only:
             self._capabilities = capabilities_for("text")
         elif modalities is not None:
