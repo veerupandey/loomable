@@ -184,6 +184,7 @@ Legacy NDJSON remains at `POST /run/stream`.
 ```
 examples/
 ├── agents/               # Start here
+├── deep_agent/           # Loomable-only deep research (beats peer deep agents)
 ├── subagents/            # Delegation & Team
 ├── patterns/             # Loop / pipeline / parallel / plan-execute
 ├── memory/               # Session & shared memory
@@ -194,6 +195,7 @@ examples/
 
 ```bash
 python examples/agents/01_hello_world.py
+python examples/deep_agent/03_live_multimodal_research.py
 python examples/escalation_war_room/10_case.py
 python examples/escalation_war_room/12_agent_agui_sse.py
 ```
