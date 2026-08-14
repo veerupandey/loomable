@@ -48,7 +48,14 @@ from loomable.retrieval.chunking import (
     resolve_strategy,
 )
 from loomable.retrieval.corpus import Corpus, ingest
-from loomable.retrieval.ingest import coerce_source, load_directory, load_file, load_sources
+from loomable.retrieval.ingest import (
+    coerce_source,
+    is_http_url,
+    load_directory,
+    load_file,
+    load_sources,
+    load_url,
+)
 from loomable.retrieval.plugins import (
     CorpusRouter,
     HitCompressor,
@@ -96,9 +103,11 @@ __all__ = [
     "build_agentic_retriever",
     "chunk_documents",
     "coerce_source",
+    "is_http_url",
     "load_directory",
     "load_file",
     "load_sources",
+    "load_url",
     "get_strategy",
     "list_strategies",
     "register_strategy",

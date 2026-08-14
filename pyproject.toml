@@ -50,7 +50,13 @@ faiss = ["faiss-cpu>=1.8.0"]
 huggingface = ["sentence-transformers>=2.2.0"]
 embeddings = ["sentence-transformers>=2.2.0"]
 toolkits = ["pypdf", "python-pptx", "httpx", "beautifulsoup4", "ddgs"]
-retrieval = ["zvec>=0.5.0", "faiss-cpu>=1.8.0", "sentence-transformers>=2.2.0"]
+retrieval = [
+    "zvec>=0.5.0",
+    "faiss-cpu>=1.8.0",
+    "sentence-transformers>=2.2.0",
+    "pypdf",
+    "beautifulsoup4",
+]
 
 
 [dependency-groups]

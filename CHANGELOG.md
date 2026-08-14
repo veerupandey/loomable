@@ -14,6 +14,7 @@
 - **Agentic retrieval**: `ingest` / `Corpus`, `AgenticRetriever`, `CompositeRetriever` with pluggable rewrite / mode router / rerank / compress / corpus router
 - Embedders: **Gemini**, **Azure OpenAI**, **Hugging Face** (local MiniLM / Inference API) + batch `embed_many`; MMR reranker for diversity
 - Ship-any-retriever: `Agent(retrievers=[...])` registers each as a `search_*` tool with query/k schema + system-prompt hint; `ensure_search_tool_name`
+- Default ingest: popular docs/code/HTML/PDF/DOCX/PPTX/JSON/CSV + `http(s)` URLs; `json`/`csv` chunk strategies; complex multi-format RAG example/tests
 - Stability policy ([docs/STABILITY.md](docs/STABILITY.md)), SECURITY.md, beta graduation plan
 - `BuiltAgent.cancel()` / `Agent.cancel()` with active `RunContext` tracking
 - SSE / stream client disconnect triggers cooperative cancel

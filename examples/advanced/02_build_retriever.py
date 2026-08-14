@@ -44,7 +44,7 @@ class _Scripted:
                 tool_calls=[
                     ToolCall(
                         id="1",
-                        tool_name="docs",
+                        tool_name="search_docs",
                         args={"query": "OAuth2 login", "k": 2},
                     )
                 ],
@@ -57,7 +57,7 @@ async def main() -> None:
     print("strategies", list_strategies())
     retriever = await build_retriever(
         [docs, {"id": "tip", "text": "Prefer hybrid mode for mixed corpora."}],
-        name="docs",
+        name="search_docs",
         mode="hybrid",
         strategy="auto",
         persist_path=ROOT / "docs_zvec",  # Alibaba zvec (pip install loomable[zvec])

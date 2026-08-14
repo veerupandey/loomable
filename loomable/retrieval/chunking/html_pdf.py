@@ -80,7 +80,7 @@ class PdfChunker:
 
 
 class AutoChunker:
-    """Dispatch to markdown / code / html / pdf / text from document hints."""
+    """Dispatch to markdown / code / html / pdf / json / csv / text from hints."""
 
     name = "auto"
 
@@ -88,7 +88,7 @@ class AutoChunker:
         from loomable.retrieval.chunking.base import get_strategy
 
         hint = document.kind_hint
-        if hint in {"markdown", "code", "html", "pdf"}:
+        if hint in {"markdown", "code", "html", "pdf", "json", "csv"}:
             return get_strategy(hint).chunk(document)
         return get_strategy("text").chunk(document)
 

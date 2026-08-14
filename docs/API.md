@@ -1473,7 +1473,12 @@ Legacy one-shot: ``build_retriever(..., mode="hybrid")`` still works.
 Chunk strategies remain pluggable via ``register_strategy``.
 Deep code (``CodeIndex``) shares the same chunk/store stack.
 
-See ``examples/advanced/03_agentic_retriever.py``.
+**Default ingest formats:** markdown, code (py/ts/js/go/rs/…), HTML, PDF
+(``loomable[pdf]``), DOCX (stdlib), PPTX (``loomable[ppt]``), JSON/CSV, notebooks,
+plus ``http(s)`` URLs (``load_url`` / pass a URL string to ``ingest``).
+
+See ``examples/advanced/03_agentic_retriever.py`` and
+``examples/advanced/05_complex_agentic_rag.py``.
 
 ## MCP Integration
 

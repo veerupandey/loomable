@@ -21,6 +21,7 @@ def _ensure_builtins() -> None:
     from loomable.retrieval.chunking import code as _code  # noqa: F401
     from loomable.retrieval.chunking import html_pdf as _html_pdf  # noqa: F401
     from loomable.retrieval.chunking import markdown as _markdown  # noqa: F401
+    from loomable.retrieval.chunking import structured as _structured  # noqa: F401
     from loomable.retrieval.chunking import text as _text  # noqa: F401
 
     _BUILTINS_LOADED = True
