@@ -1,26 +1,41 @@
-"""loomable.retrieval — document ingest, chunking, and retriever builders.
+"""loomable.retrieval — ingest, chunking, and pluggable agentic retrievers.
 
 High-level::
 
-    from loomable.retrieval import build_retriever
+    from loomable.retrieval import ingest, build_agentic_retriever
+    from loomable.kernel.long_term import open_vector_store
 
-    retriever = await build_retriever(
-        ["./docs", "./README.md", {"id": "note", "text": "…"}],
+    corpus = await ingest(
+        ["./docs", "./README.md"],
         name="docs",
-        mode="hybrid",          # vector | lexical | hybrid
-        strategy="auto",        # text | markdown | code | html | pdf | auto
-        persist_path="./.loomable/docs_zvec",  # Alibaba zvec on disk
+        store=open_vector_store(path="./.loomable/docs_zvec"),  # or faiss/postgres
+        strategy="auto",
+        base_mode="hybrid",
+    )
+
+    retriever = await build_agentic_retriever(
+        corpus,
+        mode="auto",              # chunks | file | auto | custom ModeRouter
+        rewrite="off",            # off | multi_query | hyde | custom QueryRewriter
+        rerank=True,              # off | score | llm | custom Reranker
+        compress="off",           # off | llm | custom HitCompressor
+        # llm=provider,          # required for multi_query / hyde / llm rerank
     )
     agent = Agent(model=..., retrievers=[retriever])
 
-Pass ``store=open_vector_store(postgres_url=...)`` (or any ``VectorBackend``)
-instead of ``persist_path`` when you want Postgres or another vector DB.
+Everything is pluggable: store, chunk strategy, base mode, rewrite, mode router,
+rerank, compress, and multi-corpus ``CorpusRouter``.
 
 Deep code uses the same stack via :class:`~loomable.codeindex.CodeIndex`.
 """
 
 from __future__ import annotations
 
+from loomable.retrieval.agentic import (
+    AgenticRetriever,
+    CompositeRetriever,
+    build_agentic_retriever,
+)
 from loomable.retrieval.builder import (
     build_corpus,
     build_retriever,
@@ -34,27 +49,78 @@ from loomable.retrieval.chunking import (
     register_strategy,
     resolve_strategy,
 )
+from loomable.retrieval.corpus import Corpus, ingest
 from loomable.retrieval.ingest import coerce_source, load_directory, load_file, load_sources
+from loomable.retrieval.plugins import (
+    CorpusRouter,
+    HitCompressor,
+    ModeRouter,
+    QueryRewriter,
+    Reranker,
+)
+from loomable.retrieval.rerank import (
+    IdentityCompressor,
+    IdentityReranker,
+    LLMCompressor,
+    LLMReranker,
+    ScoreReranker,
+)
 from loomable.retrieval.retrievers import HybridRetriever, LexicalRetriever, VectorRetriever
+from loomable.retrieval.rewrite import HyDERewriter, IdentityRewriter, MultiQueryRewriter
+from loomable.retrieval.route import (
+    AllCorporaRouter,
+    DescriptionCorpusRouter,
+    FixedModeRouter,
+    HeuristicModeRouter,
+    LLMModeRouter,
+)
 from loomable.retrieval.types import Chunk, Document
 
 __all__ = [
+    # Core types
     "Chunk",
     "ChunkStrategy",
     "Document",
-    "HybridRetriever",
-    "LexicalRetriever",
-    "VectorRetriever",
+    "Corpus",
+    # Ingest / build
+    "ingest",
     "build_corpus",
     "build_retriever",
     "build_retriever_sync",
+    "build_agentic_retriever",
     "chunk_documents",
     "coerce_source",
-    "get_strategy",
-    "list_strategies",
     "load_directory",
     "load_file",
     "load_sources",
+    "get_strategy",
+    "list_strategies",
     "register_strategy",
     "resolve_strategy",
+    # Base retrievers
+    "HybridRetriever",
+    "LexicalRetriever",
+    "VectorRetriever",
+    "AgenticRetriever",
+    "CompositeRetriever",
+    # Protocols
+    "QueryRewriter",
+    "Reranker",
+    "ModeRouter",
+    "CorpusRouter",
+    "HitCompressor",
+    # Built-ins
+    "IdentityRewriter",
+    "MultiQueryRewriter",
+    "HyDERewriter",
+    "IdentityReranker",
+    "ScoreReranker",
+    "LLMReranker",
+    "IdentityCompressor",
+    "LLMCompressor",
+    "FixedModeRouter",
+    "HeuristicModeRouter",
+    "LLMModeRouter",
+    "AllCorporaRouter",
+    "DescriptionCorpusRouter",
 ]
