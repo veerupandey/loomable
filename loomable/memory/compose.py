@@ -2,10 +2,10 @@
 
 Layers (any subset)::
 
-    from loomable.memory import Memory, ConversationMemory, UserMemory, KnowledgeMemory
-    from loomable.memory import open_session_store
-    from loomable.agent import NoteStore
-    from loomable.kernel.long_term import LongTermStore
+    from loomable.memory import (
+        Memory, ConversationMemory, UserMemory, KnowledgeMemory, MemoryScope,
+        open_session_store,
+    )
 
     memory = Memory.compose(
         conversation=ConversationMemory(
@@ -13,14 +13,19 @@ Layers (any subset)::
             window=8,
         ),
         user=UserMemory(
-            note_store=NoteStore(LongTermStore(), embedder),
-            memory_tool=True,       # agentic write/recall
-            auto_extract=False,     # set True for Always-mode (heuristic)
+            note_store=notes,
+            memory_tool=True,
+            auto_extract=True,
         ),
-        knowledge=KnowledgeMemory(documents=[...], embedder=embedder),
     )
 
-    agent = Agent(model=..., memory=memory, session_id="c1", user_id="alice")
+    agent = Agent(
+        model=...,
+        memory=memory,
+        session_id="c1",
+        user_id="alice",
+        scopes={"claim_id": "CLM-4421"},  # any extra isolation keys
+    )
 
 Aliases: ``short=`` → conversation, ``long=`` → user.
 Legacy ``session_store=`` / ``note_store=`` / ``memory_backend=`` still work and
@@ -32,9 +37,10 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, Mapping
 
 __all__ = [
+    "MemoryScope",
     "ConversationMemory",
     "UserMemory",
     "KnowledgeMemory",
@@ -43,6 +49,8 @@ __all__ = [
     "ScopedNoteStore",
     "is_memory_bundle",
     "is_kernel_memory_manager",
+    "extract_user_facts",
+    "auto_extract_into_notes",
 ]
 
 
@@ -59,6 +67,78 @@ def is_kernel_memory_manager(value: Any) -> bool:
 
 def is_memory_bundle(value: Any) -> bool:
     return isinstance(value, Memory)
+
+
+@dataclass(frozen=True)
+class MemoryScope:
+    """Arbitrary isolation keys for long-term (and tenant) memory.
+
+    Use any business keys — not only ``user_id``::
+
+        MemoryScope.of(user_id="alice", claim_id="CLM-4421")
+        MemoryScope.of(policy_id="POL-9", lob="auto")
+        MemoryScope.from_mapping({"user_id": "alice", "claim_id": "CLM-4421"})
+
+    Notes are stored under a stable prefix and tagged ``scope:key=value`` so
+    recall never leaks across claims/users/tenants sharing one vector store.
+    """
+
+    parts: tuple[tuple[str, str], ...] = ()
+
+    @classmethod
+    def of(cls, **kwargs: Any) -> MemoryScope:
+        pairs = tuple(
+            sorted(
+                (str(k), str(v))
+                for k, v in kwargs.items()
+                if v is not None and str(v).strip() != ""
+            )
+        )
+        return cls(parts=pairs)
+
+    @classmethod
+    def from_mapping(cls, mapping: Mapping[str, Any] | None) -> MemoryScope:
+        if not mapping:
+            return cls()
+        return cls.of(**dict(mapping))
+
+    def merge(self, other: MemoryScope | Mapping[str, Any] | None) -> MemoryScope:
+        """Return a new scope; ``other`` overrides duplicate keys."""
+        base = dict(self.parts)
+        if other is None:
+            return self
+        if isinstance(other, MemoryScope):
+            base.update(dict(other.parts))
+        else:
+            for k, v in other.items():
+                if v is not None and str(v).strip() != "":
+                    base[str(k)] = str(v)
+        return MemoryScope.of(**base)
+
+    def __bool__(self) -> bool:
+        return bool(self.parts)
+
+    @property
+    def prefix(self) -> str:
+        """Stable id prefix, e.g. ``claim_id=CLM-1|user_id=alice``."""
+        return "|".join(f"{k}={v}" for k, v in self.parts)
+
+    @property
+    def tags(self) -> list[str]:
+        return [f"scope:{k}={v}" for k, v in self.parts]
+
+    def get(self, key: str, default: str | None = None) -> str | None:
+        for k, v in self.parts:
+            if k == key:
+                return v
+        return default
+
+    def as_dict(self) -> dict[str, str]:
+        return dict(self.parts)
+
+    def tenant_key(self) -> str:
+        """Single string suitable for Postgres ``user_id`` / tenant columns."""
+        return self.prefix or "_"
 
 
 @dataclass
@@ -79,6 +159,10 @@ class ConversationMemory:
         Use model-based compaction when True.
     enabled:
         When False, Agent runs without conversation replay even if session_id set.
+    scope:
+        Optional tenant scope hint (documented for Postgres ``user_id``). Isolation
+        for chat threads still uses ``session_id``; put claim/thread identity there
+        (e.g. ``session_id=f"claim:{claim_id}"``) when you need per-claim chats.
     """
 
     store: Any | None = None
@@ -87,27 +171,25 @@ class ConversationMemory:
     compaction_threshold: int | None = None
     use_llm_summarizer: bool = False
     enabled: bool = True
+    scope: MemoryScope | None = None
 
 
 @dataclass
 class UserMemory:
-    """Long-term user-scoped facts (L3 notes).
+    """Long-term scoped facts (L3 notes).
 
     Parameters
     ----------
-    note_store:
-        Existing :class:`~loomable.agent.notes.NoteStore`.
-    long_term / embedder:
-        Build a NoteStore when ``note_store`` is omitted.
+    note_store / long_term / embedder:
+        Provide a NoteStore, or enough pieces to build one.
     memory_tool:
-        Expose agentic ``memory`` tool (write/read/list/delete/recall).
+        Expose agentic ``memory`` tool.
     auto_extract:
-        After each turn, heuristically extract user facts into notes
-        (Agno Always-mode lite). Disabled when ``memory_tool`` path alone is enough.
-        If both are True, agentic tool still wins for model writes; auto_extract
-        only adds passive facts from user text (never both nested LLM calls).
+        Heuristic Always-mode: extract facts from user text after each turn.
     user_id:
-        Scope note ids/tags. Falls back to ``Agent(user_id=...)``.
+        Convenience for ``scopes={"user_id": ...}``.
+    scopes:
+        Extra isolation keys (``claim_id``, ``policy_id``, ``case_id``, …).
     """
 
     note_store: Any | None = None
@@ -116,6 +198,17 @@ class UserMemory:
     memory_tool: bool = True
     auto_extract: bool = False
     user_id: str | None = None
+    scopes: Mapping[str, Any] | MemoryScope | None = None
+
+    def resolve_scope(self) -> MemoryScope:
+        scope = MemoryScope.from_mapping(
+            self.scopes if isinstance(self.scopes, Mapping) else None
+        )
+        if isinstance(self.scopes, MemoryScope):
+            scope = self.scopes
+        if self.user_id:
+            scope = scope.merge({"user_id": self.user_id})
+        return scope
 
 
 @dataclass
@@ -173,16 +266,37 @@ class Memory:
             working=working,
         )
 
+    def with_scopes(
+        self,
+        *,
+        user_id: str | None = None,
+        scopes: Mapping[str, Any] | MemoryScope | None = None,
+    ) -> Memory:
+        """Stamp Agent-level ``user_id`` / ``scopes`` onto the user layer."""
+        if self.user is None:
+            return self
+        merged = self.user.resolve_scope()
+        if user_id:
+            merged = merged.merge({"user_id": user_id})
+        if scopes:
+            merged = merged.merge(scopes)
+        if not merged:
+            return self
+        return replace(
+            self,
+            user=replace(
+                self.user,
+                user_id=merged.get("user_id") or self.user.user_id,
+                scopes=merged,
+            ),
+        )
+
     def with_user_id(self, user_id: str | None) -> Memory:
-        """Return a copy that stamps ``user_id`` onto the user layer when missing."""
-        if not user_id or self.user is None:
-            return self
-        if self.user.user_id:
-            return self
-        return replace(self, user=replace(self.user, user_id=user_id))
+        """Back-compat alias for :meth:`with_scopes`."""
+        return self.with_scopes(user_id=user_id)
 
     def resolve_note_store(self) -> Any | None:
-        """Materialize a (possibly user-scoped) NoteStore from the user layer."""
+        """Materialize a (possibly scoped) NoteStore from the user layer."""
         if self.user is None:
             return None
         store = self.user.note_store
@@ -197,9 +311,9 @@ class Memory:
             store = NoteStore(long_term=LongTermStore(), embedder=self.user.embedder)
         if store is None:
             return None
-        uid = self.user.user_id
-        if uid:
-            return ScopedNoteStore(store, user_id=uid)
+        scope = self.user.resolve_scope()
+        if scope:
+            return ScopedNoteStore(store, scope=scope)
         return store
 
     def to_agent_kwargs(self) -> dict[str, Any]:
@@ -236,28 +350,45 @@ class Memory:
 
 
 class ScopedNoteStore:
-    """Wrap a NoteStore so note ids/tags are namespaced by ``user_id``."""
+    """Wrap a NoteStore so note ids/tags are namespaced by a :class:`MemoryScope`.
 
-    def __init__(self, inner: Any, *, user_id: str) -> None:
-        if not user_id:
-            raise ValueError("ScopedNoteStore requires a non-empty user_id")
+    Back-compat: ``ScopedNoteStore(inner, user_id="alice")`` still works.
+    """
+
+    def __init__(
+        self,
+        inner: Any,
+        *,
+        scope: MemoryScope | None = None,
+        user_id: str | None = None,
+    ) -> None:
+        if scope is None and user_id:
+            scope = MemoryScope.of(user_id=user_id)
+        if scope is None or not scope:
+            raise ValueError("ScopedNoteStore requires a non-empty scope or user_id")
         self._inner = inner
-        self._user_id = user_id
-        self._tag = f"user:{user_id}"
+        self._scope = scope
+        self._prefix = scope.prefix
+        self._tags = scope.tags
 
     @property
-    def user_id(self) -> str:
-        return self._user_id
+    def scope(self) -> MemoryScope:
+        return self._scope
+
+    @property
+    def user_id(self) -> str | None:
+        return self._scope.get("user_id")
 
     def _scoped_id(self, note_id: str) -> str:
-        if note_id.startswith(f"{self._user_id}:"):
+        if note_id.startswith(f"{self._prefix}:"):
             return note_id
-        return f"{self._user_id}:{note_id}"
+        return f"{self._prefix}:{note_id}"
 
     async def write(self, note_id: str, text: str, tags: list[str] | tuple[str, ...] = ()) -> Any:
         tag_list = list(tags)
-        if self._tag not in tag_list:
-            tag_list.append(self._tag)
+        for t in self._tags:
+            if t not in tag_list:
+                tag_list.append(t)
         return await self._inner.write(self._scoped_id(note_id), text, tag_list)
 
     async def read(self, note_id: str) -> Any:
@@ -271,7 +402,6 @@ class ScopedNoteStore:
         await self._inner.delete(self._scoped_id(note_id))
 
     async def recall(self, query: str, k: int = 3) -> list[Any]:
-        # Over-fetch then filter so vector neighbors from other users are dropped.
         hits = await self._inner.recall(query, k=max(k * 4, k))
         owned = [n for n in hits if self._owns(n)]
         return owned[:k]
@@ -279,7 +409,10 @@ class ScopedNoteStore:
     def _owns(self, note: Any) -> bool:
         nid = getattr(note, "note_id", "") or ""
         tags = list(getattr(note, "tags", None) or [])
-        return nid.startswith(f"{self._user_id}:") or self._tag in tags
+        if nid.startswith(f"{self._prefix}:"):
+            return True
+        # Require ALL scope tags so claim_id isolation is strict.
+        return all(t in tags for t in self._tags)
 
 
 _FACT_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -315,16 +448,18 @@ async def auto_extract_into_notes(
     user_text: str,
     *,
     user_id: str | None = None,
+    scope: MemoryScope | None = None,
 ) -> list[str]:
     """Write heuristic facts into ``note_store``. Returns texts written."""
     facts = extract_user_facts(user_text)
     written: list[str] = []
+    extra_tags = list(scope.tags) if scope else []
+    if user_id and f"scope:user_id={user_id}" not in extra_tags:
+        extra_tags.append(f"user:{user_id}")
     for fact in facts:
         digest = hashlib.sha1(fact.lower().encode("utf-8")).hexdigest()[:12]
         note_id = f"auto:{digest}"
-        tags = ["auto", "user_fact"]
-        if user_id:
-            tags.append(f"user:{user_id}")
+        tags = ["auto", "user_fact", *extra_tags]
         await note_store.write(note_id, fact, tags)
         written.append(fact)
     return written

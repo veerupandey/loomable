@@ -640,20 +640,43 @@ agent = Agent(
     model="openai:gpt-4o-mini",
     memory=memory,
     session_id="conv-1",
-    user_id="alice",  # scopes UserMemory note ids/tags
+    user_id="alice",
+    scopes={"claim_id": "CLM-4421"},  # any extra keys: policy_id, case_id, …
 )
 ```
 
 | Layer | Class | What it stores |
 |-------|--------|----------------|
 | Conversation | `ConversationMemory` (`short=`) | L1 turns + L2 summaries for `session_id` |
-| User | `UserMemory` (`long=`) | Cross-session facts via `NoteStore` (user-scoped) |
+| User | `UserMemory` (`long=`) | Cross-session facts via `NoteStore` (scoped) |
 | Knowledge | `KnowledgeMemory` | RAG docs into the prompt |
 | Working | `WorkingMemory` | Flow blackboard (`TieredMemoryStore`) — not Agent chat |
 
-Legacy kwargs (`session_store=`, `note_store=`, `memory_backend=`) still work and **override** the matching compose layer when both are set.
+### Scopes (user_id, claim_id, …)
 
-`user_id` is real for `UserMemory`: notes are stored as `{user_id}:{note_id}` via `ScopedNoteStore`. Pass the same `user_id` into Postgres stores for tenant isolation on L1/L2.
+Long-term notes are isolated by a :class:`~loomable.memory.MemoryScope` — any
+key/value map, not only `user_id`:
+
+```python
+from loomable import MemoryScope
+
+# Same shape:
+scopes={"user_id": "alice", "claim_id": "CLM-4421", "lob": "auto"}
+# or
+MemoryScope.of(user_id="alice", claim_id="CLM-4421")
+```
+
+- Notes are prefixed `claim_id=CLM-4421|user_id=alice:…` and tagged `scope:key=value`.
+- Recall requires **all** scope tags — claim A never sees claim B for the same user.
+- For **conversation** isolation per claim, put it in `session_id`  
+  (e.g. `session_id=f"claim:{claim_id}"`) and/or Postgres `user_id=` tenant  
+  (`scope.tenant_key()`).
+
+Legacy kwargs (`session_store=`, `note_store=`, `memory_backend=`) still work and
+**override** the matching compose layer when both are set.
+
+`user_id` + `scopes` are applied automatically when using `Memory.compose` or when
+you pass a bare `note_store=` with `user_id`/`scopes`.
 
 ### How to think about it (perspectives)
 

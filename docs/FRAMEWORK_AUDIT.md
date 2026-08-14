@@ -39,4 +39,4 @@ Custom backends: implement `MemoryBackend` (`read`/`write`/`delete`/`exists`).
 
 - Accept loop re-runs synthesizer only (by design).
 - Case Workflow is sequential (plan → act → accept).
-- `Agent.user_id` is metadata; tenant isolation uses Postgres `user_id` on backends.
+- `Agent.user_id` + `scopes=` (e.g. `claim_id`) isolate long-term notes via `MemoryScope` / `ScopedNoteStore`. Postgres backends still take their own `user_id=` tenant for L1/L2 KV rows.

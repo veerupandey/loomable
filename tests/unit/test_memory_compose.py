@@ -10,6 +10,7 @@ from loomable.kernel.models import ModelRequest, ModelResponse
 from loomable.memory import (
     ConversationMemory,
     Memory,
+    MemoryScope,
     ScopedNoteStore,
     UserMemory,
     extract_user_facts,
@@ -57,6 +58,46 @@ async def test_scoped_note_store_isolates_users() -> None:
 
 
 @pytest.mark.asyncio
+async def test_memory_scope_claim_id_isolation() -> None:
+    """Insurance-style scopes: same user, different claim_id must not leak."""
+    from loomable.memory import MemoryScope
+
+    base = NoteStore(long_term=LongTermStore(), embedder=_Emb())
+    c1 = ScopedNoteStore(
+        base, scope=MemoryScope.of(user_id="alice", claim_id="CLM-1")
+    )
+    c2 = ScopedNoteStore(
+        base, scope=MemoryScope.of(user_id="alice", claim_id="CLM-2")
+    )
+    await c1.write("injury", "Claim 1: soft-tissue neck injury")
+    await c2.write("injury", "Claim 2: rear bumper only")
+
+    h1 = await c1.recall("injury", k=5)
+    h2 = await c2.recall("injury", k=5)
+    assert h1 and "Claim 1" in h1[0].text
+    assert h2 and "Claim 2" in h2[0].text
+    assert all("Claim 2" not in n.text for n in h1)
+    assert all("Claim 1" not in n.text for n in h2)
+
+    memory = Memory.compose(
+        conversation=ConversationMemory(store=open_session_store("memory")),
+        user=UserMemory(note_store=base, memory_tool=True, auto_extract=False),
+    )
+    agent = Agent(
+        model=_model(),
+        memory=memory,
+        session_id="claim-CLM-1",
+        user_id="alice",
+        scopes={"claim_id": "CLM-1"},
+        modalities="text",
+    )
+    assert isinstance(agent._note_store, ScopedNoteStore)
+    assert agent._note_store.scope.get("claim_id") == "CLM-1"
+    assert "user_id=alice" in agent._note_store.scope.prefix
+    assert "claim_id=CLM-1" in agent._note_store.scope.prefix
+
+
+@pytest.mark.asyncio
 async def test_memory_compose_conversation_and_user_auto_extract() -> None:
     store = open_session_store("memory")
     notes = NoteStore(long_term=LongTermStore(), embedder=_Emb())
@@ -80,7 +121,7 @@ async def test_memory_compose_conversation_and_user_auto_extract() -> None:
     # Auto-extract should have written scoped notes
     listed = await agent._note_store.list()
     assert listed, "expected auto-extracted user facts"
-    assert all(n.note_id.startswith("alice:") for n in listed)
+    assert all("user_id=alice" in n.note_id for n in listed)
 
     # New agent, same memory bundle → recall injects facts
     agent2 = Agent(
