@@ -672,6 +672,10 @@ class BuiltAgent:
     # Each entry identifies a server that failed to connect while others succeeded.
     mcp_errors: list["MCPConnectionError"] = field(default_factory=list)
 
+    # Runtime capability discovery (search_skills / load_skill / search_tools /
+    # search_mcp / activate_tool). None when discovery is disabled.
+    discovery: Any | None = None
+
     # Pinned facts (Req 6.1–6.4): steps whose turns are never eligible for compaction
     # and are always replayed in the memory prefix regardless of the rolling window.
     pinned_steps: set[int] = field(default_factory=set)
@@ -1474,21 +1478,30 @@ class BuiltAgent:
             if modality not in self.capabilities.input:
                 raise UnsupportedModalityError(modality.value, self._model_id)
 
-        # (2) Build tool schemas to advertise to the model.
-        tool_schemas: list[dict] = []
-        for tool_obj in self.tool_runtime._tools.values():
-            if isinstance(tool_obj, (FunctionTool, MCPTool)):
-                tool_schemas.append(tool_obj.schema())
-            else:
-                # Generic schema for non-FunctionTool tools (e.g. RetrieverTool).
-                tool_schemas.append({
-                    "type": "function",
-                    "function": {
-                        "name": tool_obj.name,
-                        "description": getattr(tool_obj, "description", ""),
-                        "parameters": getattr(tool_obj, "parameters", {"type": "object", "properties": {}}),
-                    },
-                })
+        def _collect_tool_schemas() -> list[dict]:
+            schemas: list[dict] = []
+            for tool_obj in self.tool_runtime._tools.values():
+                if isinstance(tool_obj, (FunctionTool, MCPTool)):
+                    schemas.append(tool_obj.schema())
+                else:
+                    schemas.append({
+                        "type": "function",
+                        "function": {
+                            "name": tool_obj.name,
+                            "description": getattr(tool_obj, "description", ""),
+                            "parameters": getattr(
+                                tool_obj,
+                                "parameters",
+                                {"type": "object", "properties": {}},
+                            ),
+                        },
+                    })
+            return schemas
+
+        # (2) Build tool schemas to advertise to the model (refreshed each iteration
+        # so activate_tool / load_skill can extend the surface mid-run).
+        tool_schemas = _collect_tool_schemas()
+        tools_enabled = True
 
         # (3) Assemble the initial request: [system] + [knowledge] + [memory] + [input] + tools.
         request = to_model_request(agent_input)
@@ -1537,6 +1550,10 @@ class BuiltAgent:
         deliverable_complete_forced = False
 
         while True:
+            # Refresh advertised tools each turn (discovery activate/load).
+            if tools_enabled:
+                request.tools = _collect_tool_schemas()
+
             # --- Check cooperative cancellation at each loop boundary (Req 4.1) ---
             if ctx.cancelled:
                 stop_reason = StopReason(kind=StopReason.CANCELLED)
@@ -1658,6 +1675,7 @@ class BuiltAgent:
                     )}],
                 })
                 request.tools = []  # Remove tools so model cannot call them.
+                tools_enabled = False
                 # Context bounding before the nudge call (Req 13.1–13.4).
                 if effective_budget is not None:
                     request.messages = self._bound_messages(request.messages, effective_budget)
@@ -1872,6 +1890,25 @@ class BuiltAgent:
                     "tool_call_id": outcome.call_id,
                 })
 
+            # Mid-run skill loads: inject skill bodies as system messages so later
+            # turns follow the skill without relying only on the tool result text.
+            discovery_rt = getattr(self, "discovery", None)
+            if discovery_rt is not None and hasattr(discovery_rt, "drain_prompt_injections"):
+                for skill_name, body in discovery_rt.drain_prompt_injections():
+                    if not (body or "").strip():
+                        continue
+                    request.messages.append(
+                        {
+                            "role": "system",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": f"## Skill: {skill_name}\n{body.strip()}",
+                                }
+                            ],
+                        }
+                    )
+
             # --- Feedback injection: inject tool-generated media into the
             # conversation so the model can reason about it (Req 7.1–7.5). ---
             # IMPORTANT: append media as a follow-up *user* message. Attaching
@@ -1992,6 +2029,7 @@ class BuiltAgent:
                         }
                     )
                     request.tools = []
+                    tools_enabled = False
                     if effective_budget is not None:
                         request.messages = self._bound_messages(
                             request.messages, effective_budget
@@ -2820,6 +2858,10 @@ class Agent:
         # Lifecycle callbacks:
         on_tool_call: Any = None,
         on_complete: Any = None,
+        # Progressive capability discovery (skills / tools / MCP):
+        discovery: bool = False,
+        skill_catalog: list[Path] | list[str] | list[Path | str] | None = None,
+        defer_mcp: bool | None = None,
     ) -> None:
         # --- Resolve model string shorthand (e.g. "openai:gpt-4o-mini") ---
         if isinstance(model, str):
@@ -2843,6 +2885,10 @@ class Agent:
         self._skills = skills
         self._skill_bodies: list[tuple[str, str]] = []
         self._mcp_servers = mcp_servers
+        self._discovery = bool(discovery)
+        self._skill_catalog = skill_catalog
+        # Default: defer MCP tool advertisement when discovery is on.
+        self._defer_mcp = bool(discovery) if defer_mcp is None else bool(defer_mcp)
         # High-level modality DX: modalities="text" / text_only=True preferred over
         # constructing ModelCapabilities with frozensets.
         from loomable.content.capabilities import capabilities_for
@@ -3034,7 +3080,11 @@ class Agent:
         memory = self._memory or MemoryManager()
         tool_registry, skill_errors = self._build_tool_registry()
         # --- MCP servers: connect and enumerate tools (Req 5.1–5.4) ---
-        mcp_tools, mcp_errors = self._connect_mcp_servers_sync()
+        # When discovery+defer_mcp: catalog MCP tools without advertising them until
+        # activate_tool (progressive disclosure).
+        mcp_tools, mcp_errors, mcp_stubs = self._connect_mcp_servers_sync(
+            defer=self._discovery and self._defer_mcp
+        )
         tool_registry.update(mcp_tools)
         tool_runtime = self._tool_runtime or ToolRuntime(tool_registry)
         harness = self._harness or GuardrailHarness([])
@@ -3194,6 +3244,10 @@ class Agent:
             compaction_threshold=self._compaction_threshold,
             token_budget=self._token_budget,
         )
+
+        # --- Progressive discovery (skills / tools / MCP) ---
+        if self._discovery:
+            self._wire_discovery(built, mcp_stubs=mcp_stubs)
 
         # --- Wire harness knobs from Agent constructor (avoids build() boilerplate) ---
         if self._tool_timeout is not None:
@@ -3608,14 +3662,17 @@ class Agent:
 
     def _connect_mcp_servers_sync(
         self,
-    ) -> tuple[dict[str, Tool], list[MCPConnectionError]]:
+        *,
+        defer: bool = False,
+    ) -> tuple[dict[str, Tool], list[MCPConnectionError], list[Any]]:
         """Connect to configured MCP servers synchronously (Req 5.1–5.4).
 
         Wraps the async :meth:`_connect_mcp_servers` for use from the synchronous
-        :meth:`build`. Returns the MCP tool registry and any connection errors.
+        :meth:`build`. Returns the MCP tool registry, connection errors, and
+        catalog stubs (populated when ``defer=True`` or for discovery indexing).
         """
         if not self._mcp_servers:
-            return {}, []
+            return {}, [], []
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -3626,13 +3683,17 @@ class Agent:
             import concurrent.futures
 
             with concurrent.futures.ThreadPoolExecutor(1) as pool:
-                future = pool.submit(asyncio.run, self._connect_mcp_servers())
+                future = pool.submit(
+                    asyncio.run, self._connect_mcp_servers(defer=defer)
+                )
                 return future.result()
-        return asyncio.run(self._connect_mcp_servers())
+        return asyncio.run(self._connect_mcp_servers(defer=defer))
 
     async def _connect_mcp_servers(
         self,
-    ) -> tuple[dict[str, Tool], list[MCPConnectionError]]:
+        *,
+        defer: bool = False,
+    ) -> tuple[dict[str, Tool], list[MCPConnectionError], list[Any]]:
         """Connect to configured MCP servers and enumerate their tools (Req 5.1–5.4).
 
         For each MCP server specification in ``self._mcp_servers``, the kernel
@@ -3641,21 +3702,32 @@ class Agent:
         (a kernel :class:`Tool`) whose ``invoke`` delegates to
         ``MCPClient.call_tool``.
 
+        When ``defer=True``, tools are returned as catalog stubs only (not
+        registered) so the model must ``activate_tool`` before calling them.
+
         A failed connection yields an :class:`MCPConnectionError` for that server
         while other servers continue (Req 5.3). No kernel code is modified (Req 5.4).
 
         Returns
         -------
-        tuple[dict[str, Tool], list[MCPConnectionError]]
-            The MCP tool registry and any connection errors that were isolated.
+        tuple[dict[str, Tool], list[MCPConnectionError], list]
+            The MCP tool registry, isolated connection errors, and ToolStub list.
         """
+        from .discovery import ToolStub
         from .tools import MCPTool
 
         registry: dict[str, Tool] = {}
         errors: list[MCPConnectionError] = []
+        stubs: list[Any] = []
         client = MCPClient()
 
-        for spec in self._mcp_servers:
+        for spec_idx, spec in enumerate(self._mcp_servers):
+            server_id = getattr(spec, "name", None) or getattr(spec, "id", None)
+            if not server_id:
+                if isinstance(spec, dict):
+                    server_id = spec.get("name") or spec.get("id")
+                if not server_id:
+                    server_id = f"mcp-{spec_idx}"
             try:
                 session = await client.connect(spec)
                 capabilities = await client.list_capabilities(session)
@@ -3668,6 +3740,19 @@ class Agent:
                         "type": "object",
                         "properties": {},
                     })
+                    stub = ToolStub(
+                        name=tool_name,
+                        description=description,
+                        source="mcp",
+                        server_id=str(server_id),
+                        parameters=parameters if isinstance(parameters, dict) else {},
+                        activated=not defer,
+                        mcp_client=client,
+                        mcp_session=session,
+                    )
+                    stubs.append(stub)
+                    if defer:
+                        continue
                     mcp_tool = MCPTool(
                         name=tool_name,
                         description=description,
@@ -3679,7 +3764,122 @@ class Agent:
             except MCPConnectionError as err:
                 errors.append(err)
 
-        return registry, errors
+        return registry, errors, stubs
+
+    def _wire_discovery(self, built: BuiltAgent, *, mcp_stubs: list[Any] | None = None) -> None:
+        """Register search/load/activate meta-tools and build the capability catalog."""
+        from loomable.skills import bundled_skills_root, resolve_skills
+
+        from .discovery import (
+            DISCOVERY_SYSTEM_NOTE,
+            CapabilityCatalog,
+            DiscoveryRuntime,
+            SkillStub,
+            ToolStub,
+            catalog_from_skill_manifests,
+            make_discovery_tools,
+        )
+
+        catalog = CapabilityCatalog()
+        loader = SkillLoader()
+
+        # Skills already eagerly loaded via skills=
+        loaded_names: set[str] = set()
+        for name, _body in self._skill_bodies:
+            loaded_names.add(name)
+
+        skill_roots: list[Path] = []
+        if self._skills:
+            skill_roots.extend(resolve_skills(self._skills))
+        if self._skill_catalog:
+            skill_roots.extend(resolve_skills(self._skill_catalog))
+        # Always index bundled package skills for search_skills.
+        bundled = bundled_skills_root()
+        if bundled not in skill_roots:
+            skill_roots.append(bundled)
+
+        seen_skill: set[str] = set()
+        for root in skill_roots:
+            try:
+                manifests = loader.discover([root])
+            except Exception:  # noqa: BLE001
+                continue
+            for stub in catalog_from_skill_manifests(manifests):
+                if stub.name in seen_skill:
+                    continue
+                seen_skill.add(stub.name)
+                stub.loaded = stub.name in loaded_names
+                catalog.skills.append(stub)
+
+        # Also mark loaded skills that may not have been rediscovered
+        for name in loaded_names:
+            if name not in seen_skill:
+                catalog.skills.append(
+                    SkillStub(name=name, description="", path=Path("."), loaded=True)
+                )
+                seen_skill.add(name)
+
+        # Local / already-registered tools (searchable; already activated)
+        for tool_obj in built.tool_runtime._tools.values():
+            name = getattr(tool_obj, "name", "") or ""
+            if not name:
+                continue
+            catalog.tools.append(
+                ToolStub(
+                    name=name,
+                    description=getattr(tool_obj, "description", "") or "",
+                    source="local",
+                    activated=True,
+                    parameters=getattr(tool_obj, "parameters", None) or {},
+                )
+            )
+
+        # Deferred / eager MCP stubs
+        for stub in mcp_stubs or []:
+            existing = catalog.tool_by_name(stub.name)
+            if existing:
+                # Prefer MCP metadata when names collide
+                existing.source = "mcp"
+                existing.server_id = stub.server_id
+                existing.mcp_client = stub.mcp_client
+                existing.mcp_session = stub.mcp_session
+                existing.parameters = stub.parameters
+                existing.activated = stub.activated
+                existing.description = stub.description or existing.description
+            else:
+                catalog.tools.append(stub)
+
+        def _on_skill_body(skill_name: str, body: str) -> None:
+            block = f"## Skill: {skill_name}\n{body.strip()}"
+            if built.instructions:
+                built.instructions = f"{built.instructions.rstrip()}\n\n{block}"
+            else:
+                built.instructions = block
+
+        runtime = DiscoveryRuntime(
+            catalog,
+            skill_loader=loader,
+            tool_runtime=built.tool_runtime,
+            on_skill_body=_on_skill_body,
+        )
+        for meta in make_discovery_tools(runtime):
+            built.tool_runtime._tools[meta.name] = meta
+            if catalog.tool_by_name(meta.name) is None:
+                catalog.tools.append(
+                    ToolStub(
+                        name=meta.name,
+                        description=meta.description or "",
+                        source="local",
+                        activated=True,
+                    )
+                )
+
+        note = DISCOVERY_SYSTEM_NOTE.strip()
+        if built.instructions:
+            built.instructions = f"{built.instructions.rstrip()}\n\n{note}"
+        else:
+            built.instructions = note
+        built.discovery = runtime
 
     def _resolve_session_store(self) -> Any:
         """Resolve L1/L2 persistence: ``session_store`` or ``memory_backend`` wrap."""
