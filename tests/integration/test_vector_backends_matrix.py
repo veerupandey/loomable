@@ -224,7 +224,9 @@ async def test_postgres_pgvector_docker_backend(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_all_available_engines_retrieve(tmp_path: Path) -> None:
     """Run every installed backend; skip only when the optional dep is missing."""
-    engines: list[tuple[str, Callable[[], Any]]] = []
+    engines: list[tuple[str, Callable[[], Any]]] = [
+        ("memory", lambda: open_vector_store(engine="memory")),
+    ]
 
     try:
         import zvec  # noqa: F401
@@ -302,7 +304,8 @@ async def test_all_available_engines_retrieve(tmp_path: Path) -> None:
         except ImportError:
             pass
 
-    assert engines, "no vector backends available"
+    if not engines:
+        pytest.skip("no vector backends available")
     failures: list[str] = []
     for name, factory in engines:
         try:

@@ -108,7 +108,9 @@ async def test_large_pdf_ingest_retrieval_all_engines(
     handbook_pdf: Path, tmp_path: Path
 ) -> None:
     embedder, dims = _embedder()
-    engines: list[tuple[str, Callable[[], Any]]] = []
+    engines: list[tuple[str, Callable[[], Any]]] = [
+        ("memory", lambda: open_vector_store(engine="memory")),
+    ]
 
     def _add(name: str, factory: Callable[[], Any], dep: str) -> None:
         try:
@@ -173,7 +175,8 @@ async def test_large_pdf_ingest_retrieval_all_engines(
         except ImportError:
             pass
 
-    assert engines, "no vector backends installed"
+    if not engines:
+        pytest.skip("no vector backends installed")
     report: list[str] = []
     for name, factory in engines:
         failures = await _eval_engine(

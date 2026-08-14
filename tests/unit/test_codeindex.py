@@ -102,6 +102,16 @@ async def test_pluggable_backend(tmp_path: Path) -> None:
     assert hits
 
 
+@pytest.mark.asyncio
+async def test_codeindex_build_defaults_without_optional_zvec(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_mini_repo(repo)
+    index = await CodeIndex.build(repo, embedder=HashingEmbedder())
+    assert index.size >= 1
+    hits = await index.search("login", k=3)
+    assert hits
+
+
 def test_coding_skill_bundled() -> None:
     assert "coding" in list_bundled_skills()
 
@@ -130,3 +140,25 @@ async def test_create_deep_agent_profile_code(tmp_path: Path) -> None:
     for required in ("repo_map", "code_search", "find_symbol", "run_python", "run_shell"):
         assert required in names, required
     assert "coding" in list_bundled_skills()
+
+
+@pytest.mark.asyncio
+async def test_create_deep_agent_indexes_repo_kwarg(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_mini_repo(repo)
+    agent = create_deep_agent(
+        ModelSpec(provider="scripted", provider_impl=_Noop()),
+        workspace=repo,
+        profile="code",
+        repo=repo,
+        enable_task_tool=False,
+        think_tool=False,
+        use_llm_summarizer=False,
+        modalities="text",
+    )
+    built = agent.build()
+    names = set(built.tool_runtime._tools) | {
+        t.name for t in built.discovery.catalog.tools
+    }
+    assert "repo_map" in names
+    assert "code_search" in names

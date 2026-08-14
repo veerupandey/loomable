@@ -14,9 +14,9 @@
 | Unified Memory.compose | `Memory.compose(conversation=..., user=..., knowledge=...)` | `memory/05_compose_memory.py` |
 | Claim / custom scopes | `scopes={"claim_id": "..."}` | `memory/06_claim_scopes.py` |
 | Deep agent | `create_deep_agent(profile=...)` | `deep_agent/` |
-| Progressive discovery | `search_skills` / `load_skill` / `activate_tool` | `deep_agent/02_progressive_discovery.py` |
-| Sandbox + browser skill/MCP | `code_exec` / `shell` / `skills=["browser"]` | `deep_agent/06_sandbox_browser.py` |
-| Deep code (repo index + coding) | `profile="code"` / `CodeIndex` | `deep_agent/07_deep_code.py` |
+| Deep research (live) | `profile="research"` | `deep_agent/01_research.py` |
+| Deep code (live) | `profile="code"` / `repo=` | `deep_agent/02_code.py` |
+| Sandbox + optional browser MCP | `code_exec` / `shell` | `deep_agent/03_sandbox.py` |
 | MCP servers | `Agent(mcp_servers=[...])` | `advanced/01_mcp_servers.py` |
 | Conditional branches | `Workflow.branch` | `advanced/02_workflow_branch.py` |
 | Checkpoint persist | `Workflow` + `JsonFileCheckpointer` | `advanced/03_checkpointing.py` |
@@ -48,7 +48,7 @@
 ```
 examples/
 ├── agents/                 # Agent API progression (incl. knowledge_base)
-├── deep_agent/             # create_deep_agent + discovery + live Gemini gate
+├── deep_agent/             # live create_deep_agent (research, code, sandbox)
 ├── subagents/              # Team / delegation
 ├── patterns/               # Workflow / Team patterns (step, parallel, route, map)
 ├── memory/                 # session → compose → scopes
@@ -68,7 +68,7 @@ python examples/agents/01_hello_world.py
 python examples/agents/07_knowledge_base.py        # live LLM + knowledge_base=
 python examples/agents/08_team_knowledge_base.py   # live Team KB inherit
 python examples/advanced/05_build_retriever.py     # live LLM + retrievers=
-python examples/advanced/03_checkpointing.py       # live Workflow + checkpointer
+python examples/deep_agent/01_research.py           # live research brief
 ```
 
 ## Design principles
@@ -77,9 +77,8 @@ python examples/advanced/03_checkpointing.py       # live Workflow + checkpointe
 2. **Run it, see one clear output**
 3. **Docstring says when to use the pattern**
 4. **Progressive** — unique numeric prefixes; `01` is simplest in each folder
-5. **Live models** — most examples call a real provider via `examples/_provider.py`
+5. **Live models** — examples call a real provider via `examples/_provider.py`
    (`GEMINI_API_KEY` / OpenAI / Azure). Copy `.env.example` → `.env`.
-   `deep_agent/` is scripted by default for CI; set `DEEP_AGENT_LIVE=1` for live runs.
 6. **Agents understand prior output** — put `Agent`s on `Workflow.step` / `Team`.
    Do **not** add glue functions that parse `AgentOutput` between steps; the
    framework already passes the previous output as the next input.
