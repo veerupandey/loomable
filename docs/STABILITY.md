@@ -31,6 +31,8 @@ the declared scope. Breaking changes are rare and require a deprecation note in
 | `loomable.kernel.registry.ExtensionRegistry` | Not wired into Agent discovery; may change |
 | Flow optimizer (`loomable.flow.optimizer`) | Advanced; not part of beta DX |
 | `discovery_core="research-slim"` | Schema-budget profile; defaults may shift |
+| `loomable.sandbox` / `ShellTools` / Docker sandbox | Soft isolation; Docker experimental |
+| Bundled `browser` skill | Assumes Lightpanda (or compatible) MCP |
 
 ## Beta limits
 

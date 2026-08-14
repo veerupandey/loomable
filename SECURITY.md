@@ -20,3 +20,14 @@ beyond a trusted network. Enable `api_key=` for any non-local mount.
 ## Supported versions
 
 Security fixes target the current beta line (`0.2.0b*`) and later stable releases.
+
+## Execution sandbox (beta)
+
+`PythonTools` / `ShellTools` / `create_deep_agent(code_exec=True, shell=True)` use a
+**soft** sandbox by default (`SubprocessSandbox`: child process, timeout, cwd root,
+shell deny-list). This is **not** hard multi-tenant isolation.
+
+- Prefer `sandbox_backend="docker"` or a custom `Sandbox` for untrusted code.
+- Treat `run_shell` / `run_python` as privileged: deep agent adds them to
+  `require_confirmation` (HITL) when enabled.
+- Browser automation should use MCP (e.g. Lightpanda), not an open host shell.

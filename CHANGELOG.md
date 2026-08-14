@@ -4,6 +4,8 @@
 
 ### Added
 
+- Soft execution sandbox (`loomable.sandbox`), `ShellTools`, deep `code_exec`/`shell` wiring
+- Bundled `browser` skill (Lightpanda MCP)
 - Stability policy ([docs/STABILITY.md](docs/STABILITY.md)), SECURITY.md, beta graduation plan
 - `BuiltAgent.cancel()` / `Agent.cancel()` with active `RunContext` tracking
 - SSE / stream client disconnect triggers cooperative cancel
