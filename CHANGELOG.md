@@ -31,6 +31,7 @@
 - Package status: **Beta** (`0.2.0b0`)
 - `create_research_agent` emits `DeprecationWarning` (alias retained)
 - CI installs `.[dev,toolkits]`; README badge pins `main`
+- Default zvec L3 store reuses an in-process collection handle (no exclusive-lock deadlock across `Agent()` builds)
 
 ### Limits (documented)
 

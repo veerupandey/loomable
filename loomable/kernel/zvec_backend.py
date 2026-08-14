@@ -23,6 +23,11 @@ _ORIG_ID_KEY = "_loomable_id"
 _SAFE_ID_RE = re.compile(r"[^A-Za-z0-9_@#%=+\.\-!]")
 _MAX_ID_LEN = 64
 
+# One live collection per path so Agent() × N in one process does not deadlock
+# on zvec's exclusive LOCK file.
+_LIVE: dict[str, Any] = {}
+_REFS: dict[str, int] = {}
+
 
 def _safe_doc_id(item_id: str) -> str:
     """Map arbitrary Loomable ids onto zvec-legal document ids."""
@@ -83,7 +88,16 @@ class ZvecVectorBackend:
             ],
         )
 
+    def _attach(self, collection: Any) -> None:
+        self._collection = collection
+        _LIVE[self.path] = collection
+        _REFS[self.path] = _REFS.get(self.path, 0) + 1
+
     def _create(self, dimensions: int) -> None:
+        cached = _LIVE.get(self.path)
+        if cached is not None:
+            self._attach(cached)
+            return
         zvec = self._require()
         # create_and_open requires the path to *not* exist yet.
         parent = Path(self.path).parent
@@ -97,14 +111,20 @@ class ZvecVectorBackend:
                     f"Zvec collection path already exists and is not empty: {self.path}"
                 )
         self._dimensions = int(dimensions)
-        self._collection = zvec.create_and_open(
-            self.path,
-            self._schema(zvec, self._dimensions),
+        self._attach(
+            zvec.create_and_open(
+                self.path,
+                self._schema(zvec, self._dimensions),
+            )
         )
 
     def _open(self) -> None:
+        cached = _LIVE.get(self.path)
+        if cached is not None:
+            self._attach(cached)
+            return
         zvec = self._require()
-        self._collection = zvec.open(self.path)
+        self._attach(zvec.open(self.path))
 
     def _ensure(self, dimensions: int | None = None) -> Any:
         if self._collection is not None:
@@ -121,13 +141,20 @@ class ZvecVectorBackend:
         return self._collection
 
     def close(self) -> None:
-        """Release the collection handle so another process can open the path."""
-        if self._collection is not None:
+        """Release this handle. The on-disk lock is freed when the last handle closes."""
+        if self._collection is None:
+            return
+        n = _REFS.get(self.path, 1) - 1
+        if n <= 0:
             try:
                 self._collection.flush()
             except Exception:
                 pass
-            self._collection = None
+            _LIVE.pop(self.path, None)
+            _REFS.pop(self.path, None)
+        else:
+            _REFS[self.path] = n
+        self._collection = None
 
     async def index(self, id: str, vector: list[float], metadata: dict[str, Any]) -> None:
         dim = len(vector)

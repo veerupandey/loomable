@@ -66,7 +66,8 @@ class LongTermStore:
     Resolution order:
     1. Explicit ``backend=`` (FAISS, Postgres, in-memory, custom, …)
     2. ``path=`` → Alibaba :class:`ZvecVectorBackend` at that directory
-    3. else → Alibaba zvec at :data:`DEFAULT_ZVEC_PATH` (``.loomable/memory_zvec``)
+    3. else → Alibaba zvec at :data:`DEFAULT_ZVEC_PATH` (``.loomable/memory_zvec``);
+       falls back to :class:`InMemoryVectorBackend` if ``zvec`` is not installed.
     """
 
     def __init__(
@@ -84,8 +85,12 @@ class LongTermStore:
             self.backend = ZvecVectorBackend(path, dimensions=dimensions)
             self.backend_name = "zvec"
         else:
-            self.backend = ZvecVectorBackend(DEFAULT_ZVEC_PATH, dimensions=dimensions)
-            self.backend_name = "zvec"
+            try:
+                self.backend = ZvecVectorBackend(DEFAULT_ZVEC_PATH, dimensions=dimensions)
+                self.backend_name = "zvec"
+            except ImportError:
+                self.backend = InMemoryVectorBackend()
+                self.backend_name = "memory"
 
     async def index(self, id: str, vector: list[float], metadata: dict[str, Any]) -> None:
         try:
