@@ -156,6 +156,7 @@ async def spawn_specialist(
     memory_tool: bool = False,
     memory: Any | None = None,
     knowledge: list[str] | None = None,
+    retrievers: list[Any] | None = None,
     embedder: Any = None,
     skills: list[Any] | None = None,
     tool_hooks: list[Any] | None = None,
@@ -210,6 +211,8 @@ async def spawn_specialist(
         kwargs["memory"] = memory
     if knowledge is not None:
         kwargs["knowledge"] = knowledge
+    if retrievers is not None:
+        kwargs["retrievers"] = retrievers
     if embedder is not None:
         kwargs["embedder"] = embedder
     if skills is not None:
