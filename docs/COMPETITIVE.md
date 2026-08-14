@@ -125,3 +125,7 @@ Latest measured result (committed narrative; re-run anytime):
 - Hosted provider-native tool_search (OpenAI-only)
 - Replacing Memory / Case with LangGraph checkpoints
 - Merging `ExtensionRegistry` into DiscoveryRuntime without a design pass
+
+## Related
+
+- Beta graduation plan: [`docs/BETA_PLAN.md`](BETA_PLAN.md)
