@@ -278,6 +278,10 @@ async def map_specialists(
     tools: list[Any] | None = None,
     modalities: str | None = None,
     concurrency: int | None = None,
+    note_store: Any | None = None,
+    memory_tool: bool = False,
+    knowledge: list[str] | None = None,
+    embedder: Any = None,
 ) -> list[str]:
     """Dispatch: spawn one ephemeral specialist per plan step (parallel)."""
     from loomable.agent.delegation import spawn_specialist
@@ -294,6 +298,10 @@ async def map_specialists(
                 instructions=instructions,
                 tools=tools,
                 modalities=modalities,
+                note_store=note_store,
+                memory_tool=memory_tool,
+                knowledge=knowledge,
+                embedder=embedder,
             )
 
         if sem is None:
@@ -331,17 +339,22 @@ def _default_agent(
     instructions: str,
     tools: list[Any] | None = None,
     modalities: str | None = None,
+    memory: dict[str, Any] | None = None,
 ) -> Any:
     from loomable.agent.builder import Agent
+    from loomable.agent.memory_opts import role_scoped_memory
 
-    return Agent(
-        model=model,
-        role=role,
-        goal=goal,
-        instructions=instructions,
-        tools=tools or [],
-        modalities=modalities or "text",
-    )
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "role": role,
+        "goal": goal,
+        "instructions": instructions,
+        "tools": tools or [],
+        "modalities": modalities or "text",
+    }
+    if memory:
+        kwargs.update(role_scoped_memory(memory, role=role.lower().replace(" ", "_")))
+    return Agent(**kwargs)
 
 
 def build_case_workflow(
@@ -361,6 +374,8 @@ def build_case_workflow(
     modalities: str | None = None,
     concurrency: int | None = None,
     board: Board | None = None,
+    # Agent-identical memory (applied to default role agents)
+    agent_memory: dict[str, Any] | None = None,
 ) -> Workflow:
     """Build a Workflow: plan → dispatch → synthesize → optional accept loop."""
     if model is None and (planner is None or worker is None):
@@ -391,6 +406,7 @@ def build_case_workflow(
                 "short imperative strings. No prose, no markdown."
             ),
             modalities=modalities,
+            memory=agent_memory,
         )
     if worker is None and mode == "reuse":
         worker = _default_agent(
@@ -400,6 +416,7 @@ def build_case_workflow(
             instructions="Complete ONLY the assigned step. Be concrete and concise.",
             tools=tools_list,
             modalities=modalities,
+            memory=agent_memory,
         )
     if synthesizer is None:
         synthesizer = _default_agent(
@@ -411,6 +428,7 @@ def build_case_workflow(
                 "Preserve facts; do not invent missing evidence."
             ),
             modalities=modalities,
+            memory=agent_memory,
         )
 
     async def plan_step(inp: Any, *, context: RunContext | None = None) -> RunResult:
@@ -463,12 +481,17 @@ def build_case_workflow(
         if mode == "spawn":
             if model is None:
                 raise ValueError("dispatch='spawn' requires model=")
+            mem = agent_memory or {}
             texts = await map_specialists(
                 steps,
                 model=model,
                 tools=tools_list,
                 modalities=modalities,
                 concurrency=concurrency,
+                note_store=mem.get("note_store"),
+                memory_tool=bool(mem.get("memory_tool", False)),
+                knowledge=mem.get("knowledge"),
+                embedder=mem.get("embedder"),
             )
         else:
             async def _work(step: str) -> str:
@@ -655,7 +678,21 @@ class Case:
         tools: list[Any] | None = None,
         modalities: str | None = None,
         concurrency: int | None = None,
+        # Same memory kwargs as Agent — applied to default planner/worker/synth
+        session_store: Any | None = None,
+        memory_backend: Any | None = None,
+        note_store: Any | None = None,
+        memory_tool: bool = False,
+        memory_window: int = 8,
+        compaction_threshold: int = 16,
+        use_llm_summarizer: bool = False,
+        knowledge: list[str] | None = None,
+        embedder: Any = None,
+        knowledge_top_k: int = 3,
+        user_id: str | None = None,
     ) -> None:
+        from loomable.agent.memory_opts import filter_memory_kwargs
+
         self.goal = goal
         self._model = model
         if board is True:
@@ -664,6 +701,26 @@ class Case:
             self.board = None
         else:
             self.board = board
+
+        agent_memory = filter_memory_kwargs(
+            {
+                "session_id": session_id,
+                "user_id": user_id,
+                "session_store": session_store,
+                "memory_backend": memory_backend,
+                "note_store": note_store,
+                "memory_tool": memory_tool,
+                "memory_window": memory_window,
+                "compaction_threshold": compaction_threshold,
+                "use_llm_summarizer": use_llm_summarizer,
+                "knowledge": knowledge,
+                "embedder": embedder,
+                "knowledge_top_k": knowledge_top_k,
+            }
+        )
+        # Case session_id is the checkpointer thread; role agents get scoped ids.
+        if session_id is not None:
+            agent_memory["session_id"] = session_id
 
         self._kwargs = dict(
             planner=planner,
@@ -680,6 +737,7 @@ class Case:
             modalities=modalities,
             concurrency=concurrency,
             board=self.board,
+            agent_memory=agent_memory or None,
         )
         self._workflow: Workflow | None = None
         self.session_id = session_id or ""
@@ -695,7 +753,15 @@ class Case:
             return
         self.session_id = session_id
         self._kwargs["session_id"] = session_id
-        if self._workflow is not None:
+        mem = self._kwargs.get("agent_memory")
+        if isinstance(mem, dict):
+            mem = dict(mem)
+            mem["session_id"] = session_id
+            self._kwargs["agent_memory"] = mem
+            # Role agents baked into a cached workflow keep old scoped ids —
+            # invalidate so next as_workflow() rebuilds with new scopes.
+            self._workflow = None
+        elif self._workflow is not None:
             self._workflow._session_id = session_id
 
     def bind_checkpointer(self, checkpointer: Any) -> None:
@@ -706,11 +772,14 @@ class Case:
 
     @classmethod
     def from_agent(cls, agent: Any) -> Case:
-        """Build a Case from ``Agent(mode='case', ...)`` attributes."""
+        """Build a Case from ``Agent(mode='case', ...)`` — copies Agent memory too."""
+        from loomable.agent.memory_opts import memory_kwargs_from_agent
+
         dispatch = getattr(agent, "_dispatch", None) or "reuse"
         max_rounds = getattr(agent, "_max_rounds", None)
         if max_rounds is None:
             max_rounds = max(1, int(getattr(agent, "_max_verify_retries", 1) or 1) + 1)
+        mem = memory_kwargs_from_agent(agent)
         return cls(
             model=getattr(agent, "_model", None),
             goal=str(getattr(agent, "_goal", "") or ""),
@@ -724,6 +793,17 @@ class Case:
             session_id=getattr(agent, "_session_id", None),
             checkpointer=getattr(agent, "_checkpointer", None),
             name=str(getattr(agent, "_name", None) or "case"),
+            session_store=mem.get("session_store"),
+            memory_backend=mem.get("memory_backend"),
+            note_store=mem.get("note_store"),
+            memory_tool=bool(mem.get("memory_tool", False)),
+            memory_window=int(mem.get("memory_window", 8) or 8),
+            compaction_threshold=int(mem.get("compaction_threshold", 16) or 16),
+            use_llm_summarizer=bool(mem.get("use_llm_summarizer", False)),
+            knowledge=mem.get("knowledge"),
+            embedder=mem.get("embedder"),
+            knowledge_top_k=int(mem.get("knowledge_top_k", 3) or 3),
+            user_id=mem.get("user_id"),
         )
 
     def as_workflow(self) -> Workflow:

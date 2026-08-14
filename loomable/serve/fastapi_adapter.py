@@ -192,6 +192,13 @@ def _register_agent_routes(app: FastAPI, agent: Any, *, prefix: str = "") -> Non
         sid = body.session_id
         if not sid:
             return
+        # Prefer bind_session so Agent L1/L2 and Case checkpoints stay aligned.
+        if hasattr(agent, "bind_session") and callable(getattr(agent, "bind_session")):
+            try:
+                agent.bind_session(sid)
+                return
+            except Exception:  # noqa: BLE001
+                pass
         if hasattr(agent, "session_id"):
             try:
                 agent.session_id = sid  # type: ignore[attr-defined]

@@ -102,9 +102,25 @@ class Team:
         max_delegations: int | None = None,
         max_depth: int = 4,
         hard: bool | None = None,
+        # Same memory kwargs as Agent (L1/L2 + L3) — applied to the coordinator.
+        resume: bool = False,
+        use_memory: bool = True,
+        memory_window: int = 8,
+        compaction_threshold: int = 16,
+        use_llm_summarizer: bool = False,
+        session_store: Any | None = None,
+        memory_backend: Any | None = None,
+        note_store: Any | None = None,
+        memory_tool: bool = False,
+        knowledge: list[str] | None = None,
+        embedder: Any = None,
+        knowledge_top_k: int = 3,
+        user_id: str | None = None,
     ) -> None:
         if not members:
             raise ValueError("Team requires at least one member")
+
+        from .memory_opts import filter_memory_kwargs
 
         self._members = members
         self._model = model
@@ -122,13 +138,39 @@ class Team:
             "goal": f"Coordinate the team in {mode} mode",
             "instructions": _assemble_team_instructions(mode, members, instructions),
             "subagents": members,
+            **filter_memory_kwargs(
+                {
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "resume": resume,
+                    "use_memory": use_memory,
+                    "memory_window": memory_window,
+                    "compaction_threshold": compaction_threshold,
+                    "use_llm_summarizer": use_llm_summarizer,
+                    "session_store": session_store,
+                    "memory_backend": memory_backend,
+                    "note_store": note_store,
+                    "memory_tool": memory_tool,
+                    "knowledge": knowledge,
+                    "embedder": embedder,
+                    "knowledge_top_k": knowledge_top_k,
+                }
+            ),
         }
+        # resume=False is meaningful; filter drops None only — force session_id through
         if session_id is not None:
             agent_kwargs["session_id"] = session_id
+        if resume:
+            agent_kwargs["resume"] = True
         self._agent = Agent(**agent_kwargs)
         # Stash budgets for build-time wiring (delegation tools rebuilt in arun soft path)
         self._agent._max_delegations = max_delegations  # type: ignore[attr-defined]
         self._agent._max_depth = max_depth  # type: ignore[attr-defined]
+
+    def bind_session(self, session_id: str | None, *, resume: bool | None = None) -> None:
+        """Bind HTTP/stream session id — same semantics as :meth:`Agent.bind_session`."""
+        self._session_id = session_id or self._session_id
+        self._agent.bind_session(session_id, resume=resume)
 
     @property
     def agent(self) -> Agent:
