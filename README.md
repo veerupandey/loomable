@@ -5,7 +5,7 @@
     <a href="https://github.com/veerupandey/loomable/actions/workflows/ci.yml"><img src="https://github.com/veerupandey/loomable/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
     <img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+" />
     <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT" />
-    <img src="https://img.shields.io/badge/status-alpha-orange.svg" alt="Status: alpha" />
+    <img src="https://img.shields.io/badge/status-beta-blue.svg" alt="Status: beta" />
   </p>
 </div>
 
@@ -15,10 +15,15 @@
   <a href="#ag-ui-sse">AG-UI SSE</a> ·
   <a href="#examples">Examples</a> ·
   <a href="docs/API.md">API Reference</a> ·
+  <a href="docs/STABILITY.md">Stability</a> ·
+  <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="SECURITY.md">Security</a> ·
   <a href="docs/BETA_PLAN.md">Beta plan</a>
 </p>
 
 ## Introduction
+
+**Public beta (`0.2.0b0`)** — durable primitives (Agent · Team · Workflow · Case · AG-UI), expect polish gaps. See [docs/STABILITY.md](docs/STABILITY.md) for the supported surface and beta limits (local workspace FS, cooperative cancel, shared API-key serve auth).
 
 Loomable is a Python framework for production agent systems. One `Runnable` contract (`arun` → `RunResult`), progressive disclosure:
 
@@ -61,10 +66,11 @@ async for event in case.astream_events(email):
 ### Installation
 
 ```bash
+# Beta tag install (PyPI publish may lag the git tag)
+pip install "loomable @ git+https://github.com/veerupandey/loomable.git@v0.2.0b0"
+# or track main / editable
 pip install "loomable @ git+https://github.com/veerupandey/loomable.git"
-# or
 uv add "loomable @ git+https://github.com/veerupandey/loomable.git"
-# or
 git clone https://github.com/veerupandey/loomable.git && cd loomable && pip install -e ".[dev]"
 ```
 

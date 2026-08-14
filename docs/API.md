@@ -423,23 +423,38 @@ agent = create_deep_agent(
     model="openai:gpt-4o-mini",
     profile="research",  # = skills=["research"] + report/citation gates
     workspace="./.deep_workspace",
+    # discovery_core="research" (default, correctness-first)
+    # discovery_core="research-slim"  # smaller schema budget (≥50% target)
 )
 await agent.arun("Research any topic; write reports/brief.md")
 ```
 
-`create_research_agent(...)` is a back-compat alias for `profile="research"`.
+`create_research_agent(...)` is a **deprecated** alias for `profile="research"`
+(emits `DeprecationWarning`; prefer `create_deep_agent`).
 
 Pillars:
 
 1. **Planning** — `TodoTools`
-2. **Workspace FS** — sliced reads, `delete_file`, token-aware offload
-3. **Subagents** — `task` / `task_batch` + named `specialists=`
+2. **Workspace FS** — sliced reads, `delete_file`, token-aware offload (**local only** in beta)
+3. **Subagents** — `task` / `task_batch` + named `specialists=` (inherit `discovery=True`)
 4. **Skills** — `skills=["research"]` or any catalog / skill dir (SkillLoader accepts both)
 5. **Discovery** — deep agents enable `discovery=True` with a **schema budget**:
    core tools stay advertised; the rest (images, PDF, code, MCP, …) use
    `search_tools` / `search_mcp` / `activate_tool`. Skills are **metadata-first**
-   (`load_skill`); see `docs/COMPETITIVE.md`.
+   (`load_skill`). Profiles: `discovery_core="research"` (default) or
+   `"research-slim"` (experimental slim allowlist); see `docs/COMPETITIVE.md`
+   and `docs/STABILITY.md`.
 6. **Gates** — research profile requires `reports/` + `register_source` + accept verifier
+
+### Cancel
+
+```python
+built = agent.build()
+# During an in-flight arun / astream_events:
+built.cancel()   # or agent.cancel() — cooperative at tool-loop boundaries
+```
+
+SSE / NDJSON client disconnect on `mount_*` also calls cancel.
 
 See `examples/deep_agent/` and `loomable/skills/research/SKILL.md`.
 
@@ -1179,12 +1194,15 @@ from fastapi import FastAPI
 from loomable.serve import mount_agent, mount_case
 
 app = FastAPI()
-mount_agent(app, agent, prefix="/agent")
-mount_case(app, case, prefix="/cases")
-# POST /agent/run/events  → text/event-stream
+# Optional api_key=: require Authorization: Bearer … or X-API-Key (401 if missing)
+mount_agent(app, agent, prefix="/agent", api_key="secret")
+mount_case(app, case, prefix="/cases", api_key="secret")
+# POST /agent/run/events  → text/event-stream (disconnect → cancel)
 # POST /cases/run/events  → text/event-stream
 # POST /agent/run/stream  → application/x-ndjson (legacy)
 ```
+
+See [SECURITY.md](../SECURITY.md) for trust boundaries.
 
 ---
 
@@ -1384,15 +1402,18 @@ from loomable.serve import mount_agent, FastAPIAdapter
 agent = Agent(model=provider, tools=[search])
 
 app = FastAPI()
-mount_agent(app, agent, prefix="/agent")
+mount_agent(app, agent, prefix="/agent", api_key="optional-shared-secret")
 # GET  /agent/health
 # POST /agent/run
-# POST /agent/run/stream   (NDJSON)
-# POST /agent/run/events   (AG-UI SSE)
+# POST /agent/run/stream   (NDJSON; disconnect → BuiltAgent.cancel)
+# POST /agent/run/events   (AG-UI SSE; disconnect → cancel)
 
 # Or dual-mount at / and /agent:
-app = FastAPIAdapter(agent).app()
+app = FastAPIAdapter(agent, api_key="optional-shared-secret").app()
 ```
+
+Auth (when `api_key=` is set): `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+Anonymous requests receive `401`. This is a shared-key edge baseline, not full RBAC.
 
 ### HTTP (FastAPI) — Case
 
@@ -1401,7 +1422,7 @@ from loomable import Case
 from loomable.serve import mount_case
 
 case = Case(model=provider, goal="...", board=True, accept=ok)
-mount_case(app, case, prefix="/cases")
+mount_case(app, case, prefix="/cases", api_key="optional-shared-secret")
 # POST /cases/run/events → text/event-stream
 ```
 

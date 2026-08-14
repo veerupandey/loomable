@@ -694,6 +694,9 @@ class BuiltAgent:
     # into the conversation so the model can reason about it in subsequent turns.
     _feedback_media: bool = True
 
+    # Active RunContext for cooperative cancel (BuiltAgent.cancel / SSE disconnect).
+    _active_ctx: Any | None = field(default=None, init=False, repr=False)
+
     @property
     def _model_id(self) -> str:
         """The model identifier used in capability-error messages."""
@@ -786,6 +789,37 @@ class BuiltAgent:
                 loop_repeat_threshold=self.loop_repeat_threshold,
             )
 
+        self._active_ctx = ctx
+        try:
+            return await self._arun_with_context(
+                agent_input,
+                output_schema=output_schema,
+                ctx=ctx,
+            )
+        finally:
+            if self._active_ctx is ctx:
+                self._active_ctx = None
+
+    def cancel(self) -> bool:
+        """Request cooperative cancellation of the in-flight run.
+
+        Returns True if an active :class:`RunContext` was marked cancelled.
+        Cancellation is observed at tool-loop / step boundaries (not a hard
+        abort of an in-flight provider HTTP call).
+        """
+        ctx = self._active_ctx
+        if ctx is None:
+            return False
+        ctx.cancel()
+        return True
+
+    async def _arun_with_context(
+        self,
+        agent_input: AgentInput,
+        *,
+        output_schema: type | None,
+        ctx: RunContext,
+    ) -> RunResult:
         # --- Emit run_start event (Req 11.1) ---
         ctx.events.emit(Event(
             kind="run_start",
@@ -3440,6 +3474,12 @@ class Agent:
         if self._on_complete is not None:
             self._on_complete(result)
         return result
+
+    def cancel(self) -> bool:
+        """Request cooperative cancellation of the active built-agent run."""
+        if self._built is not None:
+            return self._built.cancel()
+        return False
 
     def run(
         self,
