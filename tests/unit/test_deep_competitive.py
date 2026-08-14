@@ -311,3 +311,55 @@ def test_case_from_agent_inherits_runtime(tmp_path) -> None:
     rt = case._kwargs.get("agent_runtime") or {}
     assert rt.get("max_tool_iterations") == 40
     assert rt.get("token_budget") in (128_000, 64000, 64_000) or rt.get("token_budget")
+
+
+def test_profile_research_loads_bundled_skill(tmp_path) -> None:
+    class _Noop:
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            return ModelResponse(content="ok")
+
+    agent = create_deep_agent(
+        ModelSpec(provider="scripted", provider_impl=_Noop()),
+        workspace=tmp_path,
+        profile="research",
+        web_search=False,
+        url_fetch=False,
+        think_tool=False,
+        enable_task_tool=False,
+        use_llm_summarizer=False,
+        images=False,
+        modalities="text",
+    )
+    prompt = agent.build().instructions or ""
+    assert "Skill: research" in prompt or "deep research" in prompt.lower()
+    assert agent._require_tools == ["write_file:reports/", "register_source"]
+    assert getattr(agent, "_verifier", None) is not None
+
+
+def test_resolve_skills_name_and_direct_dir() -> None:
+    from loomable.skills import resolve_skills, bundled_skills_root
+    from loomable.kernel.skills import SkillLoader
+
+    paths = resolve_skills(["research"])
+    assert paths and paths[0].name == "research"
+    manifests = SkillLoader().discover(paths)
+    assert any(m.name == "research" for m in manifests)
+    # Catalog root also works
+    catalog = SkillLoader().discover([bundled_skills_root()])
+    assert any(m.name == "research" for m in catalog)
+
+
+@pytest.mark.asyncio
+async def test_workspace_delete_file(tmp_path) -> None:
+    from loomable.toolkits.workspace_tools import WorkspaceTools
+
+    ws = WorkspaceTools(root=tmp_path)
+    by_name = {t.name: t for t in ws.tools()}
+    await by_name["write_file"].invoke({"path": "notes/x.md", "content": "hi"})
+    listed = json.loads(str((await by_name["ls"].invoke({"path": "notes"})).content))
+    assert "x.md" in listed["entries"]
+    assert any(i.get("name") == "x.md" for i in listed["items"])
+    out = json.loads(str((await by_name["delete_file"].invoke({"path": "notes/x.md"})).content))
+    assert out["ok"] is True
+    listed2 = json.loads(str((await by_name["ls"].invoke({"path": "notes"})).content))
+    assert "x.md" not in listed2["entries"]

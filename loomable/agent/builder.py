@@ -2744,7 +2744,7 @@ class Agent:
         instructions: str | None = None,
         tools: "list[Tool | Toolkit] | None" = None,
         subagents: "list[Agent] | None" = None,
-        skills: list[Path] | None = None,
+        skills: list[Path] | list[str] | list[Path | str] | None = None,
         mcp_servers: list[Any] | None = None,
         capabilities: ModelCapabilities | str | list[str] | None = None,
         modalities: str | list[str] | None = None,
@@ -2841,6 +2841,7 @@ class Agent:
         self._tools = tools
         self._subagents = subagents
         self._skills = skills
+        self._skill_bodies: list[tuple[str, str]] = []
         self._mcp_servers = mcp_servers
         # High-level modality DX: modalities="text" / text_only=True preferred over
         # constructing ModelCapabilities with frozensets.
@@ -3447,6 +3448,13 @@ class Agent:
             if parts:
                 parts.append("")  # blank line separator
             parts.append(self._instructions)
+        # Progressive skills: inject loaded SKILL.md bodies into the prompt.
+        if self._skill_bodies:
+            if parts:
+                parts.append("")
+            for skill_name, body in self._skill_bodies:
+                title = skill_name or "skill"
+                parts.append(f"## Skill: {title}\n{body.strip()}")
         if not parts:
             return None
         return "\n".join(parts)
@@ -3566,16 +3574,26 @@ class Agent:
                     registry[item.name] = item
 
         # --- Skills: discover + load via the kernel SkillLoader (Req 4.1–4.4) ---
+        skill_bodies: list[tuple[str, str]] = []
         if self._skills:
+            from loomable.skills import resolve_skills
+
             loader = SkillLoader()
-            manifests = loader.discover(self._skills)
+            skill_roots = resolve_skills(self._skills)
+            manifests = loader.discover(skill_roots)
             for manifest in manifests:
                 try:
                     loaded_skill = loader.load(manifest)
+                    body = (getattr(loaded_skill, "body", None) or "").strip()
+                    if body:
+                        skill_bodies.append(
+                            (getattr(loaded_skill, "name", None) or manifest.name, body)
+                        )
                     for script_tool in loaded_skill.get_tools():
                         registry[script_tool.name] = script_tool
                 except SkillLoadError as err:
                     skill_errors.append(err)
+        self._skill_bodies = skill_bodies
 
         if self._retrievers:
             for retriever in self._retrievers:

@@ -1,45 +1,32 @@
 ---
 name: research
-description: Deep multimodal research workflow — search, fetch, cite, analyze images, write briefs.
+description: >
+  Topic-agnostic deep research — search, fetch, cite, verify, analyze images,
+  delegate in parallel, and deliver a Markdown brief under reports/. Use for
+  any subject (science, policy, product, incident, market, …).
 ---
 
-# Research deep agent skill
+# Research skill (any topic)
 
-Use this workflow for long-horizon research tasks.
+You are doing **deep research on whatever topic the user asked**. The domain
+changes; the loop does not.
+
+Prefer the packaged skill via ``create_deep_agent(..., profile="research")``
+or ``skills=["research"]`` — this example copy mirrors it for demos.
 
 ## Loop
 
 1. **Plan** — `write_todos` with concrete steps; keep one item `in_progress`.
-2. **Search** — `web_search` for 3–8 candidate sources.
-3. **Fetch** — `extract_text` / `fetch_url` on the best URLs. Large results may be
-   offloaded to `.offload/` — use `read_file` / `grep` on those paths.
-4. **Cite** — `register_source(url, title, summary, quote?)` for every source you rely on.
-5. **Images** — `discover_images` on a page, then `fetch_image` + `analyze_image`;
-   keep notes under `images/`.
-6. **Delegate** — use `task` for isolated sub-research; specialists share this workspace.
-7. **Deliver** — write `reports/<slug>.md` with findings + paste `format_bibliography`.
-8. **Close** — mark todos completed; store durable user facts via `memory` when available.
-
-## Report template
-
-```markdown
-# <Title>
-
-## Summary
-...
-
-## Findings
-...
-
-## Visual evidence
-...
-
-## Sources
-(from format_bibliography)
-```
+2. **Search** — `web_search` until you have 3–5 solid primary candidates.
+3. **Fetch** — `extract_text` / `fetch_url`. Large results → `.offload/` slices.
+4. **Cite** — `register_source` + `verify_source`; `register_claim` for key findings.
+5. **Images** — `discover_images` → `fetch_image` → `analyze_image` when useful.
+6. **Delegate** — `task` / `task_batch` for isolated sub-angles.
+7. **Compact** — `compact_conversation` when chat is heavy.
+8. **Deliver** — `reports/<slug>.md` + bibliography.
+9. **Close** — one todo update, then STOP.
 
 ## Quality bar
 
-- Prefer primary sources over SEO blogs.
-- Never invent URLs — only cite `register_source` entries.
-- If search fails, say so and use what you have.
+- Prefer primary sources. Never invent URLs.
+- Report under `reports/` is required.

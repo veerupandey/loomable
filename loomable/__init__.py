@@ -34,6 +34,7 @@ from loomable.memory import (
     WorkingMemory,
     open_session_store,
 )
+from loomable.skills import list_bundled_skills, resolve_skills
 from loomable.case import (
     Board,
     Case,
@@ -83,6 +84,8 @@ __all__ = [
     "spawn_specialist",
     "create_deep_agent",
     "create_research_agent",
+    "resolve_skills",
+    "list_bundled_skills",
     "Memory",
     "MemoryScope",
     "ConversationMemory",

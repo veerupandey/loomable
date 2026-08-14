@@ -33,13 +33,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from loomable.agent import ModelSpec, NoteStore, create_research_agent
+from loomable.agent import ModelSpec, NoteStore, create_deep_agent
 from loomable.kernel.long_term import LongTermStore
 from loomable.kernel.models import ModelRequest, ModelResponse, ToolCall
 from loomable.memory import ConversationMemory, Memory, UserMemory, open_session_store
 
 ROOT = Path(__file__).resolve().parent / ".workspace_research"
-SKILL = Path(__file__).resolve().parent / "skills" / "research"
 ROOT.mkdir(parents=True, exist_ok=True)
 
 TOPIC = os.environ.get(
@@ -261,12 +260,13 @@ async def main() -> None:
         model = ModelSpec(provider="scripted", provider_impl=_ScriptedResearchProvider())
         print("Scripted research demo (set DEEP_AGENT_LIVE=1 for real APIs)")
 
-    agent = create_research_agent(
+    agent = create_deep_agent(
         model,
+        profile="research",
         workspace=ROOT,
         session_id="research-demo",
         memory=memory,
-        skills=[SKILL] if SKILL.is_dir() else None,
+        skills=["research"],  # bundled topic-agnostic research skill
         memory_tool=True,
         web_search=live,
         url_fetch=live,
