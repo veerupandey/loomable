@@ -2843,7 +2843,6 @@ class Agent:
         capabilities: ModelCapabilities | str | list[str] | None = None,
         modalities: str | list[str] | None = None,
         text_only: bool = False,
-        multimodal: bool = False,
         token_budget: int = 8192,
         max_run_tokens: int | None = None,
         checkpoint_interval: int = 5,
@@ -2997,19 +2996,8 @@ class Agent:
             self._capabilities = capabilities_for(capabilities)
         else:
             self._capabilities = None
-        # multimodal=True is a deprecated no-op: media is allowed by default.
-        if multimodal:
-            import warnings
-
-            warnings.warn(
-                "Agent(multimodal=True) is deprecated and has no effect; "
-                "media input is enabled by default. Use modalities= or text_only= "
-                "to restrict capabilities.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
         self._token_budget = token_budget
-        # None → spend uses token_budget (legacy). Deep agents pass 0 for unbounded.
+        # None → spend uses token_budget. Deep agents pass 0 for unbounded.
         self._max_run_tokens = max_run_tokens
         self._checkpoint_interval = checkpoint_interval
         self._session_id = session_id
@@ -3047,20 +3035,35 @@ class Agent:
         self._context_manager = context_manager
         self._memory_bundle = None
         self._memory_auto_extract = False
-        # ``memory=`` accepts composable Memory OR legacy MemoryManager.
+        # ``memory=`` accepts :class:`~loomable.memory.Memory` from Memory.compose.
         from loomable.memory.compose import is_kernel_memory_manager, is_memory_bundle
 
         if is_memory_bundle(memory):
+            flat_conflict = [
+                name
+                for name, value in (
+                    ("session_store", session_store),
+                    ("memory_backend", memory_backend),
+                    ("note_store", note_store),
+                )
+                if value is not None
+            ]
+            if flat_conflict:
+                raise AgentConfigError(
+                    "memory="
+                    + f" already sets store layers; do not also pass {', '.join(flat_conflict)}. "
+                    "Put stores only inside Memory.compose(...)."
+                )
             bundle = memory.with_scopes(user_id=user_id, scopes=scopes)
             self._memory_bundle = bundle
             composed = bundle.to_agent_kwargs()
-            if session_store is None and "session_store" in composed:
+            if "session_store" in composed:
                 session_store = composed["session_store"]
-            if memory_backend is None and "memory_backend" in composed:
+            if "memory_backend" in composed:
                 memory_backend = composed["memory_backend"]
-            if note_store is None and "note_store" in composed:
+            if "note_store" in composed:
                 note_store = composed["note_store"]
-            if not memory_tool and composed.get("memory_tool"):
+            if composed.get("memory_tool"):
                 memory_tool = True
             if knowledge is None and "knowledge" in composed:
                 knowledge = composed["knowledge"]
@@ -3085,7 +3088,10 @@ class Agent:
             )
             self._memory = kernel_memory
         elif is_kernel_memory_manager(memory):
-            self._memory = memory
+            raise AgentConfigError(
+                "Agent(memory=...) expects Memory.compose(...); "
+                "kernel MemoryManager is internal."
+            )
         else:
             self._memory = kernel_memory or memory
             # Even without a Memory bundle, scopes+user_id can wrap an explicit note_store.

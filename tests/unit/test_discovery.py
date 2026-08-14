@@ -17,7 +17,6 @@ from loomable.agent.discovery import (
     ToolStub,
     make_discovery_tools,
     rank_bm25,
-    rank_match,
 )
 from loomable.kernel.models import ModelRequest, ModelResponse
 from loomable.kernel.tool_runtime import ToolRuntime
@@ -34,12 +33,12 @@ def _content(result) -> str:
     return str(result)
 
 
-def test_rank_match_prefers_exact_name() -> None:
-    assert rank_match("research", "research", "x") > rank_match(
-        "research", "web_research", "research stuff"
-    )
-    assert rank_match("pdf", "read_pdf", "extract pdf text") > 0
-    assert rank_match("zzzz", "alpha", "beta") == 0.0
+def test_rank_bm25_scores_relevant_docs() -> None:
+    exact = rank_bm25("research", "research", "web research tools")
+    related = rank_bm25("research", "web_research", "research stuff")
+    unrelated = rank_bm25("research", "alpha", "beta")
+    assert exact > related > unrelated
+    assert unrelated >= 0.0
 
 
 def test_search_and_load_skill(tmp_path: Path) -> None:
