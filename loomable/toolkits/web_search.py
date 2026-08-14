@@ -52,6 +52,8 @@ class WebSearchTools(Toolkit):
 
     async def _web_search(self, query: str, max_results: int = 5) -> str:
         """Search the web and return results with title, URL, and snippet."""
+        if not (query or "").strip():
+            return "Error: query is required"
         try:
             max_results = int(max_results)
         except (TypeError, ValueError):
@@ -102,12 +104,12 @@ class WebSearchTools(Toolkit):
             # Fallback 1: DuckDuckGo Instant Answer API (no key)
             ia = await self._search_duckduckgo_instant(candidate, max_results)
             if ia:
-                return ia
+                return "[fallback:duckduckgo-instant]\n" + ia
 
             # Fallback 2: Wikipedia OpenSearch (stable for research demos)
             wiki = await self._search_wikipedia(candidate, max_results)
             if wiki:
-                return wiki
+                return "[fallback:wikipedia]\n" + wiki
 
         detail = "; ".join(errors[-6:]) if errors else "unknown"
         return (
@@ -238,7 +240,7 @@ class WebSearchTools(Toolkit):
             )
 
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=30) as client:
                 response = await client.post(
                     "https://api.tavily.com/search",
                     json={

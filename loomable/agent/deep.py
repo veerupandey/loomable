@@ -4,22 +4,19 @@ Four pillars (same idea as langchain-ai/deepagents), plus research wins:
 
 1. **Planning** — ``TodoTools`` (``write_todos`` / ``read_todos`` / ``update_todo``)
 2. **Workspace FS** — ``WorkspaceTools`` (ls/read/write/edit/glob/grep) to offload context
-3. **Subagents** — ``task`` tool (+ optional named ``subagents=`` / Case spawn)
+3. **Subagents** — ``task`` / ``task_batch`` (+ named ``specialists`` / Case spawn)
 4. **Context engineering** — think/plan tools, memory, compaction, large-tool offload
 
-Research defaults also bundle web search, URL fetch, image analyze, and citations.
-
-Usage::
-
-    from loomable.agent.deep import create_deep_agent, create_research_agent
-
-    agent = create_research_agent(model=provider, workspace=\"./.deep_workspace\")
-    result = await agent.arun(\"Research X and write a brief to /reports/x.md\")
+Research defaults also bundle web search, URL fetch, image analyze, citations,
+parallel fan-out, verification accept gate, and optional code exec.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -27,12 +24,17 @@ from loomable.agent.builder import Agent
 from loomable.agent.delegation import spawn_specialist
 from loomable.agent.offload import make_workspace_offload_hook
 from loomable.agent.tools import FunctionTool
+from loomable.flow.loop import VerdictResult
+from loomable.providers.resilient import RetryPolicy
 
 __all__ = [
     "DEEP_AGENT_INSTRUCTIONS",
+    "SpecialistSpec",
     "create_deep_agent",
     "create_research_agent",
+    "make_research_accept",
     "make_task_tool",
+    "make_task_tools",
 ]
 
 logger = logging.getLogger("loomable.agent.deep")
@@ -49,27 +51,261 @@ Operating rules:
 3. Use read_file / grep / glob to pull back only the slices you need.
    For large/offloaded files use read_file(path, offset=N, limit=80) or grep —
    never reload an entire .offload dump into chat.
-4. Use web_search to find sources (at most 2 searches), then fetch_url /
-   extract_text for full pages. Large tool results may be offloaded to .offload/
-   — read those files in slices. Do not keep searching once you have usable URLs.
-5. Register important sources with register_source; end deliverables with
-   format_bibliography (or paste its output into the report).
+4. Use web_search until you have 3–5 solid primary sources (or the budget is
+   tight), then fetch_url / extract_text for full pages. Large tool results may
+   be offloaded to .offload/ — read those files in slices. Prefer primary docs
+   over search-fallback snippets.
+5. Register important sources with register_source; call verify_source on key
+   URLs; link important findings with register_claim(claim, source_id, quote).
+   End deliverables with format_bibliography (or paste its output into the report).
 6. For visual evidence: discover_images on a source page, then fetch_image +
    analyze_image; store notes under images/.
-7. Use the task tool to spawn a specialist for isolated research or drafting
+7. Use task / task_batch to spawn specialists for isolated research or drafting
    when that work would bloat your own context. Pass a crisp task description.
-   Specialists share this workspace — they can write files you can read.
+   Prefer task_batch when researching multiple angles in parallel.
+   Use subagent_type to pick a named specialist when available; otherwise
+   general-purpose. Specialists share this workspace — they can write files
+   you can read.
 8. Use think for brief private reasoning; use memory when durable facts should
    survive beyond this session (if the memory tool is available).
-9. Finish by writing the user-facing deliverable with write_file (e.g. reports/…),
-   then mark todos completed in at most one update_todo call and STOP. Do not keep
-   updating todos after the report exists — emit your final answer summarizing the
-   deliverable path. Do not stop after format_bibliography alone — the Markdown
-   report file is required.
+9. Finish by writing the user-facing deliverable under reports/ with write_file,
+   then mark todos completed in at most one update_todo call and STOP. Do not
+   keep updating todos after the report exists — emit your final answer
+   summarizing the deliverable path. Do not stop after format_bibliography alone —
+   the Markdown report file under reports/ is required.
 
-Quality bar: be concrete, cite sources from tools when available, and verify
-the deliverable against the original goal before stopping.
+Quality bar: be concrete, cite verified sources, and verify the deliverable
+against the original goal before stopping.
 """
+
+
+@dataclass
+class SpecialistSpec:
+    """Named specialist available via ``task(subagent_type=...)``."""
+
+    name: str
+    description: str = ""
+    instructions: str = ""
+    role: str = ""
+    tools: list[Any] | None = None
+    model: Any = None
+    modalities: str | None = None
+    max_tool_iterations: int | None = None
+
+
+def make_research_accept(
+    workspace: str | Path,
+    *,
+    min_sources: int = 1,
+    report_dir: str = "reports",
+) -> Any:
+    """Verifier: report under ``reports/`` + at least ``min_sources`` citations."""
+
+    root = Path(workspace)
+    report_dir = (report_dir or "reports").strip().strip("/") or "reports"
+    min_sources = max(0, int(min_sources))
+
+    def _check(output: Any, ctx: Any) -> VerdictResult:  # noqa: ANN401, ARG001
+        reports = root / report_dir
+        has_report = False
+        if reports.is_dir():
+            has_report = any(p.is_file() for p in reports.rglob("*"))
+        sources: list[Any] = []
+        src_path = root / "sources.json"
+        if src_path.is_file():
+            try:
+                data = json.loads(src_path.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    sources = data
+                elif isinstance(data, dict) and isinstance(data.get("sources"), list):
+                    sources = data["sources"]
+            except (OSError, json.JSONDecodeError, TypeError):
+                sources = []
+        missing: list[str] = []
+        if not has_report:
+            missing.append(f"write a Markdown report under {report_dir}/")
+        if len(sources) < min_sources:
+            missing.append(f"register at least {min_sources} source(s) via register_source")
+        if missing:
+            return VerdictResult(
+                ok=False,
+                detail="Research incomplete: " + "; ".join(missing),
+            )
+        return VerdictResult(ok=True)
+
+    return _check
+
+
+def make_task_tools(
+    *,
+    model: Any,
+    tools: list[Any] | None = None,
+    modalities: str | None = "text",
+    default_role: str = "Specialist",
+    max_tool_iterations: int = 20,
+    token_budget: int = 64_000,
+    max_run_tokens: int = 0,
+    specialists: dict[str, SpecialistSpec] | None = None,
+    skills: list[Any] | None = None,
+    tool_hooks: list[Any] | None = None,
+    memory: Any | None = None,
+    note_store: Any | None = None,
+    memory_tool: bool = False,
+    think_tool: bool = False,
+    resilience: Any | None = None,
+    tool_timeout: float | None = None,
+    tool_concurrency: int | None = None,
+    enable_batch: bool = True,
+) -> list[FunctionTool]:
+    """Build ``task`` (+ optional ``task_batch``) tools for deep agents."""
+
+    registry: dict[str, SpecialistSpec | None] = {"general-purpose": None}
+    for key, spec in (specialists or {}).items():
+        slug = (key or "").strip().lower().replace(" ", "-")
+        if not slug:
+            continue
+        registry[slug] = spec
+
+    roster = ", ".join(sorted(registry.keys()))
+
+    async def _run_one(
+        description: str,
+        *,
+        role: str = "",
+        subagent_type: str = "general-purpose",
+    ) -> str:
+        key = (subagent_type or "general-purpose").strip().lower().replace(" ", "-")
+        if key not in registry:
+            return (
+                f"Unknown subagent_type={subagent_type!r}. "
+                f"Available: {roster}"
+            )
+        spec = registry[key]
+        use_model = model
+        use_tools = list(tools or [])
+        use_modalities = modalities
+        use_iters = max_tool_iterations
+        instructions = None
+        use_role = (role or default_role).strip() or default_role
+        if spec is not None:
+            use_model = spec.model or model
+            if spec.tools is not None:
+                use_tools = list(spec.tools)
+            if spec.modalities is not None:
+                use_modalities = spec.modalities
+            if spec.max_tool_iterations is not None:
+                use_iters = spec.max_tool_iterations
+            if spec.instructions:
+                instructions = spec.instructions
+            if not role:
+                use_role = (spec.role or spec.name or default_role).strip() or default_role
+            if spec.description and instructions is None:
+                instructions = (
+                    f"You are {use_role}. Specialty: {spec.description}. "
+                    "Be concise and factual. Write artifacts into the shared workspace."
+                )
+        return await spawn_specialist(
+            model=use_model,
+            role=use_role,
+            task=description,
+            instructions=instructions,
+            tools=use_tools,
+            modalities=use_modalities,
+            skills=skills,
+            tool_hooks=tool_hooks,
+            memory=memory,
+            note_store=note_store,
+            memory_tool=memory_tool,
+            think_tool=think_tool,
+            resilience=resilience,
+            tool_timeout=tool_timeout,
+            tool_concurrency=tool_concurrency,
+            max_tool_iterations=use_iters,
+            token_budget=token_budget,
+            max_run_tokens=max_run_tokens,
+        )
+
+    async def task(
+        description: str,
+        role: str = "",
+        subagent_type: str = "general-purpose",
+    ) -> str:
+        """Delegate an isolated sub-task to a fresh specialist agent.
+
+        Use for research, drafting, or analysis that should not pollute the
+        parent context. ``description`` must be self-contained. Optional
+        ``role`` names the specialist. ``subagent_type`` selects a named
+        specialist from the registry (default: general-purpose).
+        """
+        return await _run_one(
+            description, role=role, subagent_type=subagent_type
+        )
+
+    out: list[FunctionTool] = [
+        FunctionTool(
+            task,
+            name="task",
+            description=(
+                "Spawn a specialist for isolated work. "
+                f"subagent_type one of: {roster}."
+            ),
+            idempotent=False,
+        )
+    ]
+
+    if enable_batch:
+
+        async def task_batch(tasks_json: str) -> str:
+            """Run multiple specialist tasks in parallel and return labeled results.
+
+            ``tasks_json`` is a JSON list of objects with keys:
+            ``description`` (required), ``role``, ``subagent_type``.
+            """
+            try:
+                items = json.loads(tasks_json or "[]")
+            except json.JSONDecodeError as exc:
+                return f"Error: invalid tasks_json: {exc}"
+            if not isinstance(items, list) or not items:
+                return "Error: tasks_json must be a non-empty JSON list"
+            if len(items) > 8:
+                return "Error: task_batch supports at most 8 tasks"
+
+            async def _one(idx: int, item: Any) -> dict[str, Any]:
+                if not isinstance(item, dict):
+                    return {"index": idx, "ok": False, "error": "item must be object"}
+                desc = str(item.get("description") or "").strip()
+                if not desc:
+                    return {"index": idx, "ok": False, "error": "description required"}
+                try:
+                    text = await _run_one(
+                        desc,
+                        role=str(item.get("role") or ""),
+                        subagent_type=str(
+                            item.get("subagent_type") or "general-purpose"
+                        ),
+                    )
+                    return {"index": idx, "ok": True, "text": text}
+                except Exception as exc:  # noqa: BLE001
+                    return {"index": idx, "ok": False, "error": str(exc)}
+
+            results = await asyncio.gather(
+                *[_one(i, item) for i, item in enumerate(items)]
+            )
+            return json.dumps({"results": list(results)}, ensure_ascii=False)
+
+        out.append(
+            FunctionTool(
+                task_batch,
+                name="task_batch",
+                description=(
+                    "Fan out multiple specialist tasks in parallel. "
+                    "Pass JSON list of {description, role?, subagent_type?}."
+                ),
+                idempotent=False,
+            )
+        )
+
+    return out
 
 
 def make_task_tool(
@@ -81,28 +317,21 @@ def make_task_tool(
     max_tool_iterations: int = 20,
     token_budget: int = 64_000,
     max_run_tokens: int = 0,
+    **kwargs: Any,
 ) -> FunctionTool:
     """LangGraph-style ``task`` tool — spawn an ephemeral specialist and return text."""
-
-    async def task(description: str, role: str = "") -> str:
-        """Delegate an isolated sub-task to a fresh specialist agent.
-
-        Use for research, drafting, or analysis that should not pollute the
-        parent context. ``description`` must be self-contained. Optional
-        ``role`` names the specialist (e.g. \"Web Researcher\").
-        """
-        return await spawn_specialist(
-            model=model,
-            role=(role or default_role).strip() or default_role,
-            task=description,
-            tools=list(tools or []),
-            modalities=modalities,
-            max_tool_iterations=max_tool_iterations,
-            token_budget=token_budget,
-            max_run_tokens=max_run_tokens,
-        )
-
-    return FunctionTool(task, name="task", idempotent=False)
+    tools_list = make_task_tools(
+        model=model,
+        tools=tools,
+        modalities=modalities,
+        default_role=default_role,
+        max_tool_iterations=max_tool_iterations,
+        token_budget=token_budget,
+        max_run_tokens=max_run_tokens,
+        enable_batch=False,
+        **kwargs,
+    )
+    return tools_list[0]
 
 
 def _modalities_include_image(modalities: str | None) -> bool:
@@ -123,6 +352,7 @@ def create_deep_agent(
     instructions: str | None = None,
     workspace: str | Path = "./.deep_workspace",
     subagents: list[Any] | None = None,
+    specialists: dict[str, SpecialistSpec] | dict[str, Any] | None = None,
     session_id: str | None = None,
     session_store: Any | None = None,
     memory_backend: Any | None = None,
@@ -143,11 +373,14 @@ def create_deep_agent(
     url_max_length: int = 8_000,
     citations: bool = True,
     images: bool | None = None,
+    documents: bool = False,
+    code_exec: bool = False,
     offload_large_tools: bool = True,
     offload_threshold: int = 12_000,
     think_tool: bool = True,
     plan_tool: bool = False,
     enable_task_tool: bool = True,
+    enable_task_batch: bool = True,
     task_tools: Sequence[Any] | None = None,
     mode: str | None = None,
     dispatch: str = "reuse",
@@ -163,46 +396,18 @@ def create_deep_agent(
     loop_repeat_threshold: int = 6,
     token_budget: int = 128_000,
     max_run_tokens: int = 0,
+    tool_concurrency: int = 4,
+    tool_timeout: float = 60.0,
+    resilience: Any | None = ...,  # type: ignore[assignment]
+    max_delegations: int | None = 12,
+    max_depth: int = 4,
     name: str = "deep-agent",
     goal: str = "Complete hard, long-horizon tasks with planning and delegation",
     modalities: str = "text+image",
     debug: bool = False,
     **agent_kwargs: Any,
 ) -> Agent:
-    """Build a deep agent harness on top of :class:`~loomable.agent.builder.Agent`.
-
-    Parameters
-    ----------
-    model:
-        Provider / ModelSpec / ``\"provider:model\"`` string.
-    tools:
-        Extra tools/toolkits merged after the deep defaults.
-    workspace:
-        Directory for virtual FS + persisted todos (created if missing).
-    web_search / search_provider / search_api_key:
-        Bundle web search (DuckDuckGo default, or Tavily with API key).
-    url_fetch / url_max_length:
-        Bundle URL fetch/extract with a safe length cap (marked truncation).
-    citations:
-        Include :class:`~loomable.toolkits.citation_tools.CitationTools`.
-    images:
-        Include :class:`~loomable.toolkits.image_tools.ImageTools` when modalities
-        include image (default: auto).
-    offload_large_tools:
-        Post-hook that saves oversized tool results under ``.offload/``.
-    require_tools:
-        Tools that must succeed before the run may finish (e.g. ``write_file``).
-    token_budget:
-        Context window estimate for compaction / bounding (default 128k).
-    max_run_tokens:
-        Cumulative spend stop. ``0`` = unbounded (default for deep agents).
-    enable_task_tool:
-        Register the general-purpose ``task`` subagent tool (shares workspace tools).
-    mode:
-        Pass ``\"case\"`` for Case plan→dispatch→synthesize→accept spine.
-    max_tool_iterations:
-        Deep work needs a higher ceiling than the Agent default.
-    """
+    """Build a deep agent harness on top of :class:`~loomable.agent.builder.Agent`."""
     from loomable.toolkits.citation_tools import CitationTools
     from loomable.toolkits.todo_tools import TodoTools
     from loomable.toolkits.workspace_tools import WorkspaceTools
@@ -261,35 +466,49 @@ def create_deep_agent(
             missing.append(f"images ({exc})")
             logger.warning("create_deep_agent: ImageTools unavailable: %s", exc)
 
+    if documents:
+        try:
+            from loomable.toolkits.pdf_tools import PDFTools
+
+            pdf_kit = PDFTools()
+            bundled.append(pdf_kit)
+            shared_for_task.append(PDFTools())
+        except Exception as exc:  # noqa: BLE001
+            missing.append(f"documents ({exc})")
+            logger.warning("create_deep_agent: PDFTools unavailable: %s", exc)
+
+    hitl = list(require_confirmation) if require_confirmation else []
+    if code_exec:
+        try:
+            from loomable.toolkits.python_tools import PythonTools
+
+            py_kit = PythonTools(working_dir=str(root), timeout=30)
+            bundled.append(py_kit)
+            shared_for_task.append(PythonTools(working_dir=str(root), timeout=30))
+            for name_ in ("run_python", "run_python_file"):
+                if name_ not in hitl:
+                    hitl.append(name_)
+        except Exception as exc:  # noqa: BLE001
+            missing.append(f"code_exec ({exc})")
+            logger.warning("create_deep_agent: PythonTools unavailable: %s", exc)
+
     if task_tools is None:
         task_tools = list(shared_for_task)
 
-    if enable_task_tool:
-        bundled.append(
-            make_task_tool(
-                model=model,
-                tools=list(task_tools) if task_tools is not None else None,
-                modalities=modalities,
-                max_tool_iterations=min(20, max_tool_iterations),
-                token_budget=min(token_budget, 64_000),
-                max_run_tokens=max_run_tokens,
-            )
-        )
+    # Normalize specialist registry
+    specialist_registry: dict[str, SpecialistSpec] = {}
+    for key, value in (specialists or {}).items():
+        if isinstance(value, SpecialistSpec):
+            specialist_registry[key] = value
+        elif isinstance(value, dict):
+            specialist_registry[key] = SpecialistSpec(name=key, **value)
+        else:
+            logger.warning("create_deep_agent: ignoring specialist %r", key)
 
-    if tools:
-        bundled.extend(list(tools))
+    if resilience is ...:
+        resilience = RetryPolicy(max_attempts=3, per_call_timeout=60.0)
 
-    prompt = DEEP_AGENT_INSTRUCTIONS
-    if instructions:
-        prompt = f"{prompt}\n\nAdditional instructions:\n{instructions.strip()}"
-    if missing:
-        prompt = (
-            f"{prompt}\n\nRuntime note: some optional toolkits failed to load: "
-            + ", ".join(missing)
-            + "."
-        )
-
-    # Merge offload post-hook with any caller tool_hooks.
+    # Merge offload post-hook with any caller tool_hooks (needed before task tools).
     existing_hooks = list(agent_kwargs.pop("tool_hooks", None) or [])
     if offload_large_tools:
         existing_hooks.append(
@@ -298,6 +517,51 @@ def create_deep_agent(
                 threshold=offload_threshold,
                 store=workspace_kit.store,
             )
+        )
+
+    if enable_task_tool:
+        bundled.extend(
+            make_task_tools(
+                model=model,
+                tools=list(task_tools) if task_tools is not None else None,
+                modalities=modalities,
+                max_tool_iterations=min(20, max_tool_iterations),
+                token_budget=min(token_budget, 64_000),
+                max_run_tokens=max_run_tokens,
+                specialists=specialist_registry or None,
+                skills=list(skills) if skills else None,
+                tool_hooks=list(existing_hooks) if existing_hooks else None,
+                memory=memory,
+                note_store=note_store,
+                memory_tool=memory_tool,
+                think_tool=False,
+                resilience=resilience,
+                tool_timeout=tool_timeout,
+                tool_concurrency=min(tool_concurrency, 4) if tool_concurrency else None,
+                enable_batch=enable_task_batch,
+            )
+        )
+
+    if tools:
+        bundled.extend(list(tools))
+
+    prompt = DEEP_AGENT_INSTRUCTIONS
+    if specialist_registry:
+        lines = [
+            f"- {k}: {v.description or v.role or v.name}"
+            for k, v in specialist_registry.items()
+        ]
+        prompt = (
+            f"{prompt}\n\nNamed specialists (pass subagent_type):\n"
+            + "\n".join(lines)
+        )
+    if instructions:
+        prompt = f"{prompt}\n\nAdditional instructions:\n{instructions.strip()}"
+    if missing:
+        prompt = (
+            f"{prompt}\n\nRuntime note: some optional toolkits failed to load: "
+            + ", ".join(missing)
+            + "."
         )
 
     kwargs: dict[str, Any] = dict(
@@ -321,7 +585,7 @@ def create_deep_agent(
         embedder=embedder,
         think_tool=think_tool,
         plan_tool=plan_tool,
-        require_confirmation=require_confirmation,
+        require_confirmation=hitl or None,
         require_tools=require_tools,
         tool_hooks=existing_hooks or None,
         max_tool_iterations=max_tool_iterations,
@@ -331,6 +595,11 @@ def create_deep_agent(
         loop_repeat_threshold=loop_repeat_threshold,
         token_budget=token_budget,
         max_run_tokens=max_run_tokens,
+        tool_concurrency=tool_concurrency,
+        tool_timeout=tool_timeout,
+        resilience=resilience,
+        max_delegations=max_delegations,
+        max_depth=max_depth,
         modalities=modalities,
         debug=debug,
         mode=mode,
@@ -361,7 +630,12 @@ def create_research_agent(
     """
     require_tools = kwargs.pop("require_tools", None)
     if require_tools is None:
-        require_tools = ["write_file"]
+        require_tools = ["write_file:reports/", "register_source"]
+    accept = kwargs.pop("accept", ...)
+    if accept is ...:
+        accept = make_research_accept(workspace, min_sources=1)
+    retry_on_failure = kwargs.pop("retry_on_failure", True)
+    max_verify_retries = kwargs.pop("max_verify_retries", 1)
     return create_deep_agent(
         model,
         workspace=workspace,
@@ -380,6 +654,9 @@ def create_research_agent(
             "Research topics thoroughly: search, fetch, cite, analyze images, deliver briefs",
         ),
         require_tools=require_tools,
+        accept=accept,
+        retry_on_failure=retry_on_failure,
+        max_verify_retries=max_verify_retries,
         max_run_tokens=kwargs.pop("max_run_tokens", 0),
         **kwargs,
     )

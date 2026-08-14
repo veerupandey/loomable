@@ -1,0 +1,230 @@
+"""Competitive deep-research harness gates (vs deepagents / Agno / CrewAI)."""
+
+from __future__ import annotations
+
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from loomable.agent import ModelSpec
+from loomable.agent.deep import (
+    SpecialistSpec,
+    create_deep_agent,
+    create_research_agent,
+    make_research_accept,
+    make_task_tools,
+)
+from loomable.agent.builder import _path_constraint_met
+from loomable.kernel.models import ModelRequest, ModelResponse, ToolCall
+from loomable.toolkits.citation_tools import CitationTools
+from loomable.toolkits.image_tools import ImageTools
+from loomable.toolkits.net_safety import is_blocked_host, validate_http_url
+from loomable.toolkits.url_tools import URLTools
+
+
+def test_path_constraint_directory_prefix() -> None:
+    assert _path_constraint_met("reports/brief.md", "reports/")
+    assert _path_constraint_met("reports/x.md", "reports")
+    assert not _path_constraint_met("notes/brief.md", "reports/")
+    assert _path_constraint_met("output/brief.md", "output/brief.md")
+    assert not _path_constraint_met("myoutput/brief.md", "output/brief.md")
+
+
+def test_ssrf_blocks_private_and_fail_closed() -> None:
+    assert is_blocked_host("127.0.0.1")
+    assert is_blocked_host("localhost")
+    assert is_blocked_host("10.0.0.5")
+    assert is_blocked_host("169.254.169.254")
+    assert validate_http_url("http://127.0.0.1/secret") is not None
+    assert validate_http_url("file:///etc/passwd") is not None
+    assert validate_http_url("https://example.com/ok") is None
+
+
+@pytest.mark.asyncio
+async def test_url_tools_blocks_localhost() -> None:
+    tools = URLTools()
+    out = await tools._fetch_url("http://127.0.0.1/")
+    assert "blocked" in out.lower() or "ssrf" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_url_tools_blocks_redirect_to_private() -> None:
+    tools = URLTools()
+    redirect = MagicMock()
+    redirect.status_code = 302
+    redirect.is_redirect = True
+    redirect.headers = {"location": "http://127.0.0.1/admin"}
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=redirect)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        out = await tools._fetch_url("https://example.com/go")
+    assert "blocked" in out.lower() or "ssrf" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_image_tools_ssrf_guard(tmp_path) -> None:
+    tools = ImageTools(workspace=tmp_path)
+    out = await tools._fetch_image("http://127.0.0.1/x.png")
+    assert "blocked" in out.lower() or "ssrf" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_citation_rejects_bad_scheme_and_verify(tmp_path) -> None:
+    kit = CitationTools(workspace=tmp_path)
+    by_name = {t.name: t for t in kit.tools()}
+    bad = await by_name["register_source"].invoke({"url": "javascript:alert(1)"})
+    assert bad.error or "Error" in str(bad.content)
+    good = await by_name["register_source"].invoke(
+        {"url": "https://example.com/paper", "title": "Paper"}
+    )
+    assert "S1" in str(good.content)
+    claim = await by_name["register_claim"].invoke(
+        {"claim": "X is true", "source_id": "S1", "quote": "because"}
+    )
+    assert "C1" in str(claim.content)
+
+
+@pytest.mark.asyncio
+async def test_task_batch_parallel(tmp_path) -> None:
+    class _Echo:
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            # Echo last user text
+            last = ""
+            for m in request.messages:
+                if isinstance(m, dict) and m.get("role") == "user":
+                    content = m.get("content")
+                    if isinstance(content, list):
+                        last = " ".join(
+                            str(p.get("text", "")) for p in content if isinstance(p, dict)
+                        )
+                    else:
+                        last = str(content or "")
+            return ModelResponse(content=f"done:{last[:40]}")
+
+    tools = make_task_tools(
+        model=ModelSpec(provider="scripted", provider_impl=_Echo()),
+        tools=[],
+        modalities="text",
+        enable_batch=True,
+        max_tool_iterations=2,
+    )
+    batch = next(t for t in tools if t.name == "task_batch")
+    out = await batch.invoke(
+        {
+            "tasks_json": json.dumps(
+                [
+                    {"description": "angle-A", "role": "A"},
+                    {"description": "angle-B", "role": "B"},
+                ]
+            )
+        }
+    )
+    payload = json.loads(str(out.content))
+    assert len(payload["results"]) == 2
+    assert all(r.get("ok") for r in payload["results"])
+
+
+@pytest.mark.asyncio
+async def test_named_specialist_subagent_type(tmp_path) -> None:
+    class _Echo:
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            return ModelResponse(content="specialist-ok")
+
+    tools = make_task_tools(
+        model=ModelSpec(provider="scripted", provider_impl=_Echo()),
+        tools=[],
+        modalities="text",
+        specialists={
+            "web-researcher": SpecialistSpec(
+                name="web-researcher",
+                description="Finds sources",
+                instructions="You are a web researcher.",
+            )
+        },
+        enable_batch=False,
+        max_tool_iterations=2,
+    )
+    task = tools[0]
+    out = await task.invoke(
+        {
+            "description": "Find three sources",
+            "subagent_type": "web-researcher",
+        }
+    )
+    assert "specialist-ok" in str(out.content)
+    bad = await task.invoke(
+        {"description": "x", "subagent_type": "nope"}
+    )
+    assert "Unknown subagent_type" in str(bad.content)
+
+
+def test_research_accept_gate(tmp_path) -> None:
+    accept = make_research_accept(tmp_path, min_sources=1)
+    from loomable.content import AgentOutput
+    from loomable.content.parts import MediaPart, Modality
+    from loomable.agent.context import RunContext
+
+    empty = AgentOutput(
+        parts=[MediaPart(modality=Modality.TEXT, media_type="text/plain", data=b"hi")]
+    )
+    v1 = accept(empty, RunContext())
+    assert v1.ok is False
+
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "brief.md").write_text("# ok\n", encoding="utf-8")
+    (tmp_path / "sources.json").write_text(
+        json.dumps([{"id": "S1", "url": "https://example.com"}]),
+        encoding="utf-8",
+    )
+    v2 = accept(empty, RunContext())
+    assert v2.ok is True
+
+
+def test_create_research_agent_defaults(tmp_path) -> None:
+    class _Noop:
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            return ModelResponse(content="ok")
+
+    agent = create_research_agent(
+        ModelSpec(provider="scripted", provider_impl=_Noop()),
+        workspace=tmp_path,
+        web_search=False,
+        url_fetch=False,
+        think_tool=False,
+        enable_task_tool=False,
+        use_llm_summarizer=False,
+    )
+    assert agent._require_tools == ["write_file:reports/", "register_source"]
+    assert getattr(agent, "_verifier", None) is not None
+    names = set(agent.build().tool_runtime._tools.keys())
+    assert "verify_source" in names
+    assert "register_claim" in names
+
+
+@pytest.mark.asyncio
+async def test_code_exec_opt_in(tmp_path) -> None:
+    class _Noop:
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            return ModelResponse(content="ok")
+
+    agent = create_deep_agent(
+        ModelSpec(provider="scripted", provider_impl=_Noop()),
+        workspace=tmp_path,
+        web_search=False,
+        url_fetch=False,
+        citations=False,
+        images=False,
+        enable_task_tool=False,
+        think_tool=False,
+        code_exec=True,
+        use_llm_summarizer=False,
+        modalities="text",
+    )
+    names = set(agent.build().tool_runtime._tools.keys())
+    assert "run_python" in names
+    assert "run_python_file" in names

@@ -6,42 +6,12 @@ BeautifulSoup for HTML parsing. Requires: pip install loomable[url]
 
 from __future__ import annotations
 
-import ipaddress
-import socket
-from urllib.parse import urlparse
-
 from loomable.agent.tools import FunctionTool
 from loomable.toolkits._base import Toolkit
+from loomable.toolkits.net_safety import validate_http_url, validate_redirect_target
 
 _DEFAULT_UA = "loomable-research-agent/0.1 (+https://github.com/veerupandey/loomable)"
-
-
-def _is_blocked_host(hostname: str) -> bool:
-    """Best-effort SSRF guard for localhost / private / link-local targets."""
-    host = (hostname or "").strip().lower().rstrip(".")
-    if not host:
-        return True
-    if host in {"localhost", "metadata.google.internal"} or host.endswith(".localhost"):
-        return True
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except socket.gaierror:
-        return False
-    for info in infos:
-        ip_str = info[4][0]
-        try:
-            ip = ipaddress.ip_address(ip_str)
-        except ValueError:
-            continue
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or ip.is_multicast
-        ):
-            return True
-    return False
+_MAX_REDIRECTS = 8
 
 
 def _truncate(text: str, max_length: int | None) -> str:
@@ -60,15 +30,8 @@ class URLTools(Toolkit):
 
     Fetches web pages asynchronously via httpx and extracts clean readable
     text using BeautifulSoup. Supports configurable timeout and max_length
-    truncation.
-
-    Usage::
-
-        from loomable.toolkits import URLTools
-
-        tools = URLTools(timeout=30, max_length=5000)
-        # Or with defaults (30s timeout, no length limit):
-        tools = URLTools()
+    truncation. Private/loopback hosts are blocked (SSRF); redirects are
+    re-validated hop-by-hop.
     """
 
     def __init__(
@@ -102,69 +65,73 @@ class URLTools(Toolkit):
         ]
 
     def _validate_url(self, url: str) -> str | None:
-        raw = (url or "").strip()
-        if not raw:
-            return "Error: url is required"
-        parsed = urlparse(raw)
-        if parsed.scheme not in {"http", "https"}:
-            return f"Error: unsupported URL scheme: {parsed.scheme or '(none)'}"
-        if self._block_private_hosts and _is_blocked_host(parsed.hostname or ""):
-            return f"Error: blocked host (SSRF guard): {parsed.hostname}"
-        return None
+        return validate_http_url(url, block_private_hosts=self._block_private_hosts)
+
+    async def _get(self, url: str):
+        """GET with hop-by-hop SSRF checks on redirects. Returns (error, response)."""
+        import httpx
+
+        err = self._validate_url(url)
+        if err:
+            return err, None
+        current = url
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._timeout,
+                follow_redirects=False,
+                headers={"User-Agent": self._user_agent},
+            ) as client:
+                for _ in range(_MAX_REDIRECTS):
+                    err = self._validate_url(current)
+                    if err:
+                        return err, None
+                    response = await client.get(current)
+                    if response.status_code in {301, 302, 303, 307, 308}:
+                        loc = (response.headers or {}).get("location", "")
+                        if not loc:
+                            return (
+                                f"Error: HTTP {response.status_code} for URL: {url}",
+                                None,
+                            )
+                        hop_err, next_url = validate_redirect_target(
+                            current,
+                            loc,
+                            block_private_hosts=self._block_private_hosts,
+                        )
+                        if hop_err:
+                            return hop_err, None
+                        current = next_url or current
+                        continue
+                    return None, response
+                return "Error: too many redirects", None
+        except httpx.TimeoutException:
+            return f"Error: Request timed out after {self._timeout} seconds: {url}", None
+        except httpx.HTTPError as exc:
+            return f"Error: Request failed: {exc}", None
+        except Exception as exc:  # noqa: BLE001
+            return f"Error: Failed to fetch URL: {exc}", None
 
     async def _fetch_url(self, url: str) -> str:
         """Fetch raw HTML content from a URL."""
-        import httpx
-
-        err = self._validate_url(url)
+        err, response = await self._get(url)
         if err:
             return err
-        try:
-            async with httpx.AsyncClient(
-                timeout=self._timeout,
-                follow_redirects=True,
-                headers={"User-Agent": self._user_agent},
-            ) as client:
-                response = await client.get(url)
-                if response.status_code < 200 or response.status_code >= 300:
-                    return (
-                        f"Error: HTTP {response.status_code} for URL: {url}"
-                    )
-                return _truncate(response.text, self._max_length)
-        except httpx.TimeoutException:
-            return f"Error: Request timed out after {self._timeout} seconds: {url}"
-        except httpx.HTTPError as exc:
-            return f"Error: Request failed: {exc}"
-        except Exception as exc:
-            return f"Error: Failed to fetch URL: {exc}"
+        assert response is not None
+        if response.status_code < 200 or response.status_code >= 300:
+            return f"Error: HTTP {response.status_code} for URL: {url}"
+        return _truncate(response.text, self._max_length)
 
     async def _extract_text(self, url: str) -> str:
         """Fetch a URL and return clean readable text (HTML tags stripped)."""
-        import httpx
         from bs4 import BeautifulSoup
 
-        err = self._validate_url(url)
+        err, response = await self._get(url)
         if err:
             return err
-        try:
-            async with httpx.AsyncClient(
-                timeout=self._timeout,
-                follow_redirects=True,
-                headers={"User-Agent": self._user_agent},
-            ) as client:
-                response = await client.get(url)
-                if response.status_code < 200 or response.status_code >= 300:
-                    return (
-                        f"Error: HTTP {response.status_code} for URL: {url}"
-                    )
-                html = response.text
-        except httpx.TimeoutException:
-            return f"Error: Request timed out after {self._timeout} seconds: {url}"
-        except httpx.HTTPError as exc:
-            return f"Error: Request failed: {exc}"
-        except Exception as exc:
-            return f"Error: Failed to fetch URL: {exc}"
-
+        assert response is not None
+        if response.status_code < 200 or response.status_code >= 300:
+            return f"Error: HTTP {response.status_code} for URL: {url}"
+        html = response.text
         soup = BeautifulSoup(html, "html.parser")
         for tag in soup(["script", "style", "noscript"]):
             tag.decompose()
