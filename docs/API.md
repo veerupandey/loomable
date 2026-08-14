@@ -587,36 +587,79 @@ All support `complete()` and `stream()`.
 
 ## Memory
 
-Memory is automatic when you set `session_id`. No configuration needed for the common case.
+L1/L2 conversation memory activates with `session_id`. Persistence is pluggable.
 
-### Conversation Memory (short-term)
+### Conversation Memory (default)
 
 ```python
 agent = Agent(model="openai:gpt-4o-mini", session_id="conv-1")
-agent.run("My name is Alice")
-agent.run("What's my name?")  # → "Alice"
+await agent.arun("My name is Alice")
+await agent.arun("What's my name?")  # → Alice (same process)
 ```
 
-### Memory Configuration
+Cross-process / new Agent: pass the same store and `resume=True`.
+
+### Pluggable L1/L2 stores (sqlite / file / postgres / custom)
+
+```python
+from loomable import Agent
+from loomable.memory import open_session_store
+
+# SQLite file
+store = open_session_store("sqlite", path="sessions.db")
+
+# One JSON file per session
+store = open_session_store("file", path="./.sessions")
+
+# Postgres (pip install 'loomable[postgres]')
+store = open_session_store("postgres", url=POSTGRES_URL, user_id="alice")
+
+# In-process (tests)
+store = open_session_store("memory")
+
+agent = Agent(model=..., session_id="conv-1", session_store=store, resume=True)
+```
+
+Or pass any `MemoryBackend` directly:
+
+```python
+from loomable.providers.backends.postgres import PostgresMemoryBackend
+from loomable.kernel.stores import SQLiteMemoryBackend, InMemoryMemoryBackend
+
+agent = Agent(
+    model=...,
+    session_id="conv-1",
+    memory_backend=PostgresMemoryBackend(POSTGRES_URL, user_id="alice"),
+    resume=True,
+)
+# Also works: SQLiteMemoryBackend("kv.db"), InMemoryMemoryBackend(), or your own
+```
+
+Custom backends only need `async read/write/delete/exists` (`MemoryBackend` protocol).
+Wrap with `BackendSessionStore(backend)` if you prefer `session_store=`.
+
+### Memory knobs
 
 ```python
 agent = Agent(
     model="openai:gpt-4o-mini",
     session_id="conv-1",
-    use_memory=True,               # default True when session_id is set
-    memory_window=8,               # last N turns replayed verbatim
-    compaction_threshold=16,       # summarize when turns exceed this
-    use_llm_summarizer=True,       # model-based summarization
+    session_store=store,
+    resume=True,
+    use_memory=True,
+    memory_window=8,
+    compaction_threshold=16,
+    use_llm_summarizer=True,
 )
 ```
 
 ### Memory Tiers
 
-| Tier | What | Scope | Trigger |
-|------|------|-------|---------|
-| L1 (turns) | Raw conversation messages | Per session | Automatic |
-| L2 (summaries) | Compressed older history | Per session | Auto-compaction at threshold |
-| L3 (episodic) | Vector-indexed long-term facts | Cross-session | NoteStore / memory_tool |
+| Tier | What | Scope | How to provide |
+|------|------|-------|----------------|
+| L1 (turns) | Raw conversation | Per session | `session_id` + `session_store` / `memory_backend` |
+| L2 (summaries) | Compacted older history | Per session | Same store; auto at `compaction_threshold` |
+| L3 (episodic) | Vector notes / RAG | Cross-session | `note_store` / `knowledge`+`embedder` |
 
 ### Pinned Facts
 
@@ -661,29 +704,39 @@ agent = Agent(
 
 ```bash
 pip install 'loomable[postgres]'
-docker compose up -d   # POSTGRES_URL=postgresql://loomable:loomable@127.0.0.1:5432/loomable
+docker compose up -d
 ```
 
 ```python
-from loomable import Case, PostgresCheckpointer
+from loomable import Agent, Case, PostgresCheckpointer
+from loomable.memory import open_session_store
+from loomable.providers.backends.postgres import PgVectorBackend, PostgresMemoryBackend
 from loomable.kernel.long_term import LongTermStore
-from loomable.kernel.stores import ShortTermStore
-from loomable.providers.backends.postgres import PostgresMemoryBackend, PgVectorBackend
+from loomable.agent import NoteStore
 
 DSN = "postgresql://loomable:loomable@127.0.0.1:5432/loomable"
 
+# L1/L2 conversation memory in Postgres
+agent = Agent(
+    model="openai:gpt-4o-mini",
+    session_id="conv-1",
+    session_store=open_session_store("postgres", url=DSN, user_id="alice"),
+    resume=True,
+)
+
+# Or: memory_backend=PostgresMemoryBackend(DSN, user_id="alice")
+
+# Case / Workflow checkpoints
 case = Case(model="openai:gpt-4o-mini", board=True, session_id="inc-1",
             checkpointer=PostgresCheckpointer(DSN))
 
-kv = PostgresMemoryBackend(DSN, user_id="alice")
-short_term = ShortTermStore(backend=kv)
-long_term = LongTermStore(
-    backend=PgVectorBackend(DSN, dimensions=1536, user_id="alice"),
-    backend_name="postgres",
+# L3 notes
+note_store = NoteStore(
+    long_term=LongTermStore(backend=PgVectorBackend(DSN, dimensions=1536, user_id="alice"),
+                            backend_name="postgres"),
+    embedder=embedder,
 )
 ```
-
-Tables auto-create. `user_id` scopes KV/vector rows.
 
 ---
 

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 from typing import Any
@@ -198,6 +199,84 @@ class PostgresMemoryBackend(_PoolMixin):
                     key,
                 )
             return row is not None
+        except Exception as exc:  # noqa: BLE001
+            raise MemoryBackendError(self._backend_id) from exc
+
+    def _oneshot_sync(self, fn: Any) -> Any:
+        """Run asyncpg work on a fresh connection+loop (safe from Agent persist)."""
+        if not isinstance(self._url, str):
+            raise RuntimeError("oneshot requires a DSN string")
+        asyncpg = _require_asyncpg()
+
+        async def _runner() -> Any:
+            conn = await asyncpg.connect(str(self._url))
+            try:
+                await conn.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {self._fq_table} (
+                        scope TEXT NOT NULL,
+                        key TEXT NOT NULL,
+                        value JSONB NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        PRIMARY KEY (scope, key)
+                    )
+                    """
+                )
+                return await fn(conn)
+            finally:
+                await conn.close()
+
+        return asyncio.run(_runner())
+
+    def read_sync(self, key: str) -> Any:
+        if not isinstance(self._url, str):
+            from loomable.kernel.stores import _run_sync
+
+            return _run_sync(self.read(key))
+
+        async def _op(conn: Any) -> Any:
+            row = await conn.fetchrow(
+                f"""
+                SELECT value FROM {self._fq_table}
+                WHERE scope = $1 AND key = $2
+                """,
+                self._user_id,
+                key,
+            )
+            if row is None:
+                return None
+            value = row["value"]
+            return json.loads(value) if isinstance(value, str) else value
+
+        try:
+            return self._oneshot_sync(_op)
+        except Exception as exc:  # noqa: BLE001
+            raise MemoryBackendError(self._backend_id) from exc
+
+    def write_sync(self, key: str, value: Any) -> None:
+        if not isinstance(self._url, str):
+            from loomable.kernel.stores import _run_sync
+
+            _run_sync(self.write(key, value))
+            return
+
+        payload = json.dumps(value, default=str)
+
+        async def _op(conn: Any) -> None:
+            await conn.execute(
+                f"""
+                INSERT INTO {self._fq_table} (scope, key, value)
+                VALUES ($1, $2, $3::jsonb)
+                ON CONFLICT (scope, key) DO UPDATE
+                SET value = EXCLUDED.value, updated_at = NOW()
+                """,
+                self._user_id,
+                key,
+                payload,
+            )
+
+        try:
+            self._oneshot_sync(_op)
         except Exception as exc:  # noqa: BLE001
             raise MemoryBackendError(self._backend_id) from exc
 

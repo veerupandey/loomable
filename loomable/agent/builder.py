@@ -2518,7 +2518,8 @@ class Agent:
         tool_runtime: ToolRuntime | None = None,
         harness: GuardrailHarness | None = None,
         planner: Planner | None = None,
-        session_store: SessionStore | None = None,
+        session_store: Any | None = None,
+        memory_backend: Any | None = None,
         # Harness features:
         events: AgentEvents | None = None,
         complexity_router: "ComplexityRouter | None" = None,
@@ -2629,6 +2630,7 @@ class Agent:
         self._harness = harness
         self._planner = planner
         self._session_store = session_store
+        self._memory_backend = memory_backend
 
         # Harness features.
         self._events = events
@@ -2708,7 +2710,7 @@ class Agent:
         tool_runtime = self._tool_runtime or ToolRuntime(tool_registry)
         harness = self._harness or GuardrailHarness([])
         planner = self._planner or Planner(model_interface)
-        session_store = self._session_store or SessionStore()
+        session_store = self._resolve_session_store()
 
         # Summarizer is used for compaction (memory management) in the high-level
         # run path.  The kernel AgentLoop is NOT constructed here — the high-level
@@ -3237,6 +3239,16 @@ class Agent:
                 errors.append(err)
 
         return registry, errors
+
+    def _resolve_session_store(self) -> Any:
+        """Resolve L1/L2 persistence: ``session_store`` or ``memory_backend`` wrap."""
+        if self._session_store is not None:
+            return self._session_store
+        if self._memory_backend is not None:
+            from loomable.kernel.stores import BackendSessionStore
+
+            return BackendSessionStore(self._memory_backend)
+        return SessionStore()
 
     def _build_session(
         self, config: AgentConfig, session_store: SessionStore

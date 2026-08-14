@@ -22,17 +22,18 @@ Date: 2026-08-13. Case + AG-UI + Postgres pass.
 | P1 | Board hydrate skipped `complete=True` checkpoints |
 | P2 | `pytest.mark.unit` registered |
 
-## Postgres
+## Postgres + Agent memory
 
 `pip install 'loomable[postgres]'` · `docker compose up -d`
 
-| API | Protocol |
-|-----|----------|
-| `PostgresCheckpointer` | `Checkpointer` |
-| `PostgresMemoryBackend` | `MemoryBackend` |
-| `PgVectorBackend` | `VectorBackend` |
+| API | Role |
+|-----|------|
+| `open_session_store("sqlite"\|"file"\|"postgres"\|"memory")` | L1/L2 via `session_store=` |
+| `Agent(..., memory_backend=...)` | L1/L2 via any `MemoryBackend` |
+| `PostgresCheckpointer` | Workflow/Case resume |
+| `PgVectorBackend` | L3 vectors for `NoteStore` / `LongTermStore` |
 
-Tables auto-create. `user_id` scopes KV/vector rows.
+Custom backends: implement `MemoryBackend` (`read`/`write`/`delete`/`exists`).
 
 ## Notes
 

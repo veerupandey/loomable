@@ -145,6 +145,42 @@ async def test_live_workflow_checkpoint_resume_with_postgres(dsn: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_live_agent_memory_backend_postgres(dsn: str) -> None:
+    """Agent L1/L2 survives new Agent() via Postgres memory_backend."""
+    from loomable.agent import Agent, ModelSpec
+    from loomable.kernel.models import ModelRequest, ModelResponse
+    from loomable.providers.backends.postgres import PostgresMemoryBackend
+
+    class _Echo:
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            blob = str(request.messages)
+            if "Alex" in blob and "What is my name" in blob:
+                return ModelResponse(content="Your name is Alex.")
+            return ModelResponse(content="ack")
+
+    backend = PostgresMemoryBackend(dsn, user_id="agent-mem", table="loomable_agent_kv_e2e")
+    await backend.setup()
+    model = ModelSpec(provider="scripted", provider_impl=_Echo())
+    a1 = Agent(
+        model=model,
+        session_id="agent-pg-1",
+        memory_backend=backend,
+        modalities="text",
+    )
+    await a1.arun("My name is Alex")
+    a2 = Agent(
+        model=model,
+        session_id="agent-pg-1",
+        memory_backend=backend,
+        resume=True,
+        modalities="text",
+    )
+    r2 = await a2.arun("What is my name?")
+    assert "Alex" in (r2.output.text() or "")
+    await backend.aclose()
+
+
+@pytest.mark.asyncio
 async def test_live_case_board_checkpoint_with_postgres(dsn: str) -> None:
     from loomable import Case
     from loomable.agent import ModelSpec
