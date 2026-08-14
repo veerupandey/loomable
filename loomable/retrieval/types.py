@@ -23,32 +23,65 @@ class Document:
         src = (self.source or self.id or "").lower()
         if "markdown" in mt or src.endswith((".md", ".mdx")):
             return "markdown"
-        if any(
-            src.endswith(ext)
-            for ext in (
-                ".py",
-                ".ts",
-                ".tsx",
-                ".js",
-                ".jsx",
-                ".go",
-                ".rs",
-                ".java",
-                ".kt",
-                ".c",
-                ".h",
-                ".cpp",
-                ".hpp",
-                ".cs",
-                ".rb",
-                ".php",
-            )
-        ):
+        code_exts = (
+            ".py",
+            ".pyi",
+            ".ts",
+            ".tsx",
+            ".js",
+            ".jsx",
+            ".mjs",
+            ".cjs",
+            ".go",
+            ".rs",
+            ".java",
+            ".kt",
+            ".kts",
+            ".c",
+            ".h",
+            ".cpp",
+            ".hpp",
+            ".cc",
+            ".cxx",
+            ".cs",
+            ".rb",
+            ".php",
+            ".swift",
+            ".scala",
+            ".sc",
+            ".m",
+            ".mm",
+            ".r",
+            ".jl",
+            ".lua",
+            ".pl",
+            ".ex",
+            ".exs",
+            ".erl",
+            ".hs",
+            ".dart",
+            ".vue",
+            ".svelte",
+            ".tf",
+            ".proto",
+            ".graphql",
+            ".gql",
+            ".ipynb",
+        )
+        if any(src.endswith(ext) for ext in code_exts) or src.endswith("/dockerfile"):
             return "code"
         if "pdf" in mt or src.endswith(".pdf"):
             return "pdf"
         if src.endswith((".html", ".htm")) or "html" in mt:
             return "html"
+        if src.endswith((".json", ".jsonl")) or "json" in mt:
+            return "json"
+        if src.endswith((".csv", ".tsv")) or "csv" in mt:
+            return "csv"
+        if src.endswith((".docx",)) or "wordprocessingml" in mt:
+            return "text"
+        if src.endswith((".pptx",)) or "presentationml" in mt:
+            return "text"
         return "text"
 
 
