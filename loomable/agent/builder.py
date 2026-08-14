@@ -578,6 +578,7 @@ class BuiltAgent:
     memory_auto_recall: bool = True
     _cached_user_facts: list[str] = field(default_factory=list)
     _memory_user_id: str | None = None
+    _memory_scope: Any | None = None
 
     # Loop-repeat threshold for no-progress detection (Req 3.1/3.2).
     loop_repeat_threshold: int = 3
@@ -2069,6 +2070,7 @@ class BuiltAgent:
                         self.note_store,
                         input_text,
                         user_id=self._memory_user_id,
+                        scope=self._memory_scope,
                     )
                 )
                 if written:
@@ -2554,6 +2556,7 @@ class Agent:
         checkpoint_interval: int = 5,
         session_id: str | None = None,
         user_id: str | None = None,
+        scopes: dict[str, Any] | None = None,
         resume: bool = False,
         use_memory: bool = True,
         memory_window: int = 8,
@@ -2666,6 +2669,7 @@ class Agent:
         self._checkpoint_interval = checkpoint_interval
         self._session_id = session_id
         self._user_id = user_id
+        self._scopes = dict(scopes) if scopes else {}
         self._resume = resume
         self._response_model = response_model
 
@@ -2698,7 +2702,7 @@ class Agent:
         from loomable.memory.compose import is_kernel_memory_manager, is_memory_bundle
 
         if is_memory_bundle(memory):
-            bundle = memory.with_user_id(user_id)
+            bundle = memory.with_scopes(user_id=user_id, scopes=scopes)
             self._memory_bundle = bundle
             composed = bundle.to_agent_kwargs()
             if session_store is None and "session_store" in composed:
@@ -2731,6 +2735,13 @@ class Agent:
             self._memory = memory
         else:
             self._memory = kernel_memory or memory
+            # Even without a Memory bundle, scopes+user_id can wrap an explicit note_store.
+            if note_store is not None and (user_id or scopes):
+                from loomable.memory.compose import MemoryScope, ScopedNoteStore
+
+                scope = MemoryScope.of(**({**(scopes or {}), **({"user_id": user_id} if user_id else {})}))
+                if scope and not isinstance(note_store, ScopedNoteStore):
+                    note_store = ScopedNoteStore(note_store, scope=scope)
         self._tool_runtime = tool_runtime
         self._harness = harness
         self._planner = planner
@@ -2904,6 +2915,23 @@ class Agent:
             long_term = LongTermStore()
             self._index_knowledge_sync(long_term, self._knowledge, self._embedder)
 
+        from loomable.memory.compose import MemoryScope
+
+        if (
+            self._memory_bundle is not None
+            and self._memory_bundle.user is not None
+        ):
+            _resolved_memory_scope = self._memory_bundle.user.resolve_scope() or None
+        elif self._scopes or self._user_id:
+            _resolved_memory_scope = MemoryScope.of(
+                **{
+                    **self._scopes,
+                    **({"user_id": self._user_id} if self._user_id else {}),
+                }
+            )
+        else:
+            _resolved_memory_scope = None
+
         built = BuiltAgent(
             loop=None,
             model_interface=model_interface,
@@ -2939,6 +2967,7 @@ class Agent:
             memory_auto_extract=self._memory_auto_extract,
             memory_auto_recall=True,
             _memory_user_id=self._user_id,
+            _memory_scope=_resolved_memory_scope,
             loop_repeat_threshold=self._loop_repeat_threshold,
             resilience=self._resilience,
             verifier=self._verifier,

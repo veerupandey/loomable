@@ -80,7 +80,7 @@ async def main() -> None:
         memory_tool=True,
         modalities="text",
         memory_window=8,
-        user_id="alice",  # Agent metadata only; Postgres tenant is on the backend
+        user_id="alice",
     )
     print("turn1:", (await agent.arun("I prefer dark mode and Python.")).output.text())
 
