@@ -98,7 +98,7 @@ class TestBuilderOverrides:
         built = Agent(
             model=_FakeProvider(),
             context_manager=context_manager,
-            memory=memory,
+            kernel_memory=memory,
             tool_runtime=tool_runtime,
             harness=harness,
             session_store=session_store,
@@ -132,12 +132,6 @@ class TestCapabilities:
         assert built.capabilities.output == frozenset({Modality.TEXT})
         assert built.max_tool_iterations == 12
         assert built.require_final_text is True
-
-    def test_multimodal_flag_is_noop(self):
-        built_on = Agent(model=_FakeProvider(), multimodal=True).build()
-        built_off = Agent(model=_FakeProvider(), multimodal=False).build()
-        assert built_on.capabilities.input == built_off.capabilities.input
-        assert Modality.IMAGE in built_off.capabilities.input
 
     def test_text_only_and_modalities_strings(self):
         text = Agent(model=_FakeProvider(), text_only=True).build()

@@ -14,6 +14,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any, Literal
 
 from .builder import Agent
+from .errors import AgentConfigError
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from loomable.agent.run import RunResult
@@ -83,6 +84,28 @@ def _member_label(member: Agent, index: int) -> str:
     return getattr(member, "_role", None) or getattr(member, "_name", None) or f"member_{index}"
 
 
+def _input_as_text(value: Any) -> str:
+    """Coerce Workflow/Agent prior output into plain text for Team hard modes.
+
+    Matches :func:`loomable.content.to_agent_input` so ``AgentOutput`` /
+    ``RunResult`` chain seamlessly — callers must not parse manually.
+    """
+    from loomable.content import to_agent_input
+
+    if isinstance(value, str):
+        return value
+    agent_input = to_agent_input(value)
+    chunks: list[str] = []
+    for message in agent_input.messages:
+        for part in message.parts:
+            if part.data is not None:
+                try:
+                    chunks.append(part.data.decode("utf-8"))
+                except Exception:  # noqa: BLE001
+                    continue
+    return "".join(chunks)
+
+
 class Team:
     """Explicit multi-agent orchestration.
 
@@ -133,8 +156,15 @@ class Team:
         self._session_id = session_id
         self._max_delegations = max_delegations
         self._max_depth = max_depth
-        # Hard by default for broadcast/sequential; soft for coordinate/route
-        self._hard = (mode in ("broadcast", "sequential")) if hard is None else hard
+        # Hard by default for broadcast/sequential; soft for coordinate/route.
+        # hard=True on coordinate/route used to be a silent no-op — reject it.
+        if hard is True and mode not in ("broadcast", "sequential"):
+            raise AgentConfigError(
+                f"Team(hard=True) only applies to mode='broadcast' or "
+                f"'sequential' (got mode={mode!r}). Omit hard= for "
+                "coordinate/route (soft LLM orchestration)."
+            )
+        self._hard = (mode in ("broadcast", "sequential")) if hard is None else bool(hard)
 
         agent_kwargs: dict[str, Any] = {
             "model": model,
@@ -183,6 +213,11 @@ class Team:
             retrievers=retrievers,
             embedder=embedder,
         )
+        # Soft coordinate: nudge the LLM to call every member (WR-020).
+        if mode == "coordinate" and not self._hard and not self._agent._require_tools:
+            from .delegation import delegation_tool_names
+
+            self._agent._require_tools = [name for _, name in delegation_tool_names(members)]
 
     def bind_session(self, session_id: str | None, *, resume: bool | None = None) -> None:
         """Bind HTTP/stream session id — same semantics as :meth:`Agent.bind_session`."""
@@ -267,10 +302,10 @@ class Team:
     ) -> "RunResult":
         """Run the team and return a :class:`~loomable.agent.run.RunResult`."""
         if self._hard and self._mode == "broadcast":
-            text = input if isinstance(input, str) else str(input)
+            text = _input_as_text(input)
             return await self._run_broadcast(text)
         if self._hard and self._mode == "sequential":
-            text = input if isinstance(input, str) else str(input)
+            text = _input_as_text(input)
             return await self._run_sequential(text)
 
         # Soft path: rebuild delegation tools with budgets if needed
@@ -286,7 +321,7 @@ class Team:
             )
             for t in budgeted:
                 built.tool_runtime._tools[t.name] = t
-            return await built.arun(
+            result = await built.arun(
                 input,
                 images=images,
                 videos=videos,
@@ -294,15 +329,73 @@ class Team:
                 output_schema=output_schema,
                 context=context,
             )
+        else:
+            result = await self._agent.arun(
+                input,
+                images=images,
+                videos=videos,
+                audio=audio,
+                output_schema=output_schema,
+                context=context,
+            )
+        if self._mode == "coordinate" and not self._hard:
+            result = await self._coordinate_fallback(_input_as_text(input), result)
+        return result
 
-        return await self._agent.arun(
-            input,
-            images=images,
-            videos=videos,
-            audio=audio,
-            output_schema=output_schema,
-            context=context,
+    async def _coordinate_fallback(self, task: str, result: "RunResult") -> "RunResult":
+        """Run members the coordinator never delegated to (WR-020)."""
+        from .delegation import delegation_tool_names
+
+        roster = delegation_tool_names(self._members)
+        missing = {
+            spec.split(":", 1)[0]
+            for spec in (result.metadata or {}).get("required_tools_missing") or []
+        }
+        skipped = [(member, name) for member, name in roster if name in missing]
+        if not skipped and not (result.tool_activity or []) and roster:
+            skipped = list(roster)
+        if not skipped:
+            return result
+
+        extras: list[tuple[str, str]] = []
+        for index, (member, _name) in enumerate(skipped):
+            label = _member_label(member, index)
+            try:
+                extra = await member.arun(task)
+                extras.append((label, extra.output.text()))
+            except Exception as exc:  # noqa: BLE001
+                extras.append((label, f"ERROR: {exc}"))
+        if not extras:
+            return result
+
+        from loomable.agent.run import RunResult
+        from loomable.content import AgentOutput, Text
+
+        extra_text = "\n\n".join(f"## {label} (fallback)\n{text}" for label, text in extras)
+        merged = (result.output.text() or "").rstrip()
+        if extra_text:
+            merged = f"{merged}\n\n{extra_text}" if merged else extra_text
+        meta = dict(result.metadata or {})
+        meta["team_coordinate_fallback"] = [name for _, name in skipped]
+        return RunResult(
+            output=AgentOutput(parts=[Text(merged)]),
+            session_id=result.session_id,
+            usage=result.usage,
+            tool_activity=list(result.tool_activity or []),
+            structured=result.structured,
+            metadata=meta,
         )
+
+    def cancel(self) -> bool:
+        """Cancel the coordinator and any in-flight members."""
+        hit = False
+        if self._agent.cancel():
+            hit = True
+        for member in self._members:
+            cancel = getattr(member, "cancel", None)
+            if callable(cancel) and cancel():
+                hit = True
+        return hit
 
     def run(
         self,
@@ -345,6 +438,19 @@ class Team:
         """
         # Soft / LLM-coordinated path: reuse Agent SSE (tools include delegates).
         if not (self._hard and self._mode in ("broadcast", "sequential")):
+            if session_id:
+                self.bind_session(session_id)
+            from loomable.stream import (
+                RUN_FINISHED,
+                TEXT_MESSAGE_CONTENT,
+                TEXT_MESSAGE_END,
+                TEXT_MESSAGE_START,
+                TOOL_CALL_START,
+                StreamEvent,
+            )
+
+            called: set[str] = set()
+            finished: Any = None
             async for ev in self._agent.astream_events(
                 input,
                 images=images,
@@ -352,8 +458,69 @@ class Team:
                 audio=audio,
                 output_schema=output_schema,
                 context=context,
+                session_id=session_id,
             ):
+                if getattr(ev, "type", None) == TOOL_CALL_START:
+                    data = getattr(ev, "data", None) or {}
+                    name = data.get("tool_name") or data.get("name") or ""
+                    if name:
+                        called.add(str(name))
+                if (
+                    getattr(ev, "type", None) == RUN_FINISHED
+                    and self._mode == "coordinate"
+                    and not self._hard
+                ):
+                    finished = ev
+                    continue
                 yield ev
+            if finished is not None:
+                from loomable.agent.run import RunResult
+                from loomable.content import AgentOutput, Text
+
+                from .delegation import delegation_tool_names
+
+                roster = delegation_tool_names(self._members)
+                missing = [name for _, name in roster if name not in called]
+                # Skip fallback when every delegate was already called. An empty
+                # synthetic RunResult has no tool_activity, which would otherwise
+                # make _coordinate_fallback re-run the full roster.
+                if missing:
+                    fake = RunResult(
+                        output=AgentOutput(parts=[Text("")]),
+                        session_id=getattr(finished, "session_id", "")
+                        or session_id
+                        or "",
+                        metadata={"required_tools_missing": missing},
+                    )
+                    extra = await self._coordinate_fallback(
+                        _input_as_text(input), fake
+                    )
+                    extra_text = extra.output.text() if extra.output is not None else ""
+                else:
+                    extra = None
+                    extra_text = ""
+                if extra is not None and extra.metadata.get("team_coordinate_fallback") and extra_text:
+                    rid = getattr(finished, "run_id", "") or ""
+                    sid = getattr(finished, "session_id", "") or session_id or ""
+                    yield StreamEvent(
+                        type=TEXT_MESSAGE_START,
+                        run_id=rid,
+                        session_id=sid,
+                        data={"role": "assistant"},
+                    )
+                    yield StreamEvent(
+                        type=TEXT_MESSAGE_CONTENT,
+                        run_id=rid,
+                        session_id=sid,
+                        data={"delta": extra_text},
+                    )
+                    yield StreamEvent(
+                        type=TEXT_MESSAGE_END,
+                        run_id=rid,
+                        session_id=sid,
+                        data={},
+                    )
+                yield finished
             return
 
         import uuid
@@ -369,7 +536,7 @@ class Team:
             StreamBridge,
         )
 
-        text = input if isinstance(input, str) else str(input)
+        text = _input_as_text(input)
         rid = uuid.uuid4().hex
         sid = session_id or self._session_id or ""
         bus = AsyncStreamBus(run_id=rid, session_id=sid)

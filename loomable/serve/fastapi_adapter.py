@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -197,6 +198,16 @@ def _extract_request_api_key(request: Request) -> str | None:
     return None
 
 
+def _supports_ndjson_stream(agent: Any) -> bool:
+    """True when ``POST /run/stream`` can call ``astream`` without a guaranteed fail."""
+    if not hasattr(agent, "astream"):
+        return False
+    # Agent(mode="case") defines astream but raises — same class of lie as Case.
+    if getattr(agent, "_mode", None) == "case":
+        return False
+    return True
+
+
 def _register_agent_routes(
     app: FastAPI,
     agent: Any,
@@ -221,15 +232,29 @@ def _register_agent_routes(
         return None
 
     def _cancel_agent() -> None:
-        for target in (agent, getattr(agent, "_built", None), getattr(agent, "_agent", None)):
-            if target is None:
+        seen: set[int] = set()
+        targets: list[Any] = [
+            agent,
+            getattr(agent, "_built", None),
+            getattr(agent, "_agent", None),
+            getattr(agent, "_case", None),
+            getattr(agent, "_workflow", None),
+        ]
+        members = getattr(agent, "_members", None)
+        if members:
+            targets.extend(list(members))
+        for target in targets:
+            if target is None or id(target) in seen:
                 continue
+            seen.add(id(target))
             cancel = getattr(target, "cancel", None)
             if callable(cancel):
                 try:
                     cancel()
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logging.getLogger("loomable.serve").debug(
+                        "cancel() failed on %s: %s", type(target).__name__, exc
+                    )
 
     def _apply_session(body: RunRequestModel) -> None:
         sid = body.session_id
@@ -240,18 +265,26 @@ def _register_agent_routes(
             try:
                 agent.bind_session(sid)
                 return
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger("loomable.serve").warning(
+                    "bind_session(%r) failed; falling back to session_id assign: %s",
+                    sid,
+                    exc,
+                )
         if hasattr(agent, "session_id"):
             try:
                 agent.session_id = sid  # type: ignore[attr-defined]
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger("loomable.serve").debug(
+                    "session_id assign failed: %s", exc
+                )
         if hasattr(agent, "_session_id"):
             try:
                 agent._session_id = sid  # type: ignore[attr-defined]
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger("loomable.serve").debug(
+                    "_session_id assign failed: %s", exc
+                )
         # Case (direct or cached under Agent mode=case) must bind checkpoint thread.
         case = agent if type(agent).__name__ == "Case" else getattr(agent, "_case", None)
         if case is not None and hasattr(case, "bind_session"):
@@ -317,36 +350,41 @@ def _register_agent_routes(
             content=_run_result_to_model(result).model_dump(),
         )
 
-    @app.post(f"{p}/run/stream")
-    async def run_stream(request: Request, body: RunRequestModel) -> Any:
-        denied = _auth_or_401(request)
-        if denied is not None:
-            return denied
-        try:
-            agent_input = _request_to_agent_input(body)
-        except ValueError as exc:
-            return JSONResponse(status_code=422, content={"detail": str(exc)})
-        _apply_session(body)
+    # NDJSON token chunks require a usable ``astream`` (Agent / BuiltAgent without
+    # mode="case"). Case / Team / Workflow / case-mode Agent expose AG-UI via
+    # ``astream_events`` only — do not register a lying route.
+    if _supports_ndjson_stream(agent):
 
-        async def event_stream():
+        @app.post(f"{p}/run/stream")
+        async def run_stream(request: Request, body: RunRequestModel) -> Any:
+            denied = _auth_or_401(request)
+            if denied is not None:
+                return denied
             try:
-                async for chunk in agent.astream(agent_input):
+                agent_input = _request_to_agent_input(body)
+            except ValueError as exc:
+                return JSONResponse(status_code=422, content={"detail": str(exc)})
+            _apply_session(body)
+
+            async def event_stream():
+                try:
+                    async for chunk in agent.astream(agent_input):
+                        if await request.is_disconnected():
+                            _cancel_agent()
+                            break
+                        yield json.dumps(_chunk_to_dict(chunk)) + "\n"
+                except UnsupportedModalityError as exc:
+                    yield json.dumps({"error": str(exc)}) + "\n"
+                except asyncio.CancelledError:
+                    _cancel_agent()
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    yield json.dumps({"error": str(exc)}) + "\n"
+                finally:
                     if await request.is_disconnected():
                         _cancel_agent()
-                        break
-                    yield json.dumps(_chunk_to_dict(chunk)) + "\n"
-            except UnsupportedModalityError as exc:
-                yield json.dumps({"error": str(exc)}) + "\n"
-            except asyncio.CancelledError:
-                _cancel_agent()
-                raise
-            except Exception as exc:  # noqa: BLE001
-                yield json.dumps({"error": str(exc)}) + "\n"
-            finally:
-                if await request.is_disconnected():
-                    _cancel_agent()
 
-        return StreamingResponse(event_stream(), media_type="application/x-ndjson")
+            return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
     @app.post(f"{p}/run/events")
     async def run_events(request: Request, body: RunRequestModel) -> Any:
@@ -419,8 +457,9 @@ def mount_agent(
 ) -> FastAPI:
     """Mount Agent AG-UI routes on an existing FastAPI app.
 
-    Routes: ``{prefix}/health``, ``{prefix}/run``, ``{prefix}/run/stream``,
-    ``{prefix}/run/events`` (SSE).
+    Routes: ``{prefix}/health``, ``{prefix}/run``, ``{prefix}/run/events`` (SSE).
+    ``{prefix}/run/stream`` (NDJSON) is registered only when the target exposes
+    ``astream`` (Agent / BuiltAgent).
 
     When ``api_key`` is set, require ``Authorization: Bearer <key>`` or
     ``X-API-Key: <key>`` on all routes (including health).
@@ -442,7 +481,11 @@ def mount_case(
     prefix: str = "/cases",
     api_key: str | None = None,
 ) -> FastAPI:
-    """Mount Case AG-UI SSE routes (same shape as Agent)."""
+    """Mount Case routes: health, ``/run``, AG-UI ``/run/events``.
+
+    NDJSON ``/run/stream`` is **not** registered — Case has no ``astream``.
+    Prefer ``POST {prefix}/run/events`` (SSE).
+    """
     _register_agent_routes(app, case, prefix=prefix, api_key=api_key)
     return app
 

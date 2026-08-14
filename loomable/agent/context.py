@@ -90,7 +90,8 @@ class RunContext:
     memory: Any = None
 
     # --- internal state (not part of the public constructor) ---
-    _cancelled: bool = field(default=False, init=False, repr=False)
+    # Shared list so Step.fork() / cloned contexts observe the same cancel.
+    _cancel_flag: list[bool] = field(default_factory=lambda: [False], init=False, repr=False)
     _steps_used: int = field(default=0, init=False, repr=False)
     _tokens_used: int = field(default=0, init=False, repr=False)
     _call_history: dict[str, int] = field(
@@ -105,15 +106,33 @@ class RunContext:
     def cancel(self) -> None:
         """Set the cooperative cancel flag.
 
-        Checked at each loop boundary; once set the harness will stop and
-        issue no further model or tool calls.
+        Checked at each loop / Workflow step boundary; once set the harness
+        will stop and issue no further model or tool calls.
         """
-        self._cancelled = True
+        self._cancel_flag[0] = True
 
     @property
     def cancelled(self) -> bool:
         """Whether the cooperative cancel flag has been set."""
-        return self._cancelled
+        return bool(self._cancel_flag[0])
+
+    def fork(self, *, deps: Any | None = None) -> "RunContext":
+        """Clone this context, sharing the cancel flag with the parent."""
+        ctx = RunContext(
+            events=self.events,
+            max_steps=self.max_steps,
+            token_budget=self.token_budget,
+            max_run_tokens=self.max_run_tokens,
+            loop_repeat_threshold=self.loop_repeat_threshold,
+            deps=self.deps if deps is None else deps,
+            shared_state=self.shared_state,
+            memory=self.memory,
+        )
+        ctx._cancel_flag = self._cancel_flag
+        ctx._steps_used = self._steps_used
+        ctx._tokens_used = self._tokens_used
+        ctx._call_history = self._call_history
+        return ctx
 
     # ------------------------------------------------------------------
     # Budgets

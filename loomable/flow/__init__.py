@@ -18,7 +18,7 @@ Three primitives:
   - **Workflow** — deterministic process (seq / parallel / branch / loop / map)
 
 ``Flow``, engines, and ``Edge`` remain available as an advanced escape hatch.
-Helpers (``sequential``, ``parallel``, …) are thin aliases that return ``Flow``.
+Prefer ``Workflow`` for new process code.
 """
 
 from .engines import (
@@ -28,7 +28,7 @@ from .engines import (
     SequentialEngine,
 )
 from .flow import Flow, FlowPlan
-from .helpers import coordinate, parallel, plan_and_execute, route, sequential
+from .helpers import plan_and_execute
 from .hitl import FlowPaused
 from .loop import AlwaysOkVerifier, CallableVerifier, Loop, VerdictResult, Verifier
 from .memory import MemoryStore, Tier, TieredMemoryStore
@@ -52,10 +52,6 @@ from .condition import Condition, ComposableElement
 from .parallel_group import Parallel_Group
 from .flow_class import FlowClass, start, listen, router
 
-# Convenience aliases for progressive-disclosure naming (design spec)
-Map = MapNode
-Router = RouterNode
-
 __all__ = [
     # Core
     "Runnable",
@@ -73,9 +69,7 @@ __all__ = [
     "Edge",
     "Node",
     "MapNode",
-    "Map",
     "RouterNode",
-    "Router",
     "FlowConfigError",
     # State
     "Reducer",
@@ -102,11 +96,7 @@ __all__ = [
     "emit_context_snapshot",
     "emit_node_end",
     "emit_node_start",
-    # Helpers (→ Flow)
-    "sequential",
-    "parallel",
-    "route",
-    "coordinate",
+    # Used by Workflow.map
     "plan_and_execute",
     # High-level Workflow API (preferred)
     "Step",

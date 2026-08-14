@@ -17,7 +17,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from loomable import Agent, Step, Workflow, tool
+from loomable import Agent, Workflow, tool
 from loomable.toolkits import FileTools, PDFTools, PPTTools
 
 from _common import ESCALATION_EMAIL, FIXTURES, OUTPUT, ROOT, make_provider
@@ -134,7 +134,6 @@ def build_war_room_workflow(work: Path) -> Workflow:
         Workflow(
             "escalation-war-room",
             session_id="inc-88421-phase1",
-            memory=True,
         )
         .step("gather", gatherer)
         .step("scribe", scribe)

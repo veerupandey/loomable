@@ -12,7 +12,7 @@ Real-world SEV exam for Loomable: AcmePay settlement failure with partner bank
 | 03 | `03_multimodal.py` | Image input + tool image output |
 | 04 | `04_workflow.py` | Fluent `Workflow` orchestration |
 | 05 | `05_checkpoint_resume.py` | Kill / resume with checkpointer |
-| 06 | `06_memory_compaction.py` | Tiered memory across shifts |
+| 06 | `06_memory_compaction.py` | Agent L1/L2 `ContextPolicy` compaction |
 | 07 | `07_team_spawn.py` | Hard `Team` + `spawn_specialist` |
 | 08 | `08_stress_exam.py` | Full stress path |
 | 09 | `09_challenge_hitl.py` | Fluent HITL (`confirm` + `approve`) |
@@ -20,7 +20,7 @@ Real-world SEV exam for Loomable: AcmePay settlement failure with partner bank
 | 11 | `11_case_sse.py` | Case AG-UI SSE + WorkItems `STATE_*` |
 | 12 | `12_agent_agui_sse.py` | Agent FastAPI `text/event-stream` |
 
-Engineering notes: `CHALLENGES.md` · `ISSUES.md`
+Engineering notes: `CHALLENGES.md`
 
 ## Setup
 

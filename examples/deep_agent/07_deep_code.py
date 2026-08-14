@@ -2,7 +2,7 @@
 
 Run::
 
-    python examples/deep_agent/06_deep_code.py
+    python examples/deep_agent/07_deep_code.py
 """
 
 from __future__ import annotations

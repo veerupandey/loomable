@@ -1,9 +1,9 @@
-"""Pipeline — Sequential chain of agents.
+"""Sequential Workflow — chain of Agents.
 
-USE WHEN: You have a multi-step workflow where each step's
-output feeds into the next step's input.
+USE WHEN: Multi-step work where each Agent's output feeds the next.
 
-Uses the `sequential` flow helper for explicit step ordering.
+Each Agent receives the previous Agent's output automatically —
+no parse/glue functions between steps.
 """
 
 import asyncio
@@ -11,11 +11,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from loomable.agent import Agent
-from loomable.flow.helpers import sequential
-from loomable.providers.openai import AzureOpenAIProvider
+import sys
+from pathlib import Path
 
-provider = AzureOpenAIProvider()
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _provider import require_provider  # noqa: E402
+
+from loomable import Agent, Workflow
+from loomable.display import pp, show_graph, step_outputs
+
+provider = require_provider()
 
 researcher = Agent(
     model=provider,
@@ -38,21 +43,21 @@ editor = Agent(
     instructions="Improve clarity, fix any issues, keep it under 150 words.",
 )
 
-pipeline = sequential(researcher, writer, editor)
+pipeline = (
+    Workflow("research-write-edit")
+    .step("research", researcher)
+    .step("write", writer)
+    .step("edit", editor)
+)
 
 result = asyncio.run(pipeline.arun("Explain how garbage collection works in Python."))
 
-# Pretty-print with per-step breakdown
-from loomable.display import pp, step_outputs, show_graph
-
 pp(result)
 
-# Access individual step outputs by node name
 steps = step_outputs(result)
 for name, text in steps.items():
     print(f"\n--- Step: {name} ---")
     print(text[:200])
 
-# Visualize the flow graph (Mermaid syntax — paste into mermaid.live)
 print()
-show_graph(pipeline, title="Research → Write → Edit")
+show_graph(pipeline.flow, title="Research → Write → Edit")

@@ -37,8 +37,13 @@ class HierarchicalEngine:
         session_id: str | None = None,
         pending_decisions: dict[str, str] | None = None,
     ) -> RunResult:
-        """Drive the flow using hierarchical delegation with optional resume."""
-        _ = pending_decisions
+        """Drive the flow using hierarchical delegation.
+
+        ``pending_decisions`` is accepted for ExecutionEngine protocol parity with
+        :class:`~loomable.flow.engines.sequential.SequentialEngine` (HITL resume).
+        Hierarchical graphs do not pause for confirmation today.
+        """
+        del pending_decisions  # protocol parity; HITL resume is SequentialEngine-only
         nodes: dict[str, Node] = flow._nodes
         completed: set[str] = set(completed_node_ids or [])
 
@@ -78,7 +83,7 @@ class HierarchicalEngine:
             nid: node for nid, node in worker_nodes.items() if nid not in completed
         }
 
-        if pending_workers:
+        if pending_workers and not context.cancelled:
             manager = SubagentManager()
             tasks = [
                 DelegatedTask(
@@ -98,10 +103,25 @@ class HierarchicalEngine:
             if checkpointer is not None:
                 await self._write_checkpoint(checkpointer, state, completed, session_id)
 
-        # Manager: skip if already completed on resume
+        # Manager: skip if already completed on resume or if cancelled
         from loomable.flow.observability import emit_node_start, emit_node_end
 
-        if manager_id in completed and state.get(manager_id) is not None:
+        if context.cancelled:
+            from loomable.content import AgentOutput, MediaPart, Modality
+
+            manager_result = sub_results.get(manager_id) or RunResult(
+                output=AgentOutput(
+                    parts=[
+                        MediaPart(
+                            modality=Modality.TEXT,
+                            media_type="text/plain",
+                            data=b"",
+                        )
+                    ]
+                ),
+                session_id=session_id or "",
+            )
+        elif manager_id in completed and state.get(manager_id) is not None:
             out = state.get(manager_id)
             if isinstance(out, AgentOutput):
                 manager_result = RunResult(output=out, session_id=session_id or "")
@@ -137,6 +157,10 @@ class HierarchicalEngine:
             plan=getattr(manager_result, "plan", None),
             reasoning=list(getattr(manager_result, "reasoning", None) or []),
         )
+        if context.cancelled:
+            from loomable.agent.context import StopReason
+
+            final.metadata["stop_reason"] = StopReason.CANCELLED
         return final
 
     @staticmethod

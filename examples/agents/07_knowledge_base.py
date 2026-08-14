@@ -1,11 +1,10 @@
-"""Searchable knowledge base — a vector store the agent queries as tools.
+"""Searchable knowledge base — live ``Agent(knowledge_base=...)``.
 
 ``knowledge_base=`` is a vector DB (optionally ingested from files/dirs).
-``retrievers=`` attaches extra search tools on the same Agent.
-``create_deep_agent`` is Agent, so it takes the same kwargs.
+``retrievers=`` attaches extra ``search_*`` tools on the same Agent.
+``create_deep_agent`` takes the same kwargs.
 
-This script is offline (scripted model). For a live model, swap in Gemini /
-Azure OpenAI and keep the same ``knowledge_base=``.
+Requires a real LLM key — see ``.env.example``.
 
 Run::
 
@@ -15,10 +14,20 @@ Run::
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
+from typing import Any
 
-from loomable.agent import Agent, ModelSpec, create_deep_agent
-from loomable.kernel.models import ModelRequest, ModelResponse, ToolCall
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from loomable import Agent, create_deep_agent, open_vector_store
+from loomable.kernel.contracts import Retriever
+from loomable.retrieval import KnowledgeBase
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _provider import require_provider  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent / ".knowledge_base_demo"
 ROOT.mkdir(parents=True, exist_ok=True)
@@ -47,64 +56,46 @@ def _seed() -> dict[str, list[Path]]:
     return {"personal": [personal], "company": [company]}
 
 
-class _Scripted:
-    def __init__(self) -> None:
-        self.n = 0
+class CatalogRetriever(Retriever):
+    """Extra search tool shipped alongside the knowledge base."""
 
-    async def complete(self, request: ModelRequest) -> ModelResponse:
-        self.n += 1
-        if self.n == 1:
-            return ModelResponse(
-                content="",
-                tool_calls=[
-                    ToolCall(
-                        id="1",
-                        tool_name="search_personal",
-                        args={"query": "commit secrets tokens git", "k": 3},
-                    )
-                ],
-            )
-        if self.n == 2:
-            return ModelResponse(
-                content="",
-                tool_calls=[
-                    ToolCall(
-                        id="2",
-                        tool_name="search_company",
-                        args={"query": "webhook DEMO-WH .env policy", "k": 5},
-                    )
-                ],
-            )
-        return ModelResponse(
-            content=(
-                "Do not commit the staging token (personal notes are stricter "
-                "than company .env policy). Webhook key is DEMO-WH-4419 (runbook.md)."
-            )
-        )
+    name = "search_catalog"
+    description = "Search the internal product catalog for SKUs."
 
-
-async def _ask(agent: Agent, label: str) -> None:
-    result = await agent.arun(
-        "Can I commit STAGING_TOKEN=demo-not-a-secret per policy? "
-        "What is the webhook signing secret? Cite sources."
-    )
-    print(f"[{label}] {(result.output.text() or '').strip()}")
+    async def retrieve(self, query: str, k: int) -> list[dict[str, Any]]:
+        rows = [
+            {"content": "SKU-100 widget — $9", "id": "1"},
+            {"content": "SKU-200 sprocket — $12", "id": "2"},
+        ]
+        q = (query or "").lower()
+        hits = [r for r in rows if any(t in r["content"].lower() for t in q.split())]
+        return (hits or rows)[: max(1, int(k))]
 
 
 async def main() -> None:
+    model = require_provider()
     kb = _seed()
-    model = ModelSpec(provider="scripted", provider_impl=_Scripted())
+    question = (
+        "Can I commit STAGING_TOKEN=demo-not-a-secret per policy? "
+        "What is the webhook signing secret? Cite which collection you used."
+    )
+
     agent = Agent(
         model,
         user_id="avery",
         knowledge_base=kb,
-        use_llm_summarizer=False,
+        instructions=(
+            "Use search_personal and search_company. Prefer personal prefs over "
+            "company policy when they conflict. Cite sources."
+        ),
         max_tool_iterations=8,
     )
-    await _ask(agent, "Agent")
+    result = await agent.arun(question)
+    print("[Agent named collections]")
+    print((result.output.text() or "").strip())
 
     deep = create_deep_agent(
-        ModelSpec(provider="scripted", provider_impl=_Scripted()),
+        model,
         user_id="avery",
         knowledge_base=kb,
         workspace=ROOT / "workspace",
@@ -113,10 +104,34 @@ async def main() -> None:
         citations=False,
         think_tool=False,
         board=False,
-        use_llm_summarizer=False,
         max_tool_iterations=8,
     )
-    await _ask(deep, "create_deep_agent")
+    deep_result = await deep.arun(question)
+    print("\n[create_deep_agent]")
+    print((deep_result.output.text() or "").strip())
+
+    handbook = ROOT / "handbook.md"
+    handbook.write_text(
+        "# Auth\n\nUse OAuth2 bearer tokens for API login.\n",
+        encoding="utf-8",
+    )
+    combo = Agent(
+        model,
+        knowledge_base=KnowledgeBase(
+            store=open_vector_store(engine="memory"),
+            sources=[handbook],
+            name="handbook",
+            description="Internal engineering handbook.",
+        ),
+        retrievers=[CatalogRetriever()],
+        instructions="Use search_handbook and search_catalog when relevant.",
+        max_tool_iterations=6,
+    )
+    combo_result = await combo.arun(
+        "How do we authenticate to the API? What is the widget SKU?"
+    )
+    print("\n[KnowledgeBase + retrievers]")
+    print((combo_result.output.text() or "").strip())
 
 
 if __name__ == "__main__":

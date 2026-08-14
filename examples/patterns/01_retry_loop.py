@@ -1,9 +1,10 @@
-"""Retry Loop — Quality gate with automatic retry.
+"""Quality gates — Agent verifier and Workflow.loop.
 
-USE WHEN: You need verified output quality. The agent retries
-until a verifier function approves the result.
+USE WHEN: You need verified output quality with automatic retry.
 
-Combines Agent + Loop + Verifier for self-correcting behavior.
+Two layers:
+  - ``Agent(verifier=..., retry_on_failure=True)`` — single-agent gate
+  - ``Workflow(...).loop(agent, until=verify)`` — process-level gate
 """
 
 import asyncio
@@ -11,10 +12,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from loomable.agent import Agent
-from loomable.providers.openai import AzureOpenAIProvider
+import sys
+from pathlib import Path
 
-provider = AzureOpenAIProvider()
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _provider import require_provider  # noqa: E402
+
+from loomable import Agent, Workflow
+from loomable.display import pp
+
+provider = require_provider()
 
 
 def verify_has_code(output, ctx) -> bool:
@@ -23,6 +30,7 @@ def verify_has_code(output, ctx) -> bool:
     return "```python" in text or "def " in text
 
 
+# --- Agent-level verifier ---
 agent = Agent(
     model=provider,
     role="Python Developer",
@@ -33,9 +41,17 @@ agent = Agent(
     max_verify_retries=2,
 )
 
-result = asyncio.run(agent.arun("Write a function to check if a string is a palindrome."))
+print("=== Agent verifier ===")
+pp(asyncio.run(agent.arun("Write a function to check if a string is a palindrome.")))
 
-# Pretty-print with loop/verification info
-from loomable.display import pp
+# --- Workflow.loop gate ---
+polisher = Agent(
+    model=provider,
+    role="Code Polisher",
+    goal="Produce a short Python function with a code fence",
+    instructions="Reply with a ```python code fence containing a working function.",
+)
 
-pp(result)
+wf = Workflow("quality").loop(polisher, until=verify_has_code, max_iterations=3)
+print("\n=== Workflow.loop ===")
+print(asyncio.run(wf.arun("Write is_palindrome(s) in Python.")).output.text())

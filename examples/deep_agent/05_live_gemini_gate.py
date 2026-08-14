@@ -2,7 +2,7 @@
 
 Measures schema budget, runs a bounded research brief, and checks accept.
 
-    DEEP_AGENT_LIVE=1 python examples/deep_agent/04_live_gemini_gate.py
+    DEEP_AGENT_LIVE=1 python examples/deep_agent/05_live_gemini_gate.py
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from loomable.agent.deep import DEEP_DISCOVERY_CORE_TOOLS, create_deep_agent
-from loomable.agent.tools import FunctionTool, MCPTool
 from loomable.providers.gemini import GeminiProvider
 
 
@@ -27,13 +26,7 @@ ROOT = Path(__file__).resolve().parent / ".workspace_gemini_gate"
 
 
 def _schema_count(built) -> int:
-    n = 0
-    for tool_obj in built.tool_runtime._tools.values():
-        if isinstance(tool_obj, (FunctionTool, MCPTool)):
-            n += 1
-        else:
-            n += 1
-    return n
+    return len(built.tool_runtime.names)
 
 
 def _catalog_counts(built) -> dict:

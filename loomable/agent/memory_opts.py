@@ -30,6 +30,7 @@ MEMORY_KEYS: tuple[str, ...] = (
     "memory_backend",
     "note_store",
     "memory_tool",
+    "memory_auto_extract",
     "knowledge",
     "knowledge_base",
     "embedder",
@@ -52,6 +53,7 @@ _AGENT_ATTR: dict[str, str] = {
     "memory_backend": "_memory_backend",
     "note_store": "_note_store",
     "memory_tool": "_memory_tool",
+    "memory_auto_extract": "_memory_auto_extract",
     "knowledge": "_knowledge",
     "knowledge_base": "_knowledge_base",
     "embedder": "_embedder",
@@ -66,6 +68,8 @@ __all__ = [
     "role_scoped_memory",
     "inherit_agent_knowledge",
     "apply_knowledge_base",
+    "inherit_agent_require_tools",
+    "apply_require_tools",
 ]
 
 
@@ -191,3 +195,79 @@ def apply_knowledge_base(
         child = getattr(obj, attr, None)
         if child is not None and child is not obj:
             apply_knowledge_base(child, _seen=seen, **kwargs)
+
+
+def inherit_agent_require_tools(
+    agent: Any,
+    *,
+    require_tools: list[str] | None = None,
+    strict_require_tools: bool | None = None,
+    overwrite: bool = False,
+) -> None:
+    """Fill missing ``require_tools`` / ``strict_require_tools`` on an Agent."""
+    if agent is None or not hasattr(agent, "_require_tools"):
+        return
+    changed = False
+    if require_tools:
+        existing = list(getattr(agent, "_require_tools", None) or [])
+        if overwrite or not existing:
+            agent._require_tools = list(require_tools)
+            changed = True
+    if strict_require_tools is True and not getattr(agent, "_strict_require_tools", False):
+        agent._strict_require_tools = True
+        changed = True
+    if changed and hasattr(agent, "_built"):
+        agent._built = None
+
+
+def apply_require_tools(
+    obj: Any,
+    *,
+    require_tools: list[str] | None = None,
+    strict_require_tools: bool | None = None,
+    _seen: set[int] | None = None,
+) -> None:
+    """Walk Agent / Team / Step / Workflow graphs and inherit require_tools."""
+    if obj is None or (not require_tools and not strict_require_tools):
+        return
+    seen = _seen if _seen is not None else set()
+    if isinstance(obj, (list, tuple)):
+        for item in obj:
+            apply_require_tools(
+                item,
+                require_tools=require_tools,
+                strict_require_tools=strict_require_tools,
+                _seen=seen,
+            )
+        return
+    oid = id(obj)
+    if oid in seen:
+        return
+    seen.add(oid)
+    kwargs = dict(
+        require_tools=require_tools, strict_require_tools=strict_require_tools
+    )
+    if hasattr(obj, "_require_tools") and callable(getattr(obj, "build", None)):
+        inherit_agent_require_tools(obj, **kwargs)
+        for member in getattr(obj, "_subagents", None) or []:
+            apply_require_tools(member, _seen=seen, **kwargs)
+        for member in getattr(obj, "_members", None) or []:
+            apply_require_tools(member, _seen=seen, **kwargs)
+        return
+    inner = getattr(obj, "_agent", None)
+    if inner is not None and inner is not obj:
+        apply_require_tools(inner, _seen=seen, **kwargs)
+    runnable = getattr(obj, "runnable", None)
+    if runnable is not None and runnable is not obj:
+        apply_require_tools(runnable, _seen=seen, **kwargs)
+    for attr in ("_members", "_steps", "_then_steps", "_else_steps"):
+        child = getattr(obj, attr, None)
+        if child:
+            apply_require_tools(child, _seen=seen, **kwargs)
+    nodes = getattr(obj, "_nodes", None)
+    if isinstance(nodes, dict):
+        apply_require_tools(list(nodes.values()), _seen=seen, **kwargs)
+    for attr in ("_body", "_true", "_false"):
+        child = getattr(obj, attr, None)
+        if child is not None and child is not obj:
+            apply_require_tools(child, _seen=seen, **kwargs)

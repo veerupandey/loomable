@@ -34,7 +34,7 @@ import asyncio
 import json
 import re
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any, AsyncIterator, Callable, Literal, Sequence
 
 from loomable.agent.context import RunContext
@@ -289,6 +289,14 @@ async def map_specialists(
     max_run_tokens: int | None = None,
     tool_hooks: list[Any] | None = None,
     skills: list[Any] | None = None,
+    think_tool: bool = False,
+    require_tools: list[str] | None = None,
+    strict_require_tools: bool | None = None,
+    require_confirmation: list[str] | None = None,
+    approver: Any | None = None,
+    resilience: Any | None = None,
+    tool_timeout: float | None = None,
+    tool_concurrency: int | None = None,
 ) -> list[str]:
     """Dispatch: spawn one ephemeral specialist per plan step (parallel)."""
     from loomable.agent.delegation import spawn_specialist
@@ -316,6 +324,14 @@ async def map_specialists(
                 max_run_tokens=max_run_tokens,
                 tool_hooks=tool_hooks,
                 skills=skills,
+                think_tool=think_tool,
+                require_tools=require_tools,
+                strict_require_tools=strict_require_tools,
+                require_confirmation=require_confirmation,
+                approver=approver,
+                resilience=resilience,
+                tool_timeout=tool_timeout,
+                tool_concurrency=tool_concurrency,
             )
 
         if sem is None:
@@ -381,6 +397,9 @@ def _default_agent(
             "resilience",
             "think_tool",
             "require_tools",
+            "strict_require_tools",
+            "require_confirmation",
+            "approver",
         ):
             if key in runtime and runtime[key] is not None:
                 kwargs[key] = runtime[key]
@@ -539,6 +558,14 @@ def build_case_workflow(
                 max_run_tokens=rt.get("max_run_tokens"),
                 tool_hooks=rt.get("tool_hooks"),
                 skills=rt.get("skills"),
+                think_tool=bool(rt.get("think_tool", False)),
+                require_tools=rt.get("require_tools"),
+                strict_require_tools=rt.get("strict_require_tools"),
+                require_confirmation=rt.get("require_confirmation"),
+                approver=rt.get("approver"),
+                resilience=rt.get("resilience"),
+                tool_timeout=rt.get("tool_timeout"),
+                tool_concurrency=rt.get("tool_concurrency"),
             )
         else:
             async def _work(step: str) -> str:
@@ -704,7 +731,12 @@ def build_case_workflow(
 
 
 class Case:
-    """Long-running case: goal + WorkItems board + dispatch + accept gate."""
+    """Long-running case: goal + WorkItems board + dispatch + accept gate.
+
+    ``max_steps`` caps planner WorkItems for this Case. When wrapping via
+    ``Agent(mode="case", max_plan_steps=...)``, the Agent knob maps to
+    ``max_steps`` on the underlying Case.
+    """
 
     def __init__(
         self,
@@ -777,7 +809,7 @@ class Case:
             from loomable.memory.compose import is_memory_bundle
 
             if is_memory_bundle(memory):
-                composed = memory.with_user_id(user_id).to_agent_kwargs()
+                composed = memory.with_scopes(user_id=user_id).to_agent_kwargs()
                 for k, v in composed.items():
                     agent_memory.setdefault(k, v)
         # Case session_id is the checkpointer thread; role agents get scoped ids.
@@ -861,6 +893,14 @@ class Case:
             "tool_concurrency": getattr(agent, "_tool_concurrency", None),
             "resilience": getattr(agent, "_resilience", None),
             "think_tool": bool(getattr(agent, "_think_tool", False)),
+            "require_tools": list(getattr(agent, "_require_tools", None) or []) or None,
+            "strict_require_tools": bool(getattr(agent, "_strict_require_tools", False))
+            or None,
+            "require_confirmation": list(
+                getattr(agent, "_require_confirmation", None) or []
+            )
+            or None,
+            "approver": getattr(agent, "_approver", None),
         }
         return cls(
             model=getattr(agent, "_model", None),
@@ -927,6 +967,13 @@ class Case:
                 ss["board"] = self.board.to_dict()
         result.metadata = meta
         return result
+
+    def cancel(self) -> bool:
+        """Request cooperative cancellation of the in-flight Case workflow."""
+        wf = self._workflow
+        if wf is not None and hasattr(wf, "cancel"):
+            return bool(wf.cancel())
+        return False
 
     def _hydrate_board_from_state(self, shared: Any) -> None:
         if self.board is None or shared is None:

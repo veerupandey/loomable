@@ -1,13 +1,13 @@
 # Loomable — High-Level API Reference
 
-A production-grade agent framework. Build agents in a few lines, scale to Teams,
+Public beta agent framework. Build agents in a few lines, scale to Teams,
 Workflows, and Cases with SharedState, HITL, checkpoints, and AG-UI SSE.
 
 ---
 
 ## Table of Contents
 
-- [Progressive Disclosure (Levels 0–7)](#progressive-disclosure-levels-07)
+- [Progressive Disclosure (Levels 0–6)](#progressive-disclosure-levels-06)
 - [Quick Start](#quick-start)
 - [Agent](#agent)
 - [Case](#case)
@@ -30,7 +30,7 @@ Workflows, and Cases with SharedState, HITL, checkpoints, and AG-UI SSE.
 
 ---
 
-## Progressive Disclosure (Levels 0–7)
+## Progressive Disclosure (Levels 0–6)
 
 The API is designed so you start simple and add capabilities incrementally — never rewrite into a new DSL. Each level adds configuration to the level below.
 
@@ -48,7 +48,7 @@ print(result.output.text())
 
 No optimizer, no engine, no checkpointer, no verifier, no deps, no memory. Just works.
 
-### Level 1: Agent + Tools (auto-escalates)
+### Level 1: Agent + Tools
 
 Add tools and the agent automatically uses its tool loop. No strategy selection needed.
 
@@ -64,7 +64,13 @@ agent = Agent(model="openai:gpt-4o-mini", tools=[search])
 result = agent.run("Find the latest AI news")
 ```
 
-The complexity router auto-escalates: simple inputs get single-shot responses, complex inputs trigger the tool loop or self-plan — all transparent.
+With tools attached, runs use the tool loop; without tools, a single model call. Pass
+`complexity_router=` only when you want explicit single-shot / tool-loop / plan routing.
+
+`require_tools=["write_file:output/x.md"]` nudges until those side effects happen.
+`strict_require_tools=True` raises `RequireToolsError` if they never do. The same
+knobs inherit onto Agent steps via `Workflow(require_tools=...)` or
+`.step(..., require_tools=...)`.
 
 ### Level 2: Agent + Verifier (output guardrail)
 
@@ -107,7 +113,7 @@ result = await loop.arun("Write an excellent summary of AI trends")
 # Repeats up to 3 times, feeding failure detail forward for self-correction
 ```
 
-The Loop is itself a Runnable — usable standalone or as a node in a Flow.
+The Loop is itself a Runnable — usable standalone or as a step in a Workflow.
 
 ### Level 4: Workflow (preferred high-level process API)
 
@@ -134,7 +140,7 @@ Fluent builders for complex cases:
 
 ```python
 wf = (
-    Workflow("sev1", session_id="inc-1", memory=True)
+    Workflow("sev1", session_id="inc-1")
     .step("gather", gatherer)
     .parallel(analyst=analyst, visual=visual)          # concurrent
     .branch(when=needs_human, then=approver, else_=auto)  # conditional
@@ -143,145 +149,68 @@ wf = (
 )
 ```
 
-Declarative style still works: `Workflow("pipe", steps=[Step("a", a), Step("b", b)])`.
+Declarative style: `Workflow("pipe", steps=[Step("a", a), Step("b", b)])`.
 
-Low-level `Flow` / `sequential()` / `Edge` remain available as an advanced escape hatch.
+Low-level `Flow` / `Edge` remain available as an advanced escape hatch
+(see [Flow Engine](#flow-engine)). Prefer the `Workflow` builders above.
 
-### Level 4b: Flow list shorthand (advanced alias)
+### Level 5: Workflow with checkpointer
 
-Compose multiple agents/functions into a sequential workflow. The simplest Flow — just a list.
-
-```python
-from loomable.flow import Flow
-
-def research(input):
-    return f"Research findings about: {input}"
-
-def write(input):
-    return f"Article based on: {input}"
-
-def edit(input):
-    return f"Polished: {input}"
-
-flow = Flow([research, write, edit])
-result = await flow.arun("AI agents in 2025")
-```
-
-Or use the `sequential()` helper (replaces the old `Pipeline`):
+Prefer `Workflow` for production processes. Agent-to-Agent sharing is sequential
+output chaining via SharedState. ``memory=True`` attaches a blackboard on
+``RunContext.memory`` for custom/callable steps — not Agent chat memory.
+Durable checkpoints are opt-in.
 
 ```python
-from loomable.flow import sequential
-
-flow = sequential(research, write, edit)
-result = await flow.arun("AI agents in 2025")
-```
-
-Zero-config: no engine, optimizer, memory, or checkpointer needed.
-
-### Level 5: Flow with parallel engine
-
-Run independent branches concurrently. The engine handles supersteps automatically.
-
-```python
-from loomable.flow import Flow, Edge
-
-flow = Flow(
-    {"research": researcher, "analyze": analyst, "synthesize": writer},
-    edges=[
-        Edge(source="research", target="synthesize"),
-        Edge(source="analyze", target="synthesize"),
-    ],
-    engine="auto",  # auto-selects ParallelEngine (research & analyze are independent)
-)
-result = await flow.arun("Compare AI frameworks")
-```
-
-Or use the `parallel()` helper for the fully-concurrent broadcast pattern:
-
-```python
-from loomable.flow import parallel
-
-flow = parallel(researcher, analyst, writer)
-result = await flow.arun("Analyze the AI market")
-```
-
-Engine selection is automatic by default: linear chains get Sequential, independent branches get Parallel, a manager node gets Hierarchical.
-
-### Level 6: Flow with optimizer, memory, checkpointer
-
-Add optimization, shared memory, and durable checkpointing for production workflows.
-
-```python
-from loomable.flow import Flow, Optimizer, TieredMemoryStore, MemoryStore
+from loomable import Agent, Workflow
 from loomable.persist import JsonFileCheckpointer
 
-flow = Flow(
-    {"research": researcher, "draft": writer, "review": reviewer},
-    edges=[
-        Edge(source="research", target="draft"),
-        Edge(source="draft", target="review"),
-    ],
-    optimizer=True,  # enables parallelization, dead-node elimination, CSE, model-tier rules
-    memory=TieredMemoryStore(),
-    checkpointer=JsonFileCheckpointer(".checkpoints"),
-    session_id="article-v1",
+wf = (
+    Workflow(
+        "article",
+        session_id="article-v1",
+        checkpointer=JsonFileCheckpointer(".checkpoints"),
+    )
+    .step("research", researcher)
+    .step("draft", writer)
+    .step("review", reviewer)
 )
-result = await flow.arun("Write a technical article")
-
-# Inspect the optimization
-plan = flow.explain()
-print(plan)  # shows original vs optimized topology + applied rules
+result = await wf.arun("Write a technical article")
+print(wf.explain())  # inspect topology
 ```
 
-Everything is opt-in. An unoptimized, memory-free, uncheckpointed flow runs identically to one without these options.
+Low-level `Flow(optimizer=..., memory=TieredMemoryStore(), ...)` remains an
+advanced escape hatch; teaching demos and new code should use `Workflow`.
 
-### Level 7: Custom engine, HITL, observability
+### Level 6: Workflow HITL + observability
 
-Full control: custom execution engines, human-in-the-loop gates, and context-snapshot observability.
+Human-in-the-loop and durable resume stay on `Workflow` — mark a step with
+`confirm=True`, catch pause, then `approve()` + `arun(resume=True)`.
 
 ```python
-from loomable.flow import (
-    Flow, Node, Edge, FlowPaused,
-    ExecutionEngine, ContextSnapshotConfig,
-)
+from loomable import Agent, Workflow, FlowPaused
 from loomable.persist import JsonFileCheckpointer
 
-# Custom engine (satisfies the ExecutionEngine protocol)
-class MyStreamingEngine:
-    async def run(self, flow, input, state, context):
-        # Custom execution logic — dependency-driven, streaming, etc.
-        ...
-
-# Human-in-the-loop: mark a node as requiring confirmation
-flow = Flow(
-    {
-        "draft": Node(node_id="draft", runnable=writer),
-        "publish": Node(node_id="publish", runnable=publisher, require_confirmation=True),
-    },
-    edges=[Edge(source="draft", target="publish")],
-    engine=MyStreamingEngine(),
-    checkpointer=JsonFileCheckpointer(".checkpoints"),
-    session_id="pub-flow",
-    events=my_event_emitter,  # receives node_start/node_end + context_snapshot events
+wf = (
+    Workflow("publish", session_id="pub-1", checkpointer=JsonFileCheckpointer(".checkpoints"))
+    .step("draft", writer)
+    .step("publish", publisher, confirm=True)
 )
 
 try:
-    result = await flow.arun("Publish the quarterly report")
-except FlowPaused as paused:
-    # Flow paused before 'publish' — checkpoint saved, process can exit
-    # Later: resume with approval decision
-    ...
+    result = await wf.arun("Publish the quarterly report")
+except FlowPaused:
+    # Checkpoint saved — process can exit. Later:
+    await wf.approve("publish")
+    result = await wf.arun(resume=True)
 ```
 
-Context-snapshot observability (opt-in, zero overhead when disabled):
+`confirm=True` requires `checkpointer=` and `session_id=`. It is not supported inside
+`Workflow.parallel()`, `.branch()`, or `.loop()`. Agent-tool HITL is a separate knob:
+`require_confirmation=` plus an `approver=` callback (default deny-all, headless-safe).
 
-```python
-from loomable.flow import ContextSnapshotConfig
-
-# Enable snapshots to see exactly what context each node received
-config = ContextSnapshotConfig(enabled=True, metadata_only=False)
-# Attach via events emitter — diagnose "green trace but wrong output" failures
-```
+Low-level `Flow` / `Node` / custom `ExecutionEngine` remain available as an
+advanced escape hatch; new code should stay on `Workflow`.
 
 ---
 
@@ -306,7 +235,7 @@ from loomable.agent import Agent
 
 agent = Agent(
     model="openai:gpt-4o-mini",       # model string or ModelSpec or provider instance
-    name="researcher",                  # optional name (used in tracing, orchestration)
+    name="researcher",                  # optional metadata on BuiltAgent
     role="Senior Researcher",           # who the agent is (used in system prompt + delegation)
     goal="Find accurate information",   # what it optimizes for
     instructions="Be concise.",         # additional system prompt instructions
@@ -375,12 +304,19 @@ result = await team.arun("Review our API design")
 
 | Mode | Behavior |
 |------|----------|
-| `coordinate` | Delegate to ALL members, synthesize results |
-| `route` | Pick the single best member for the task |
-| `broadcast` | Send same input to all, merge labeled results |
-| `sequential` | Chain members in order, each builds on previous |
+| `coordinate` | Soft: LLM delegates to ALL members, synthesizes results |
+| `route` | Soft: LLM picks the single best member |
+| `broadcast` | Hard by default: same input to all, merge labeled results |
+| `sequential` | Hard by default: chain members in order |
 
-Under the hood, `Team` creates a parent Agent with auto-generated instructions and `subagents=members`.
+`hard=True` is only valid with `broadcast` / `sequential` (raises otherwise).
+`hard=False` on those modes opts into soft LLM coordination instead.
+
+`mode="coordinate"` (soft) requires every `delegate_to_*` tool and, if the LLM
+still skips members, runs those members deterministically and appends their
+output (`metadata["team_coordinate_fallback"]`).
+
+Under the hood, soft modes create a parent Agent with auto-generated instructions and `subagents=members`.
 
 ### Running
 
@@ -395,6 +331,9 @@ result = agent.run("hello")
 async for chunk in agent.astream("hello"):
     print(chunk.delta.data.decode(), end="")
 ```
+
+`astream` uses provider `stream()` only for single-shot runs (no tools). With tools,
+it falls back to `arun` then chunks so the tool loop is preserved.
 
 ### RunResult
 
@@ -428,10 +367,9 @@ agent = create_deep_agent(
     # discovery_core="research" (default, correctness-first)
     # discovery_core="research-slim"  # smaller schema budget (≥50% target)
 )
+await agent.arun("Research any topic; write reports/brief.md")
 
-```python
 # Deep code — index a repo (Alibaba zvec on disk by default) + coding skill + sandbox
-# Swap store via open_vector_store(postgres_url=...) or backend=PgVectorBackend(...)
 agent = create_deep_agent(
     model,
     profile="code",
@@ -439,12 +377,6 @@ agent = create_deep_agent(
     # or code_index=await CodeIndex.build("./my-app", embedder=OpenAIEmbedder())
 )
 ```
-
-await agent.arun("Research any topic; write reports/brief.md")
-```
-
-`create_research_agent(...)` is a **deprecated** alias for `profile="research"`
-(emits `DeprecationWarning`; prefer `create_deep_agent`).
 
 Pillars:
 
@@ -468,10 +400,12 @@ Pillars:
 ```python
 built = agent.build()
 # During an in-flight arun / astream_events:
-built.cancel()   # or agent.cancel() — cooperative at tool-loop boundaries
+built.cancel()   # or agent.cancel() / workflow.cancel() / case.cancel() / team.cancel()
 ```
 
-SSE / NDJSON client disconnect on `mount_*` also calls cancel.
+Cooperative at tool-loop and Workflow step boundaries (not a hard abort of in-flight
+provider HTTP). SSE / NDJSON disconnect on `mount_*` calls `cancel()` on the mounted
+runnable (Agent, Case, Workflow, Team).
 
 See `examples/deep_agent/` and `loomable/skills/research/SKILL.md`.
 
@@ -480,7 +414,7 @@ See `examples/deep_agent/` and `loomable/skills/research/SKILL.md`.
 ## Case
 
 Long-running goal work with an optional WorkItems board. Compiles to a `Workflow`
-(plan → dispatch → synthesize → accept) and shares `SharedState` with Flow engines.
+(plan → dispatch → synthesize → accept) and shares `SharedState` with the process.
 
 ```python
 from loomable import Case
@@ -514,9 +448,9 @@ Multi-agent collaboration where an agent delegates to specialist subagents at ru
 | I need... | Use... |
 |-----------|--------|
 | One agent with full flexibility on who to delegate to | `Agent(subagents=[...])` |
-| Named orchestration mode without custom instructions | `Team(mode="coordinate")` |
-| Explicit step-by-step pipeline | `sequential(a, b, c)` |
-| Workers + manager synthesis | `coordinate(workers=[...], manager=mgr)` |
+| Named orchestration mode without custom instructions | `Team(mode="coordinate"\|"route"\|...)` |
+| Explicit step-by-step pipeline | `Workflow(...).step(...).step(...)` |
+| Workers + manager synthesis | `Team(mode="coordinate")` |
 
 ### Subagents (recommended for most cases)
 
@@ -689,10 +623,10 @@ agent = Agent(
 
 | Layer | Class | What it stores |
 |-------|--------|----------------|
-| Conversation | `ConversationMemory` (`short=`) | L1 turns + L2 summaries for `session_id` |
-| User | `UserMemory` (`long=`) | Cross-session facts via `NoteStore` (scoped) |
-| Knowledge | `KnowledgeMemory` | RAG docs into the prompt |
-| Working | `WorkingMemory` | Flow blackboard (`TieredMemoryStore`) — not Agent chat |
+| Conversation | `ConversationMemory` | L1 turns + L2 summaries for `session_id` |
+| User | `UserMemory` | Cross-session facts via `NoteStore` (scoped) |
+| Knowledge | `KnowledgeMemory` | Passive RAG into the prompt, or `store`/`sources`/`knowledge_base` → `search_*` tools |
+| Working | `WorkingMemory` | `Workflow(..., memory=True)` blackboard on `RunContext.memory` for **callable** steps — Agent steps share via SharedState output chaining |
 
 ### Scopes (user_id, claim_id, …)
 
@@ -714,8 +648,8 @@ MemoryScope.of(user_id="alice", claim_id="CLM-4421")
   (e.g. `session_id=f"claim:{claim_id}"`) and/or Postgres `user_id=` tenant  
   (`scope.tenant_key()`).
 
-Legacy kwargs (`session_store=`, `note_store=`, `memory_backend=`) still work and
-**override** the matching compose layer when both are set.
+Prefer `Memory.compose` for new code. Do not pass both `memory=` and flat
+store kwargs (`session_store=` / `note_store=` / `memory_backend=`) — that raises.
 
 `user_id` + `scopes` are applied automatically when using `Memory.compose` or when
 you pass a bare `note_store=` with `user_id`/`scopes`.
@@ -734,10 +668,10 @@ you pass a bare `note_store=` with `user_id`/`scopes`.
 
 | Surface | Conversation L1/L2 | Long-term L3 | Notes |
 |---------|--------------------|--------------|-------|
-| **Agent** | `memory=` compose or `session_store` | `UserMemory` / `note_store` | Canonical API |
-| **Team** | Same kwargs → **coordinator** | Same → coordinator | Members keep their own memory |
+| **Agent** | `Memory.compose` (or flat stores alone) | `UserMemory` notes layer | Prefer compose; `scopes=` / `user_id=` stamp UserMemory |
+| **Team** | Same memory kwargs → **coordinator** | Same → coordinator | No Team-level `scopes=`; set on members or coordinator `memory=` / `user_id=` |
 | **Case** | Same → role-scoped sessions | Shared notes | `from_agent` copies memory |
-| **Flow step** | Agent’s own memory | Agent’s own notes | `Flow(memory=True)` is TieredMemory blackboard |
+| **Workflow step** | Agent’s own memory | Agent’s own notes | Cross-step sharing is SharedState; `Workflow(memory=True)` is a callable blackboard |
 | **mount_agent** | `bind_session` reloads L1/L2 | unchanged | |
 
 ### Minimal chat (same process)
@@ -751,28 +685,24 @@ await agent.arun("What's my name?")  # Alice
 ### Conversation store (L1/L2) — including Postgres
 
 ```python
-from loomable.memory import open_session_store
+from loomable import Agent, ConversationMemory, Memory, open_session_store
 
 store = open_session_store("sqlite", path="sessions.db")
 # store = open_session_store("file", path="./.sessions")
 # store = open_session_store("postgres", url=DSN, user_id="alice")
 # store = open_session_store("memory")
 
-agent = Agent(model=..., session_id="conv-1", session_store=store)
+memory = Memory.compose(
+    conversation=ConversationMemory(store=store, window=8),
+)
+agent = Agent(model=..., memory=memory, session_id="conv-1")
 await agent.arun("I prefer dark mode")
 
-agent2 = Agent(model=..., session_id="conv-1", session_store=store, resume=True)
+agent2 = Agent(model=..., memory=memory, session_id="conv-1", resume=True)
 ```
 
-Or pass a KV backend (whole session saved under `session:{id}`):
-
-```python
-agent = Agent(
-    model=...,
-    session_id="conv-1",
-    memory_backend=PostgresMemoryBackend(DSN, user_id="alice"),
-)
-```
+Flat store kwargs (`session_store=` / `memory_backend=`) remain available when you
+are not using `Memory.compose`. Prefer compose for new code.
 
 ### Long-term (L3): Alibaba zvec by default; FAISS / Postgres optional
 
@@ -882,7 +812,8 @@ docker compose up -d
 ```
 
 `PostgresCheckpointer` is for Case/Workflow resume — not Agent chat history.  
-`memory_tool=True` without a note store is a no-op.  
+`memory_tool=True` / `UserMemory(auto_extract=True)` without a resolvable note store raises `AgentConfigError` (pass `note_store=` or `embedder=`).  
+`knowledge=[...]` without `embedder=` also raises — use `knowledge_base=` for search tools without passive injection.  
 Install L3 default: `pip install 'loomable[zvec]'`.  
 `knowledge` RAG uses its own store when configured — separate from `note_store`.
 
@@ -1018,7 +949,7 @@ agent = Agent(model="openai:gpt-4o-mini", text_only=True)
 Other examples: `modalities="text+image"`, `modalities=["text", "audio"]`,
 `capabilities="text+audio"`. Audio remains opt-in.
 
-`multimodal=True` is a deprecated no-op kept for back-compat.
+Media is enabled by default. Use `modalities=` or `text_only=` to restrict.
 
 ### Input: passing images
 
@@ -1044,7 +975,7 @@ result = await agent.arun("Analyze", images=[
     Image(content=raw_bytes),
 ])
 
-# Explicit control via low-level helper (still works)
+# Explicit control via low-level helper
 from loomable.agent import image
 result = await agent.arun("Analyze", images=[
     image(path="./photo.jpg"),
@@ -1114,7 +1045,7 @@ if result.images:
 
 Ordering: model-generated media appears first, followed by tool-generated media in tool invocation order.
 
-### Output: low-level access (still works)
+### Output: low-level access
 
 ```python
 # Image output (when model generates images)
@@ -1233,9 +1164,10 @@ async for chunk in agent.astream("Tell me about AI"):
         print()  # final chunk
 ```
 
-- Real token-level deltas when the provider supports `stream()`
-- Automatic fallback to chunked output for non-streaming providers
-- Same context assembly, memory, and capability gating as `arun()`
+- Real token-level deltas when the provider supports `stream()` **and** the run is
+  single-shot (no tools / no complexity router)
+- Automatic fallback to `arun` then chunked output otherwise (preserves tool loop)
+- Same context assembly, memory, and capability gating as `arun()` on the fallback path
 
 ### AG-UI events (in-process)
 
@@ -1255,7 +1187,7 @@ async for ev in workflow.astream_events(prompt):
 
 ## AG-UI SSE
 
-CopilotKit-compatible event types over `text/event-stream`. No hard CopilotKit dependency.
+AG-UI event types over `text/event-stream`.
 
 | Type family | Events |
 |-------------|--------|
@@ -1273,9 +1205,9 @@ app = FastAPI()
 # Optional api_key=: require Authorization: Bearer … or X-API-Key (401 if missing)
 mount_agent(app, agent, prefix="/agent", api_key="secret")
 mount_case(app, case, prefix="/cases", api_key="secret")
-# POST /agent/run/events  → text/event-stream (disconnect → cancel)
+# POST /agent/run/events  → text/event-stream (disconnect → cancel when supported)
 # POST /cases/run/events  → text/event-stream
-# POST /agent/run/stream  → application/x-ndjson (legacy)
+# Optional: POST /agent/run/stream → NDJSON (Agent/BuiltAgent only; omitted for Case / mode=case)
 ```
 
 See [SECURITY.md](../SECURITY.md) for trust boundaries.
@@ -1284,7 +1216,8 @@ See [SECURITY.md](../SECURITY.md) for trust boundaries.
 
 ## Flow Engine
 
-The unified composition model. One primitive (`Runnable`), one composition path (`Flow` / `Workflow`).
+Prefer **`Workflow`** for multi-step processes. `Flow` / engines / edges are the
+compiled graph escape hatch underneath.
 
 ### Core Concepts
 
@@ -1297,29 +1230,15 @@ The unified composition model. One primitive (`Runnable`), one composition path 
 | `SharedState` | Key/value blackboard for the run (node outputs, `plan_steps`, board, …) |
 | `Node` | A vertex in a Flow wrapping one Runnable |
 | `Edge` | A directed connection between nodes (optionally gated by a condition) |
-| `Map` | Fan-out one Runnable over a runtime list |
-| `Router` | Select which downstream node(s) run next |
+| `MapNode` | Fan-out one Runnable over a runtime list |
+| `RouterNode` | Select which downstream node(s) run next |
 
-### Convenience Constructors
+### Advanced Flow helpers
 
-```python
-from loomable.flow import sequential, parallel, route, coordinate, plan_and_execute
-
-# Sequential chain (replaces Pipeline)
-flow = sequential(step_a, step_b, step_c)
-
-# Concurrent broadcast (replaces Orchestrator PARALLEL)
-flow = parallel(researcher, analyst, writer)
-
-# Predicate routing (replaces Orchestrator ROUTE)
-flow = route(chooser_fn, {"research": researcher, "write": writer})
-
-# Hierarchical delegation (replaces Orchestrator COORDINATE)
-flow = coordinate(workers=[researcher, analyst], manager=synthesizer)
-
-# Plan → Map → Synthesize (replaces AutoPlan)
-flow = plan_and_execute(planner, worker, synthesizer)
-```
+Prefer `Workflow.step` / `.parallel` / `.branch` / `.map` and `Team(mode=...)`.
+Low-level helpers remain at `loomable.flow.helpers` (`sequential`, `parallel`,
+`route`, `coordinate`, `plan_and_execute`) as an escape hatch — `Workflow.map`
+uses `plan_and_execute` internally.
 
 ### Engines
 
@@ -1345,27 +1264,23 @@ from loomable.flow import SharedState, overwrite, append, merge
 
 ```python
 from loomable.flow import (
-    # Core
-    Runnable, FunctionRunnable,
-    # Tier 2
-    Loop, Verifier, VerdictResult, AlwaysOkVerifier, CallableVerifier,
-    # Tier 3
-    Flow, FlowPlan, Node, Edge, Map, Router,
-    # State
+    # Preferred process API
+    Workflow, Step, Condition, Parallel_Group, Loop,
+    Verifier, VerdictResult, AlwaysOkVerifier, CallableVerifier,
+    # Advanced graph escape hatch
+    Flow, FlowPlan, Node, Edge, MapNode, RouterNode, FlowConfigError,
+    FlowClass, start, listen, router,  # experimental — prefer Workflow
+    # State / engines
     SharedState, Reducer, overwrite, append, merge,
-    # Engines
     ExecutionEngine, SequentialEngine, ParallelEngine, HierarchicalEngine,
-    # Optimizer
     Optimizer, OptimizationRule,
-    # Memory
     MemoryStore, Tier, TieredMemoryStore,
-    # HITL
     FlowPaused,
-    # Observability
     ContextSnapshotConfig, MessageDisposition, MessageSnapshot,
-    # Helpers
-    sequential, parallel, route, coordinate, plan_and_execute,
+    plan_and_execute,  # used by Workflow.map
 )
+# Advanced Flow helpers: from loomable.flow.helpers import sequential, parallel, ...
+# ExtensionRegistry (experimental): from loomable.kernel.registry import ExtensionRegistry
 ```
 
 ---
@@ -1374,7 +1289,7 @@ from loomable.flow import (
 
 Two layers — both on `Agent` (and therefore `create_deep_agent`, Team, Case, Workflow):
 
-**Searchable knowledge base** (vector DB, like Agno Knowledge / a VectorStoreIndex):
+**Searchable knowledge base** (vector DB with ingest + `search_*` tools):
 
 ```python
 from loomable.providers.vector_store import open_vector_store
@@ -1453,8 +1368,9 @@ agent = Agent(
     on_tool_call=lambda name, args: print(f"→ {name}"),
     on_complete=lambda r: log(r),
     
-    # Human-in-the-loop
+    # Human-in-the-loop (tool names; default approver denies — pass approver=)
     require_confirmation=["send_email", "deploy"],
+    approver=lambda call: True,  # or a real prompt / policy
 )
 ```
 
@@ -1468,7 +1384,7 @@ agent = Agent(
 | Token budget | Evict-then-admit with pinned system/schema messages |
 | Loop detection | Stop no-progress loops with explicit reason |
 | Idempotency | Non-idempotent tools never re-dispatched |
-| HITL | Require approval for dangerous tools |
+| HITL | Workflow `confirm=True` + `approve()`, or Agent `require_confirmation=` + `approver=` (default deny) |
 | Think tool | Zero-side-effect scratchpad |
 | Plan tool | Model can self-escalate to fan-out |
 
@@ -1521,7 +1437,7 @@ hits = await retriever.retrieve("OAuth", k=5, filters={"page": 3, "tags": ["poli
 
 Ship **any** custom retriever the same way — implement ``name`` + ``async retrieve``
 (optional ``description``) and pass ``Agent(retrievers=[...])``. See
-``examples/advanced/04_ship_any_retriever.py``.
+``examples/advanced/07_ship_any_retriever.py``.
 
 **Multi-corpus** (routed composite)::
 
@@ -1533,7 +1449,7 @@ retriever = await build_agentic_retriever(
 )
 ```
 
-Legacy one-shot: ``build_retriever(..., mode="hybrid")`` still works.
+Simple hybrid retriever: ``build_retriever(..., mode="hybrid")``.
 Chunk strategies remain pluggable via ``register_strategy``.
 Deep code (``CodeIndex``) shares the same chunk/store stack.
 
@@ -1545,8 +1461,9 @@ PDFs are handled inside ``ingest``: extract pages, then page-chunk (split
 oversized pages with overlap — never truncate). Pass the ``.pdf`` path; do not
 pre-split.
 
-See ``examples/advanced/03_agentic_retriever.py`` and
-``examples/advanced/05_complex_agentic_rag.py``.
+See ``examples/advanced/06_agentic_retriever.py`` and the live multi-format demo
+``examples/advanced/08_complex_agentic_rag.py`` (``Agent(knowledge_base=...)``).
+Picky offline ingest regressions live in ``tests/unit/test_complex_multiformat_rag.py``.
 
 ## MCP Integration
 
@@ -1587,7 +1504,7 @@ app = FastAPI()
 mount_agent(app, agent, prefix="/agent", api_key="optional-shared-secret")
 # GET  /agent/health
 # POST /agent/run
-# POST /agent/run/stream   (NDJSON; disconnect → BuiltAgent.cancel)
+# POST /agent/run/stream   (NDJSON when astream is usable; disconnect → cancel)
 # POST /agent/run/events   (AG-UI SSE; disconnect → cancel)
 
 # Or dual-mount at / and /agent:
@@ -1605,7 +1522,9 @@ from loomable.serve import mount_case
 
 case = Case(model=provider, goal="...", board=True, accept=ok)
 mount_case(app, case, prefix="/cases", api_key="optional-shared-secret")
-# POST /cases/run/events → text/event-stream
+# POST /cases/run          → JSON result
+# POST /cases/run/events   → text/event-stream
+# (no /run/stream — Case has no astream; use SSE)
 ```
 
 ### MCP Server (expose agent as a tool)
@@ -1673,13 +1592,13 @@ forked = await checkpointer.fork("original-thread", "what-if-branch")
 
 ### Durable HITL
 
-```python
-from loomable.persist import PendingAction, Checkpoint
+Two different surfaces:
 
-# Agent pauses with pending action → checkpointed
-# Process can die here safely
-# On restart: load checkpoint, see pending action, approve, resume
-```
+- **Workflow step:** `Workflow.step(..., confirm=True)` raises `FlowPaused`; call
+  `await wf.approve(name)` then `await wf.arun(resume=True)`. Requires checkpointer +
+  session_id. Not supported inside `.parallel()` / `.branch()` / `.loop()`.
+- **Agent tools:** `Agent(require_confirmation=[...], approver=...)`. Default approver
+  denies every listed tool (headless-safe). This is not `FlowPaused`.
 
 ---
 
@@ -1753,7 +1672,7 @@ print(mermaid_graph(my_flow))
 
 - **Lean**: no mandatory deps beyond stdlib + httpx; flow-engine adds zero new mandatory dependencies
 - **Decoupled**: every feature is a Protocol with a zero-dep default
-- **Plug-and-play**: swap backends (vector DB, checkpointer, channels) without code changes
+- **Plug-and-play**: swap backends (vector DB, checkpointer) without code changes
 - **Kernel independence**: `loomable.kernel` imports nothing from edge layers; the flow-engine does not modify kernel
 - **Opt-in everything**: unconfigured features have zero overhead
 - **Fault isolation**: one tool/subagent/server failure never cascades

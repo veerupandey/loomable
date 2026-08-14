@@ -1,10 +1,9 @@
-"""Subagents with Memory Sharing — Parent context flows to children.
+"""Subagents sharing a conversation session.
 
-USE WHEN: Your subagents need access to the same conversation
-history or shared context as the parent.
+USE WHEN: Parent and specialists should see the same L1/L2 turns.
 
-Subagents inherit the parent's session context by default,
-so they can reference what was discussed earlier.
+Give them the same ``session_id`` (or a shared ``Memory.compose`` bundle).
+Delegation does not copy session context by itself.
 """
 
 import asyncio
@@ -12,10 +11,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from loomable.agent import Agent
-from loomable.providers.openai import AzureOpenAIProvider
+import sys
+from pathlib import Path
 
-provider = AzureOpenAIProvider()
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _provider import require_provider  # noqa: E402
+
+from loomable.agent import Agent
+
+provider = require_provider()
 
 researcher = Agent(
     model=provider,

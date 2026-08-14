@@ -12,7 +12,7 @@ Composable (preferred)::
     )
     agent = Agent(model=..., memory=memory, session_id="c1", user_id="alice")
 
-Legacy session store factory::
+Session store without compose (escape hatch)::
 
     store = open_session_store("postgres", url=DSN, user_id="alice")
     agent = Agent(model=..., session_id="chat-1", session_store=store)

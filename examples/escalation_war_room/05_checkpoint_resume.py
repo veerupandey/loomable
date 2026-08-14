@@ -1,44 +1,27 @@
-"""Phase B gate — kill mid-workflow and resume from checkpoint.
+"""Checkpoint resume — live Agents; prior output chains automatically.
 
-Simulates a crash after the gather step: incomplete checkpoint is written,
-process "dies", then a new Workflow with the same session_id + checkpointer
-resumes and skips gather.
+Simulate a crash after gather, then resume so gather is skipped and scribe
+runs on the gather Agent's output (no parse helpers).
 """
 
 from __future__ import annotations
 
 import asyncio
 import shutil
-from pathlib import Path
 
-from loomable import InMemoryCheckpointer, Step, Workflow
-from loomable.agent.run import RunResult
-from loomable.content import AgentOutput, Text
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from loomable import Agent, JsonFileCheckpointer, Workflow
+from loomable.agent.context import RunContext
+from loomable.flow.state import SharedState
 from loomable.persist.checkpoint import Checkpoint
 
-from _common import ROOT
+from _common import ROOT, make_provider
 
 CKPT_DIR = ROOT / ".checkpoints_phase_b"
 SESSION = "inc-88421-resume"
-
-
-async def gather(inp, *, context=None):
-    return RunResult(
-        output=AgentOutput(parts=[Text(f"EVIDENCE:{inp}")]),
-        session_id=SESSION,
-    )
-
-
-async def scribe(inp, *, context=None):
-    if hasattr(inp, "text") and callable(inp.text):
-        text = inp.text()
-    else:
-        text = str(inp)
-    return RunResult(
-        output=AgentOutput(parts=[Text(f"PACKET:{text}")]),
-        session_id=SESSION,
-        structured={"ok": True, "from": text},
-    )
 
 
 async def main() -> None:
@@ -46,24 +29,37 @@ async def main() -> None:
         shutil.rmtree(CKPT_DIR)
     CKPT_DIR.mkdir(parents=True)
 
-    from loomable.persist import JsonFileCheckpointer
-
     cp = JsonFileCheckpointer(str(CKPT_DIR))
+    model = make_provider()
 
-    # --- Run 1: execute only gather, then "crash" by writing incomplete CP ---
-    wf1 = (
+    gatherer = Agent(
+        model,
+        role="Gatherer",
+        goal="Collect incident evidence from the email",
+        instructions="Summarize the incident in 2-4 short lines with key facts.",
+    )
+    scribe = Agent(
+        model,
+        role="Scribe",
+        goal="Turn evidence into an escalation packet",
+        instructions=(
+            "You receive the previous gatherer's output as your input. "
+            "Write a short escalation packet summarizing impact and next actions."
+        ),
+    )
+    (
         Workflow("war-room-resume", session_id=SESSION, checkpointer=cp)
-        .step("gather", gather)
+        .step("gather", gatherer)
         .step("scribe", scribe)
     )
-    # Manually drive gather then write incomplete checkpoint (simulate kill)
-    from loomable.agent.context import RunContext
-    from loomable.flow.state import SharedState
 
-    flow = wf1.flow
+    # Drive gather only, then write incomplete checkpoint (simulate kill).
     state = SharedState()
     ctx = RunContext(shared_state=state)
-    gather_result = await gather("SEV-1 email")
+    gather_result = await gatherer.arun(
+        "SEV-1: UPI settlement batches stuck since 18:40 IST for BharatNova.",
+        context=ctx,
+    )
     state.write("gather", gather_result.output)
     await cp.put(
         Checkpoint(
@@ -76,35 +72,41 @@ async def main() -> None:
             complete=False,
         )
     )
-    print("[kill] incomplete checkpoint after gather")
+    print("[kill] incomplete checkpoint after gather Agent")
+    print(f"    gather={(gather_result.output.text() or '')[:160]}")
 
-    # --- Run 2: resume — gather must be skipped ---
-    calls = {"gather": 0, "scribe": 0}
-
-    async def gather2(inp, *, context=None):
-        calls["gather"] += 1
-        return await gather(inp, context=context)
-
-    async def scribe2(inp, *, context=None):
-        calls["scribe"] += 1
-        return await scribe(inp, context=context)
-
+    # Fresh Agents on resume — gather skipped; scribe sees prior Agent output.
+    gather2 = Agent(
+        make_provider(),
+        role="Gatherer",
+        goal="Collect incident evidence",
+        instructions="Summarize the incident briefly.",
+    )
+    scribe2 = Agent(
+        make_provider(),
+        role="Scribe",
+        goal="Turn evidence into an escalation packet",
+        instructions=(
+            "You receive the previous gatherer's output. "
+            "Write a short escalation packet."
+        ),
+    )
     wf2 = (
         Workflow("war-room-resume", session_id=SESSION, checkpointer=cp)
         .step("gather", gather2)
         .step("scribe", scribe2)
     )
-    result = await wf2.arun("SEV-1 email", resume=True)
+    result = await wf2.arun(
+        "SEV-1: UPI settlement batches stuck since 18:40 IST for BharatNova.",
+        resume=True,
+    )
 
-    assert calls["gather"] == 0, f"gather should be skipped, got {calls}"
-    assert calls["scribe"] == 1, f"scribe should run once, got {calls}"
+    skipped = result.metadata.get("skipped_nodes") or []
     assert result.metadata.get("resumed") is True
-    assert "gather" in (result.metadata.get("skipped_nodes") or [])
-    out = result.output.text()
-    assert "PACKET:" in out and "EVIDENCE:" in out, out
-    assert result.structured and result.structured.get("ok") is True
+    assert "gather" in skipped, skipped
+    out = (result.output.text() or "").strip()
+    assert out, out
 
-    # resume=True with no incomplete CP must fail
     await wf2.clear_checkpoint()
     try:
         await wf2.arun("x", resume=True)
@@ -112,9 +114,9 @@ async def main() -> None:
     except RuntimeError as exc:
         assert "no incomplete checkpoint" in str(exc).lower()
 
-    print("[ok] Phase B kill/resume gate")
-    print(f"    skipped={result.metadata.get('skipped_nodes')}")
-    print(f"    output={result.output.text()[:120]}")
+    print("[ok] Phase B kill/resume (live Agents, seamless handoff)")
+    print(f"    skipped={skipped}")
+    print(f"    output={out[:240]}")
 
 
 if __name__ == "__main__":

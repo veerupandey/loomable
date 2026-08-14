@@ -1,4 +1,4 @@
-"""Deep Agent — LangGraph-style long-horizon harness on loomable.
+"""Deep Agent — long-horizon harness on loomable (``create_deep_agent``).
 
 Pillars:
   1. write_todos planning
@@ -6,13 +6,8 @@ Pillars:
   3. task subagent tool
   4. think + optional memory / Case spine
 
-Run (scripted, no API key)::
-
-    python examples/deep_agent/01_research_brief.py
-
-Run with a live model::
-
-    DEEP_AGENT_LIVE=1 GEMINI_API_KEY=... python examples/deep_agent/01_research_brief.py
+Live by default when an API key is set (via ``examples/_provider.py``).
+Force the offline scripted path with ``DEEP_AGENT_SCRIPTED=1``.
 """
 
 from __future__ import annotations
@@ -20,11 +15,15 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _provider import has_live_provider, require_provider  # noqa: E402
 
 from loomable.agent import ModelSpec, create_deep_agent
 from loomable.kernel.models import ModelRequest, ModelResponse, ToolCall
@@ -131,27 +130,21 @@ class _ScriptedDeepProvider:
         )
 
 
-def _resolve_model() -> ModelSpec | str:
-    if os.environ.get("DEEP_AGENT_LIVE"):
-        # Prefer Gemini, then OpenAI shorthand
-        if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
-            from loomable.providers.gemini import GeminiProvider
-
-            return GeminiProvider(
-                model=os.environ.get("GEMINI_MODEL", "gemini-flash-latest"),
-                api_key=os.environ.get("GEMINI_API_KEY")
-                or os.environ.get("GOOGLE_API_KEY"),
-            )
-        if os.environ.get("OPENAI_API_KEY"):
-            return "openai:gpt-4o-mini"
-        raise SystemExit("DEEP_AGENT_LIVE=1 but no GEMINI_API_KEY/OPENAI_API_KEY set")
+def _resolve_model():
+    # Prefer a live provider whenever a key is present; set
+    # DEEP_AGENT_SCRIPTED=1 to force the offline scripted path (CI).
+    if os.environ.get("DEEP_AGENT_SCRIPTED") == "1":
+        return ModelSpec(provider="scripted", provider_impl=_ScriptedDeepProvider())
+    if has_live_provider() or os.environ.get("DEEP_AGENT_LIVE"):
+        return require_provider()
     return ModelSpec(provider="scripted", provider_impl=_ScriptedDeepProvider())
 
 
 async def main() -> None:
-    live = bool(os.environ.get("DEEP_AGENT_LIVE"))
+    model = _resolve_model()
+    live = not (isinstance(model, ModelSpec) and model.provider == "scripted")
     agent = create_deep_agent(
-        _resolve_model(),
+        model,
         workspace=ROOT,
         web_search=live,
         url_fetch=live,

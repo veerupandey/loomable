@@ -1,13 +1,7 @@
 """Deep Agent harness — loomable-native long-horizon agent.
 
-Built **solely on loomable** (no LangGraph / deepagents dependency). Designed to
-beat other deep-agent stacks on research and hard long-horizon work:
-
-1. **Planning** — ``TodoTools`` (``write_todos`` / ``read_todos`` / ``update_todo``)
-2. **Workspace FS** — ``WorkspaceTools`` + token-aware offload (not truncate)
-3. **Subagents** — ``task`` / ``task_batch`` + named ``specialists`` + Case spawn
-4. **Context engineering** — think/plan, compact_conversation, Memory, summarizer
-5. **Research** — search, fetch, citations (verify/claim), vision, accept gates
+Planning, workspace files, subagents, and research tools on the same Agent
+surface (TodoTools, WorkspaceTools, task/task_batch, citations, accept gates).
 """
 
 from __future__ import annotations
@@ -28,13 +22,11 @@ from loomable.flow.loop import VerdictResult
 from loomable.providers.resilient import RetryPolicy
 
 __all__ = [
-    "DEEP_AGENT_INSTRUCTIONS",
     "DEEP_DISCOVERY_CORE_TOOLS",
     "DEEP_DISCOVERY_CORE_SLIM",
     "DEEP_DISCOVERY_CORE_CODE",
     "SpecialistSpec",
     "create_deep_agent",
-    "create_research_agent",
     "make_compact_conversation_tool",
     "make_research_accept",
     "make_task_tool",
@@ -565,6 +557,7 @@ def create_deep_agent(
     scopes: dict[str, str] | None = None,
     require_confirmation: list[str] | None = None,
     require_tools: list[str] | None = None,
+    strict_require_tools: bool = False,
     web_search: bool = True,
     search_provider: str = "duckduckgo",
     search_api_key: str | None = None,
@@ -578,7 +571,6 @@ def create_deep_agent(
     sandbox: Any | None = None,
     sandbox_backend: str = "subprocess",
     offload_large_tools: bool = True,
-    offload_threshold: int | None = None,
     offload_threshold_tokens: int = 3_000,
     memory_files: Sequence[str | Path] | None = None,
     think_tool: bool = True,
@@ -869,7 +861,6 @@ def create_deep_agent(
         existing_hooks.append(
             make_workspace_offload_hook(
                 root,
-                threshold=offload_threshold,
                 threshold_tokens=offload_threshold_tokens,
                 store=workspace_kit.store,
             )
@@ -949,7 +940,7 @@ def create_deep_agent(
         discovery=discovery,
         discovery_core_tools=_resolve_discovery_core(discovery_core),
         # Progressive skills: metadata in prompt; load_skill for full body.
-        # Callers can pass eager_skills=True via agent_kwargs for legacy behavior.
+        # Pass eager_skills=True via agent_kwargs to inject full skill bodies up front.
         eager_skills=agent_kwargs.pop("eager_skills", None),
         # Lazy MCP / activation policy: Agent already defaults lazy_mcp=True
         # when discovery is on; these just let callers override explicitly.
@@ -973,6 +964,7 @@ def create_deep_agent(
         plan_tool=plan_tool,
         require_confirmation=hitl or None,
         require_tools=require_tools,
+        strict_require_tools=strict_require_tools or None,
         tool_hooks=existing_hooks or None,
         max_tool_iterations=max_tool_iterations,
         memory_window=memory_window,
@@ -989,55 +981,31 @@ def create_deep_agent(
         modalities=modalities,
         debug=debug,
         mode=mode,
-        dispatch=dispatch,
         accept=accept,
-        board=board,
-        max_rounds=max_rounds,
-        max_plan_steps=max_plan_steps,
-        checkpointer=checkpointer,
     )
+    if mode != "case":
+        case_only = []
+        if dispatch != "reuse":
+            case_only.append("dispatch")
+        if max_rounds is not None:
+            case_only.append("max_rounds")
+        if max_plan_steps != 8:
+            case_only.append("max_plan_steps")
+        if checkpointer is not None:
+            case_only.append("checkpointer")
+        if case_only:
+            from loomable.agent.errors import AgentConfigError
+
+            raise AgentConfigError(
+                f"{', '.join(case_only)} only apply with "
+                "create_deep_agent(..., mode='case') (or construct Case directly)."
+            )
+    else:
+        kwargs["dispatch"] = dispatch
+        kwargs["board"] = board
+        kwargs["max_rounds"] = max_rounds
+        kwargs["max_plan_steps"] = max_plan_steps
+        kwargs["checkpointer"] = checkpointer
     kwargs.update(agent_kwargs)
     # Drop Nones so Agent defaults apply cleanly
     return Agent(**{k: v for k, v in kwargs.items() if v is not None})
-
-
-def create_research_agent(
-    model: Any,
-    *,
-    workspace: str | Path = "./.deep_workspace",
-    session_id: str | None = "research",
-    memory: Any = None,
-    skills: Sequence[str | Path] | None = None,
-    **kwargs: Any,
-) -> Agent:
-    """Convenience alias for ``create_deep_agent(..., profile=\"research\")``.
-
-    Prefer :func:`create_deep_agent` with ``profile=\"research\"`` or
-    ``skills=[\"research\"]``. Research is a **skill** (any topic), not a
-    separate agent type — this wrapper stays for back-compat.
-    """
-    import warnings
-
-    warnings.warn(
-        "create_research_agent is deprecated; use "
-        "create_deep_agent(..., profile='research') instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    kwargs.pop("profile", None)
-    return create_deep_agent(
-        model,
-        workspace=workspace,
-        session_id=session_id,
-        memory=memory,
-        skills=skills,
-        profile="research",
-        web_search=kwargs.pop("web_search", True),
-        url_fetch=kwargs.pop("url_fetch", True),
-        citations=kwargs.pop("citations", True),
-        images=kwargs.pop("images", True),
-        modalities=kwargs.pop("modalities", "text+image"),
-        use_llm_summarizer=kwargs.pop("use_llm_summarizer", True),
-        max_run_tokens=kwargs.pop("max_run_tokens", 0),
-        **kwargs,
-    )

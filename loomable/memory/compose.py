@@ -26,10 +26,6 @@ Layers (any subset)::
         user_id="alice",
         scopes={"claim_id": "CLM-4421"},  # any extra isolation keys
     )
-
-Aliases: ``short=`` → conversation, ``long=`` → user.
-Legacy ``session_store=`` / ``note_store=`` / ``memory_backend=`` still work and
-override the matching layer when both are set.
 """
 
 from __future__ import annotations
@@ -159,10 +155,9 @@ class ConversationMemory:
         Use model-based compaction when True.
     enabled:
         When False, Agent runs without conversation replay even if session_id set.
-    scope:
-        Optional tenant scope hint (documented for Postgres ``user_id``). Isolation
-        for chat threads still uses ``session_id``; put claim/thread identity there
-        (e.g. ``session_id=f"claim:{claim_id}"``) when you need per-claim chats.
+
+    Thread isolation uses ``session_id`` (e.g. ``session_id=f"claim:{claim_id}"``).
+    Tenant / user scoping for notes belongs on ``UserMemory`` / ``Agent(user_id=)``.
     """
 
     store: Any | None = None
@@ -171,7 +166,6 @@ class ConversationMemory:
     compaction_threshold: int | None = None
     use_llm_summarizer: bool = False
     enabled: bool = True
-    scope: MemoryScope | None = None
 
 
 @dataclass
@@ -183,9 +177,11 @@ class UserMemory:
     note_store / long_term / embedder:
         Provide a NoteStore, or enough pieces to build one.
     memory_tool:
-        Expose agentic ``memory`` tool.
+        Expose agentic ``memory`` tool. Requires ``note_store`` or ``embedder``
+        (raises ``AgentConfigError`` otherwise).
     auto_extract:
         Heuristic Always-mode: extract facts from user text after each turn.
+        Requires a resolvable note store (same as ``memory_tool``).
     user_id:
         Convenience for ``scopes={"user_id": ...}``.
     scopes:
@@ -230,10 +226,10 @@ class KnowledgeMemory:
 
 @dataclass
 class WorkingMemory:
-    """Flow/Workflow blackboard (:class:`~loomable.flow.memory.TieredMemoryStore`).
+    """Workflow blackboard (:class:`~loomable.flow.memory.TieredMemoryStore`).
 
-    Not applied to Agent chat by default — expose via ``.store`` for
-    ``Workflow(memory=bundle.working.store)`` or ``Flow(memory=...)``.
+    Not valid inside ``Agent(memory=Memory.compose(...))`` — that raises.
+    Use ``Workflow(memory=True)`` or ``Workflow(memory=WorkingMemory.tiered().store)``.
     """
 
     store: Any | None = None
@@ -263,13 +259,11 @@ class Memory:
         user: UserMemory | None = None,
         knowledge: KnowledgeMemory | None = None,
         working: WorkingMemory | None = None,
-        short: ConversationMemory | None = None,
-        long: UserMemory | None = None,
     ) -> Memory:
-        """Assemble layers. ``short``/``long`` are aliases for conversation/user."""
+        """Assemble memory layers for ``Agent(memory=...)``."""
         return cls(
-            conversation=conversation or short,
-            user=user or long,
+            conversation=conversation,
+            user=user,
             knowledge=knowledge,
             working=working,
         )
@@ -299,10 +293,6 @@ class Memory:
             ),
         )
 
-    def with_user_id(self, user_id: str | None) -> Memory:
-        """Back-compat alias for :meth:`with_scopes`."""
-        return self.with_scopes(user_id=user_id)
-
     def resolve_note_store(self) -> Any | None:
         """Materialize a (possibly scoped) NoteStore from the user layer."""
         if self.user is None:
@@ -325,7 +315,7 @@ class Memory:
         return store
 
     def to_agent_kwargs(self) -> dict[str, Any]:
-        """Flatten into legacy Agent constructor kwargs (no Nones)."""
+        """Flatten into Agent constructor store kwargs (no Nones)."""
         out: dict[str, Any] = {}
         if self.conversation is not None and self.conversation.enabled:
             c = self.conversation
@@ -343,13 +333,34 @@ class Memory:
             out["use_memory"] = False
 
         note_store = self.resolve_note_store()
+        if self.user is not None:
+            wants_store = bool(self.user.memory_tool or self.user.auto_extract)
+            if wants_store and note_store is None:
+                from loomable.agent.errors import AgentConfigError
+
+                raise AgentConfigError(
+                    "UserMemory(memory_tool=True) and/or auto_extract=True require "
+                    "note_store= or embedder= (to build a NoteStore). "
+                    "Pass note_store=..., embedder=..., or set memory_tool=False "
+                    "and auto_extract=False."
+                )
         if note_store is not None:
             out["note_store"] = note_store
             if self.user and self.user.memory_tool:
                 out["memory_tool"] = True
+            if self.user and self.user.auto_extract:
+                out["memory_auto_extract"] = True
 
         if self.knowledge is not None:
             k = self.knowledge
+            if k.documents and k.embedder is None:
+                from loomable.agent.errors import AgentConfigError
+
+                raise AgentConfigError(
+                    "KnowledgeMemory(documents=...) requires embedder= for "
+                    "passive RAG indexing. Pass embedder=..., or use "
+                    "store=/sources=/knowledge_base= for search_* tools."
+                )
             if k.documents:
                 out["knowledge"] = list(k.documents)
             if k.embedder is not None:
@@ -371,22 +382,16 @@ class Memory:
 
 
 class ScopedNoteStore:
-    """Wrap a NoteStore so note ids/tags are namespaced by a :class:`MemoryScope`.
-
-    Back-compat: ``ScopedNoteStore(inner, user_id="alice")`` still works.
-    """
+    """Wrap a NoteStore so note ids/tags are namespaced by a :class:`MemoryScope`."""
 
     def __init__(
         self,
         inner: Any,
         *,
-        scope: MemoryScope | None = None,
-        user_id: str | None = None,
+        scope: MemoryScope,
     ) -> None:
-        if scope is None and user_id:
-            scope = MemoryScope.of(user_id=user_id)
         if scope is None or not scope:
-            raise ValueError("ScopedNoteStore requires a non-empty scope or user_id")
+            raise ValueError("ScopedNoteStore requires a non-empty MemoryScope")
         self._inner = inner
         self._scope = scope
         self._prefix = scope.prefix
