@@ -14,15 +14,13 @@ from typing import Any, Callable
 from loomable.kernel.models import ToolCall, ToolOutcome, ToolResult
 
 __all__ = [
-    "DEFAULT_THRESHOLD",
     "DEFAULT_THRESHOLD_TOKENS",
     "estimate_tokens",
     "make_workspace_offload_hook",
     "offload_tool_text",
 ]
 
-DEFAULT_THRESHOLD = 12_000  # chars (legacy)
-DEFAULT_THRESHOLD_TOKENS = 3_000  # ~12k chars at 4 chars/token
+DEFAULT_THRESHOLD_TOKENS = 3_000
 DEFAULT_PREVIEW = 800
 
 
@@ -77,16 +75,14 @@ def offload_tool_text(
 def make_workspace_offload_hook(
     workspace: str | Path,
     *,
-    threshold: int | None = None,
-    threshold_tokens: int | None = ...,  # type: ignore[assignment]
+    threshold_tokens: int | None = DEFAULT_THRESHOLD_TOKENS,
     preview_chars: int = DEFAULT_PREVIEW,
     skip_tools: frozenset[str] | None = None,
     store: Any | None = None,
 ) -> Callable[[str, ToolCall | None, ToolOutcome], Any]:
     """Return a post-tool hook that offloads oversized string results to disk.
 
-    Prefer ``threshold_tokens`` (deepagents-style). Passing legacy ``threshold``
-    (chars) without ``threshold_tokens`` keeps char-based behavior.
+    ``threshold_tokens`` is the size gate (``None`` disables offload).
     """
     skip = skip_tools or frozenset(
         {
@@ -107,21 +103,9 @@ def make_workspace_offload_hook(
         }
     )
     root = Path(workspace)
-
-    # Resolve thresholds: explicit ``threshold=`` alone → char mode (back-compat).
-    if threshold is not None and threshold_tokens is ...:
-        token_threshold: int | None = None
-        char_threshold = max(1, int(threshold))
-    elif threshold_tokens is ...:
-        token_threshold = DEFAULT_THRESHOLD_TOKENS
-        char_threshold = DEFAULT_THRESHOLD
-    else:
-        token_threshold = (
-            None if threshold_tokens is None else max(1, int(threshold_tokens))
-        )
-        char_threshold = (
-            DEFAULT_THRESHOLD if threshold is None else max(1, int(threshold))
-        )
+    token_threshold = (
+        None if threshold_tokens is None else max(1, int(threshold_tokens))
+    )
 
     def hook(
         tool_name: str,
@@ -135,10 +119,9 @@ def make_workspace_offload_hook(
         content = outcome.result.content
         if not isinstance(content, str):
             return None
-        if token_threshold is not None:
-            if estimate_tokens(content) <= token_threshold:
-                return None
-        elif len(content) <= char_threshold:
+        if token_threshold is None:
+            return None
+        if estimate_tokens(content) <= token_threshold:
             return None
         _rel, msg = offload_tool_text(
             root,

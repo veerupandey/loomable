@@ -1,4 +1,4 @@
-"""Pipeline — sequential chain of agents via Workflow.
+"""Sequential Workflow — chain of Agents.
 
 USE WHEN: Multi-step work where each Agent's output feeds the next.
 

@@ -1,10 +1,10 @@
 """MCP servers — external tools via Model Context Protocol.
 
 USE WHEN: You want filesystem / DB / browser tools from an MCP server.
-MCP tools register as normal Agent tools (discoverable under ``discovery=True``).
+MCP tools register as normal Agent tools at build time (eager connect).
 
 This demo starts the official filesystem MCP server (requires ``npx``).
-For browser MCP via a bundled skill, see ``deep_agent/06_sandbox_browser.py``.
+For progressive discovery of MCP tools, see ``deep_agent/06_sandbox_browser.py``.
 """
 
 from __future__ import annotations

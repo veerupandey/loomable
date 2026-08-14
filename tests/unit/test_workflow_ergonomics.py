@@ -316,8 +316,8 @@ class TestComposabilityWithHelpers:
         assert "echo:" in result.output.text()
 
     @pytest.mark.asyncio
-    async def test_workflow_as_loop_body_with_end_condition(self):
-        """Workflow can be used as Loop body with end_condition."""
+    async def test_workflow_as_loop_body_with_verifier(self):
+        """Workflow can be used as Loop body with verifier."""
         from loomable.flow import Step, Workflow, Loop
 
         call_count = {"n": 0}
@@ -329,7 +329,7 @@ class TestComposabilityWithHelpers:
         wf = Workflow("counting_wf", steps=[Step("counter", counting_fn)])
         loop = Loop(
             body=wf,
-            end_condition=lambda result: "iteration:2" in result.output.text(),
+            verifier=lambda output, ctx: "iteration:2" in output.text(),
             max_iterations=5,
         )
         result = await loop.arun("start")
@@ -593,8 +593,8 @@ class TestLoopWithSteps:
             )
 
     @pytest.mark.asyncio
-    async def test_loop_with_end_condition(self):
-        """Loop with end_condition terminates when condition is True."""
+    async def test_loop_with_verifier(self):
+        """Loop with verifier terminates when condition is True."""
         from loomable.flow import Step, Loop
 
         call_count = {"n": 0}
@@ -605,7 +605,7 @@ class TestLoopWithSteps:
 
         loop = Loop(
             steps=[Step("tracked", tracked_fn)],
-            end_condition=lambda result: "iter:3" in result.output.text(),
+            verifier=lambda output, ctx: "iter:3" in output.text(),
             max_iterations=10,
         )
         result = await loop.arun("go")

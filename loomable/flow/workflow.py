@@ -234,16 +234,12 @@ class Workflow:
         when: Callable[[SharedState], bool],
         then: Any,
         else_: Any | None = None,
-        *,
-        name: str | None = None,
     ) -> "Workflow":
         """Conditional branch. ``when`` receives SharedState and returns bool."""
         from loomable.flow.condition import Condition
 
         then_steps = _as_steps(then)
         else_steps = _as_steps(else_) if else_ is not None else None
-        # name is reserved for future RouterNode labeling; Condition has no name today
-        _ = name
         self._steps.append(Condition(when, then_steps, else_steps))
         self._invalidate()
         return self
