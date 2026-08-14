@@ -1,13 +1,12 @@
 """Checkpointing — Durable Workflow state and resume.
 
 USE WHEN: Your workflow is long-running and you need to pause/resume
-it across process restarts, or you have human-in-the-loop approval
-gates that may take hours.
+across process restarts, or HITL gates may take hours.
 
-Prefer ``Workflow(..., checkpointer=...)`` (or ``sequential(..., checkpointer=...)``).
-For a fuller kill/resume exam, see ``escalation_war_room/05_checkpoint_resume.py``.
+Prefer ``Workflow(..., checkpointer=...)``.
+Fuller kill/resume exam: ``escalation_war_room/05_checkpoint_resume.py``.
 
-This demo is offline (scripted steps) and writes a complete checkpoint.
+Offline scripted steps — no LLM key required.
 """
 
 from __future__ import annotations
@@ -16,10 +15,8 @@ import asyncio
 import shutil
 from pathlib import Path
 
-from loomable import Workflow
-from loomable.agent.run import RunResult
+from loomable import JsonFileCheckpointer, RunResult, Workflow
 from loomable.content import AgentOutput, Text
-from loomable.persist import JsonFileCheckpointer
 
 ROOT = Path(__file__).resolve().parent / ".checkpoint_demo"
 SESSION = "checkpoint-demo"
@@ -46,7 +43,6 @@ async def main() -> None:
         shutil.rmtree(ROOT)
     ROOT.mkdir(parents=True)
 
-    # File-backed checkpointer (InMemoryCheckpointer() also works for tests)
     cp = JsonFileCheckpointer(str(ROOT / "checkpoints"))
     wf = (
         Workflow("checkpoint-demo", session_id=SESSION, checkpointer=cp)

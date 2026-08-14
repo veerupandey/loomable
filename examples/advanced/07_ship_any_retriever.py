@@ -1,4 +1,4 @@
-"""Ship any Retriever — the agent uses it as a named search tool.
+"""Ship any Retriever — high-level ``Agent(retrievers=[...])``.
 
 Run::
 
@@ -8,11 +8,15 @@ Run::
 from __future__ import annotations
 
 import asyncio
+import sys
+from pathlib import Path
 from typing import Any
 
-from loomable.agent import Agent, ModelSpec
+from loomable import Agent
 from loomable.kernel.contracts import Retriever
-from loomable.kernel.models import ModelRequest, ModelResponse, ToolCall
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _offline import scripted_model  # noqa: E402
 
 
 class AcmeCatalogRetriever(Retriever):
@@ -33,29 +37,14 @@ class AcmeCatalogRetriever(Retriever):
         return (hits or self._rows)[: max(1, int(k))]
 
 
-class _Scripted:
-    def __init__(self) -> None:
-        self.n = 0
-
-    async def complete(self, request: ModelRequest) -> ModelResponse:
-        self.n += 1
-        if self.n == 1:
-            return ModelResponse(
-                content="",
-                tool_calls=[
-                    ToolCall(
-                        id="1",
-                        tool_name="search_acme",
-                        args={"query": "widget", "k": 1},
-                    )
-                ],
-            )
-        return ModelResponse(content="Acme catalog lookup done.")
-
-
 async def main() -> None:
     agent = Agent(
-        model=ModelSpec(provider="scripted", provider_impl=_Scripted()),
+        model=scripted_model(
+            [
+                {"tool": "search_acme", "args": {"query": "widget", "k": 1}},
+                "Acme catalog lookup done.",
+            ]
+        ),
         retrievers=[AcmeCatalogRetriever()],
         use_llm_summarizer=False,
     )

@@ -78,3 +78,8 @@ python examples/advanced/06_agentic_retriever.py   # offline
 2. **Run it, see one clear output**
 3. **Docstring says when to use the pattern**
 4. **Progressive** — unique numeric prefixes; `01` is simplest in each folder
+5. **High-level Loomable API** — prefer `from loomable import Agent, Team, Workflow, …`.
+   Offline demos share `examples/_offline.py` (`scripted_model`) so examples are not
+   full of kernel `ModelRequest` / `ToolCall` boilerplate. Live demos use a provider.
+   Exam / stress scripts under `escalation_war_room/` and long deep-agent gates may
+   dig deeper on purpose.
