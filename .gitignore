@@ -49,3 +49,8 @@ Thumbs.db
 .checkpoints*/
 **/workspace*/
 examples/**/output/
+
+# Deep agent local workspaces
+examples/deep_agent/.workspace/
+examples/deep_agent/.workspace_*/
+**/.deep_workspace/
