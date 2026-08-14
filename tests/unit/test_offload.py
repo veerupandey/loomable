@@ -32,7 +32,7 @@ def test_offload_visible_via_workspace_store(tmp_path: Path) -> None:
 
 
 def test_offload_hook_transforms_large_result(tmp_path: Path) -> None:
-    hook = make_workspace_offload_hook(tmp_path, threshold=100, preview_chars=20)
+    hook = make_workspace_offload_hook(tmp_path, threshold_tokens=25, preview_chars=20)
     big = "y" * 200
     outcome = ToolOutcome(
         call_id="c1",
@@ -90,7 +90,7 @@ async def test_deep_agent_offloads_large_tool_result(tmp_path: Path) -> None:
         discovery=False,
         board=False,
         offload_large_tools=True,
-        offload_threshold=1000,
+        offload_threshold_tokens=250,
         tools=[FunctionTool(huge_page, name="huge_page")],
         max_tool_iterations=5,
         use_llm_summarizer=False,

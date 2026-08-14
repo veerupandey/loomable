@@ -3039,6 +3039,12 @@ class Agent:
         from loomable.memory.compose import is_kernel_memory_manager, is_memory_bundle
 
         if is_memory_bundle(memory):
+            if getattr(memory, "working", None) is not None and memory.working is not None:
+                raise AgentConfigError(
+                    "WorkingMemory is for Workflow blackboards — use "
+                    "Workflow(..., memory=True) or Workflow(memory=working.store). "
+                    "Do not pass working= inside Agent(memory=Memory.compose(...))."
+                )
             flat_conflict = [
                 name
                 for name, value in (
@@ -3567,11 +3573,7 @@ class Agent:
             "audio": audio,
             "output_schema": schema,
         }
-        # BuiltAgent.astream_events may not take context yet — only pass if supported.
-        import inspect
-
-        params = inspect.signature(built.astream_events).parameters
-        if "context" in params and _is_run_context(context):
+        if _is_run_context(context):
             kwargs["context"] = context
         async for event in built.astream_events(input, **kwargs):
             yield event

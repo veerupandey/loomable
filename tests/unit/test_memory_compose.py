@@ -156,6 +156,16 @@ async def test_memory_compose_rejects_flat_store_kwargs() -> None:
 
 
 @pytest.mark.asyncio
+async def test_memory_compose_rejects_working_on_agent() -> None:
+    from loomable.agent.errors import AgentConfigError
+    from loomable.memory import WorkingMemory
+
+    memory = Memory.compose(working=WorkingMemory.tiered())
+    with pytest.raises(AgentConfigError, match="WorkingMemory"):
+        Agent(model=_model(), memory=memory, modalities="text")
+
+
+@pytest.mark.asyncio
 async def test_memory_compose_conversation_and_user() -> None:
     store = open_session_store("memory")
     notes = NoteStore(long_term=open_vector_store(engine="memory"), embedder=_Emb())

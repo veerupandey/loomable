@@ -46,6 +46,10 @@
 - `Memory.with_user_id()` — use `with_scopes(user_id=...)`
 - `ScopedNoteStore(user_id=)` — require `scope=MemoryScope.of(...)`
 - Flat store kwargs overriding `memory=` — conflict raises `AgentConfigError`
+- `WorkingMemory` inside `Agent(memory=...)` — raises; use `Workflow(memory=True)`
+- `Loop(end_condition=)` — use `verifier=` (Workflow uses `until=`)
+- `Workflow.branch(name=)` no-op kwarg
+- Char-based offload `threshold=` — use `threshold_tokens=` / `offload_threshold_tokens=`
 - Top-level `sequential` / `parallel` / `route` / `coordinate` exports — use `Workflow` / `Team` (helpers remain under `loomable.flow.helpers`)
 - `Map` / `Router` aliases — use `MapNode` / `RouterNode`
 - `rank_match` discovery helper — use `rank_bm25`

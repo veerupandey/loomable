@@ -20,8 +20,6 @@ import pathlib
 
 import pytest
 
-import pytest
-
 # ---------------------------------------------------------------------------
 # 1. Public surface: all documented exports are importable from loomable.flow
 # ---------------------------------------------------------------------------

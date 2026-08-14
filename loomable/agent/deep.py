@@ -576,7 +576,6 @@ def create_deep_agent(
     sandbox: Any | None = None,
     sandbox_backend: str = "subprocess",
     offload_large_tools: bool = True,
-    offload_threshold: int | None = None,
     offload_threshold_tokens: int = 3_000,
     memory_files: Sequence[str | Path] | None = None,
     think_tool: bool = True,
@@ -867,7 +866,6 @@ def create_deep_agent(
         existing_hooks.append(
             make_workspace_offload_hook(
                 root,
-                threshold=offload_threshold,
                 threshold_tokens=offload_threshold_tokens,
                 store=workspace_kit.store,
             )

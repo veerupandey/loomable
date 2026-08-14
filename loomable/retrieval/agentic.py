@@ -48,7 +48,7 @@ def _merge_hits(groups: Sequence[Sequence[dict[str, Any]]], *, k: int) -> list[d
 class AgenticRetriever(Retriever):
     """Single-corpus agentic search tool (hybrid RRF + optional MMR by default).
 
-    Pipeline::
+    Stages::
 
         query → rewrite → mode route (chunks|file) → base retrieve → rerank → compress
 

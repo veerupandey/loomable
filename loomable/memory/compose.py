@@ -226,10 +226,10 @@ class KnowledgeMemory:
 
 @dataclass
 class WorkingMemory:
-    """Flow/Workflow blackboard (:class:`~loomable.flow.memory.TieredMemoryStore`).
+    """Workflow blackboard (:class:`~loomable.flow.memory.TieredMemoryStore`).
 
-    Not applied to Agent chat by default — expose via ``.store`` for
-    ``Workflow(memory=bundle.working.store)`` or ``Flow(memory=...)``.
+    Not valid inside ``Agent(memory=Memory.compose(...))`` — that raises.
+    Use ``Workflow(memory=True)`` or ``Workflow(memory=WorkingMemory.tiered().store)``.
     """
 
     store: Any | None = None

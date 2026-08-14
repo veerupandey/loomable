@@ -1,8 +1,7 @@
-"""Nested composition — Workflow stages that nest.
+"""Nested composition — Workflows inside Workflows.
 
 USE WHEN: Individual stages are themselves multi-step processes
-(composition of compositions). Nested Workflows / parallel groups
-are first-class Runnables.
+(composition of compositions). Nested Workflows are first-class Runnables.
 """
 
 import asyncio
@@ -41,10 +40,15 @@ analyst = Agent(
     instructions="Given the research results, provide a clear go/no-go recommendation.",
 )
 
-# Parallel research → sequential analysis
+# Nested: research stage is its own Workflow, then analysis
+research = Workflow("research").parallel(
+    tech=tech_researcher,
+    market=market_researcher,
+)
+
 pipeline = (
     Workflow("product-decision")
-    .parallel(tech=tech_researcher, market=market_researcher)
+    .step("research", research)
     .step("analyze", analyst)
 )
 
