@@ -1,24 +1,28 @@
-"""User / conversation memory via Memory.compose (preferred) or session_store.
+"""User / conversation memory via Memory.compose (preferred).
 
 Requires for postgres: pip install 'loomable[postgres]' && docker compose up -d
+Requires a live LLM key — see ``.env.example``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _provider import require_provider  # noqa: E402
+
 from loomable import Agent, ConversationMemory, Memory, UserMemory, open_session_store
 from loomable.agent import NoteStore
 from loomable.kernel.long_term import LongTermStore
-from loomable.providers.openai import AzureOpenAIProvider
+from loomable.providers import GeminiEmbedder
 
-provider = AzureOpenAIProvider()
 DSN = os.environ.get("POSTGRES_URL") or os.environ.get("DATABASE_URL")
 ROOT = Path(__file__).resolve().parent / ".sessions_demo"
 ROOT.mkdir(exist_ok=True)
@@ -31,33 +35,28 @@ else:
     label = f"file:{ROOT}"
 
 
-class _FakeEmbedder:
-    async def embed(self, text: str) -> list[float]:
-        return [float(len(text) % 7), 1.0, 0.0]
-
-
 async def main() -> None:
+    model = require_provider()
     print(f"Using conversation store: {label}")
     # L3 default = Alibaba zvec (.loomable/memory_zvec); pip install loomable[zvec]
-    notes = NoteStore(long_term=LongTermStore(), embedder=_FakeEmbedder())
+    # Gemini embeddings work without zvec for this demo's NoteStore path.
+    notes = NoteStore(long_term=LongTermStore(), embedder=GeminiEmbedder())
     memory = Memory.compose(
         conversation=ConversationMemory(store=store, window=8),
         user=UserMemory(note_store=notes, memory_tool=True, auto_extract=True),
     )
 
     a1 = Agent(
-        model=provider,
+        model=model,
         memory=memory,
         session_id="demo-session",
         user_id="alice",
-        # Extra isolation keys when needed, e.g. insurance:
-        # scopes={"claim_id": "CLM-4421"},
         instructions="Remember user preferences.",
     )
     print((await a1.arun("I prefer dark mode and Python.")).output.text())
 
     a2 = Agent(
-        model=provider,
+        model=model,
         memory=memory,
         session_id="demo-session",
         user_id="alice",
@@ -67,4 +66,5 @@ async def main() -> None:
     print((await a2.arun("What are my preferences?")).output.text())
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

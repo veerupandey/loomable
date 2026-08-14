@@ -1,7 +1,11 @@
-"""Complex multi-format agentic RAG — fails loudly when retrieval is wrong.
+"""Complex multi-format agentic RAG — offline retrieval quality gate.
 
 Seeds markdown, Python, TypeScript, HTML, JSON, CSV, RST, DOCX (+ optional URL),
 builds hybrid+MMR agentic tools across two corpora, and asserts hard queries.
+
+This is an intentional **offline CI gate** (scripted model only for the tool
+loop). For the live teaching demos, use ``05_build_retriever.py``,
+``06_agentic_retriever.py``, or ``agents/07_knowledge_base.py``.
 
 Run::
 
