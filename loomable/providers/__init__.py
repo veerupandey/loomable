@@ -39,7 +39,7 @@ from .groq import GroqProvider
 from .ollama import OllamaProvider
 from .openai import AzureOpenAIProvider, OpenAIProvider
 from .resilient import ResilientModel, RetryPolicy
-from .vector_store import open_vector_store
+from .vector_store import open_vector_store, parse_vector_uri
 
 __all__ = [
     "OpenAIProvider",
@@ -59,4 +59,5 @@ __all__ = [
     "ResilientModel",
     "RetryPolicy",
     "open_vector_store",
+    "parse_vector_uri",
 ]

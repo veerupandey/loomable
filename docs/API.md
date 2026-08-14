@@ -818,6 +818,24 @@ notes = NoteStore(
     embedder=embedder,
 )
 
+# Chroma (file or HTTP)
+notes = NoteStore(
+    long_term=open_vector_store(
+        engine="chroma", path="./.loomable/chroma", dimensions=1536
+    ),
+    # or: uri="chroma:./.loomable/chroma" / uri="http://localhost:8000"
+    embedder=embedder,
+)
+
+# Milvus Lite (.db file) or server
+notes = NoteStore(
+    long_term=open_vector_store(
+        engine="milvus", path="./.loomable/milvus.db", dimensions=1536
+    ),
+    # or: uri="milvus:./.loomable/milvus.db" / uri="http://localhost:19530"
+    embedder=embedder,
+)
+
 # Postgres vectors
 notes = NoteStore(
     long_term=open_vector_store(postgres_url=DSN, dimensions=1536, user_id="alice"),
