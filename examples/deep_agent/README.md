@@ -11,8 +11,6 @@ agent = create_deep_agent(model, profile="research", workspace="./.deep_workspac
 # equivalent: create_deep_agent(model, skills=["research"], ...)
 ```
 
-`create_research_agent` remains a thin alias for `profile="research"`.
-
 `create_deep_agent` is Agent, so the same RAG kwargs work:
 
 ```python

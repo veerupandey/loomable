@@ -134,7 +134,12 @@ class TestCapabilities:
         assert built.require_final_text is True
 
     def test_multimodal_flag_is_noop(self):
-        built_on = Agent(model=_FakeProvider(), multimodal=True).build()
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            built_on = Agent(model=_FakeProvider(), multimodal=True).build()
+        assert any(issubclass(w.category, DeprecationWarning) for w in caught)
         built_off = Agent(model=_FakeProvider(), multimodal=False).build()
         assert built_on.capabilities.input == built_off.capabilities.input
         assert Modality.IMAGE in built_off.capabilities.input

@@ -29,10 +29,22 @@
 ### Changed
 
 - Package status: **Beta** (`0.2.0b0`)
-- `create_research_agent` emits `DeprecationWarning` (alias retained)
 - CI installs `.[dev,toolkits]`; README badge pins `main`
 - Default zvec L3 store reuses an in-process collection handle (no exclusive-lock deadlock across `Agent()` builds)
-- Examples audited for 0.2.0 APIs: unique numbering, offline `knowledge_base` / Team inherit demos, retrieval demos use in-memory stores
+- Examples audited for 0.2.0 APIs: unique numbering, live `knowledge_base` / Team inherit demos, retrieval demos use live providers
+- Docs Level 6 teaches `Workflow(memory=True, checkpointer=...)` instead of `Flow` + `TieredMemoryStore`
+- Memory compose example uses `Memory.compose` (not flat `session_store=` / `note_store=`)
+
+### Removed
+
+- Public exports: `create_research_agent`, `Channel` / `ChannelMessage` / `InMemoryChannel`, `DEEP_AGENT_INSTRUCTIONS`
+  - Use `create_deep_agent(..., profile="research")`, `Team` / `Workflow` / subagents
+- Orphan `loomable.agent.channels` module
+
+### Deprecated
+
+- `Agent(multimodal=True)` emits `DeprecationWarning` (no-op; media is default)
+
 ### Limits (documented)
 
 - Local workspace FS only

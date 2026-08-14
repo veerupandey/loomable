@@ -24,7 +24,6 @@ _EXPECTED = {
     "ContextPolicy",
     "spawn_specialist",
     "create_deep_agent",
-    "create_research_agent",
     "resolve_skills",
     "list_bundled_skills",
     "Memory",

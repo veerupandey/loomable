@@ -34,7 +34,6 @@ __all__ = [
     "DEEP_DISCOVERY_CORE_CODE",
     "SpecialistSpec",
     "create_deep_agent",
-    "create_research_agent",
     "make_compact_conversation_tool",
     "make_research_accept",
     "make_task_tool",
@@ -999,45 +998,3 @@ def create_deep_agent(
     kwargs.update(agent_kwargs)
     # Drop Nones so Agent defaults apply cleanly
     return Agent(**{k: v for k, v in kwargs.items() if v is not None})
-
-
-def create_research_agent(
-    model: Any,
-    *,
-    workspace: str | Path = "./.deep_workspace",
-    session_id: str | None = "research",
-    memory: Any = None,
-    skills: Sequence[str | Path] | None = None,
-    **kwargs: Any,
-) -> Agent:
-    """Convenience alias for ``create_deep_agent(..., profile=\"research\")``.
-
-    Prefer :func:`create_deep_agent` with ``profile=\"research\"`` or
-    ``skills=[\"research\"]``. Research is a **skill** (any topic), not a
-    separate agent type — this wrapper stays for back-compat.
-    """
-    import warnings
-
-    warnings.warn(
-        "create_research_agent is deprecated; use "
-        "create_deep_agent(..., profile='research') instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    kwargs.pop("profile", None)
-    return create_deep_agent(
-        model,
-        workspace=workspace,
-        session_id=session_id,
-        memory=memory,
-        skills=skills,
-        profile="research",
-        web_search=kwargs.pop("web_search", True),
-        url_fetch=kwargs.pop("url_fetch", True),
-        citations=kwargs.pop("citations", True),
-        images=kwargs.pop("images", True),
-        modalities=kwargs.pop("modalities", "text+image"),
-        use_llm_summarizer=kwargs.pop("use_llm_summarizer", True),
-        max_run_tokens=kwargs.pop("max_run_tokens", 0),
-        **kwargs,
-    )
