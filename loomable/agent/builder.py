@@ -25,7 +25,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 from loomable.content import (
     AgentInput,
@@ -399,6 +399,11 @@ _BOOKKEEPING_TOOL_NAMES: frozenset[str] = frozenset(
         "read_todos",
         "update_todo",
         "think",
+        "search_skills",
+        "load_skill",
+        "search_tools",
+        "search_mcp",
+        "activate_tool",
     }
 )
 
@@ -2862,6 +2867,9 @@ class Agent:
         discovery: bool = False,
         skill_catalog: list[Path] | list[str] | list[Path | str] | None = None,
         defer_mcp: bool | None = None,
+        defer_local_tools: bool | None = None,
+        discovery_core_tools: Sequence[str] | None = None,
+        eager_skills: bool | Sequence[str] | None = None,
     ) -> None:
         # --- Resolve model string shorthand (e.g. "openai:gpt-4o-mini") ---
         if isinstance(model, str):
@@ -2889,6 +2897,16 @@ class Agent:
         self._skill_catalog = skill_catalog
         # Default: defer MCP tool advertisement when discovery is on.
         self._defer_mcp = bool(discovery) if defer_mcp is None else bool(defer_mcp)
+        # Default: defer non-core local tools when discovery is on (schema budget).
+        self._defer_local_tools = (
+            bool(discovery) if defer_local_tools is None else bool(defer_local_tools)
+        )
+        self._discovery_core_tools = (
+            [str(x) for x in discovery_core_tools] if discovery_core_tools else None
+        )
+        # None + discovery → progressive (metadata only). True → eager all skills=.
+        # Sequence → eager those names only. False → never eager-load bodies.
+        self._eager_skills = eager_skills
         # High-level modality DX: modalities="text" / text_only=True preferred over
         # constructing ModelCapabilities with frozensets.
         from loomable.content.capabilities import capabilities_for
@@ -3635,7 +3653,14 @@ class Agent:
             loader = SkillLoader()
             skill_roots = resolve_skills(self._skills)
             manifests = loader.discover(skill_roots)
+            eager_names = self._resolve_eager_skill_names(
+                [m.name for m in manifests]
+            )
             for manifest in manifests:
+                # Progressive disclosure: under discovery, skip full body/script
+                # registration unless the skill is in the eager set.
+                if self._discovery and manifest.name not in eager_names:
+                    continue
                 try:
                     loaded_skill = loader.load(manifest)
                     body = (getattr(loaded_skill, "body", None) or "").strip()
@@ -3659,6 +3684,38 @@ class Agent:
                 registry[retriever.name] = RetrieverTool(retriever)
 
         return registry, skill_errors
+
+    def _resolve_eager_skill_names(self, discovered_names: list[str]) -> set[str]:
+        """Which configured skills get full body injection at build time.
+
+        Under ``discovery=True`` the default is progressive (empty eager set):
+        only metadata is catalogued and the model calls ``load_skill``. Pass
+        ``eager_skills=True`` to restore legacy full injection, or a name list
+        for selective eagerness (e.g. research profile can opt in).
+        """
+        if not self._discovery:
+            return set(discovered_names)
+        policy = self._eager_skills
+        if policy is True:
+            return set(discovered_names)
+        if policy is False or policy is None:
+            return set()
+        wanted = {str(x).strip().lower() for x in policy if str(x).strip()}
+        return {n for n in discovered_names if n.lower() in wanted}
+
+    def _discovery_core_name_set(self) -> set[str]:
+        """Always-advertised tool names when local deferral is on."""
+        from .discovery import DISCOVERY_META_TOOL_NAMES
+
+        core: set[str] = set(DISCOVERY_META_TOOL_NAMES)
+        if self._discovery_core_tools:
+            core.update(self._discovery_core_tools)
+        # require_tools must remain callable without activate
+        for raw in self._require_tools or []:
+            name = (raw or "").split(":", 1)[0].strip()
+            if name:
+                core.add(name)
+        return core
 
     def _connect_mcp_servers_sync(
         self,
@@ -3771,12 +3828,14 @@ class Agent:
         from loomable.skills import bundled_skills_root, resolve_skills
 
         from .discovery import (
+            DISCOVERY_META_TOOL_NAMES,
             DISCOVERY_SYSTEM_NOTE,
             CapabilityCatalog,
             DiscoveryRuntime,
             SkillStub,
             ToolStub,
             catalog_from_skill_manifests,
+            format_skill_catalog_for_prompt,
             make_discovery_tools,
         )
 
@@ -3819,10 +3878,44 @@ class Agent:
                 )
                 seen_skill.add(name)
 
-        # Local / already-registered tools (searchable; already activated)
+        def _on_skill_body(skill_name: str, body: str) -> None:
+            block = f"## Skill: {skill_name}\n{body.strip()}"
+            if built.instructions:
+                built.instructions = f"{built.instructions.rstrip()}\n\n{block}"
+            else:
+                built.instructions = block
+
+        runtime = DiscoveryRuntime(
+            catalog,
+            skill_loader=loader,
+            tool_runtime=built.tool_runtime,
+            on_skill_body=_on_skill_body,
+        )
+
+        # Schema budget: move non-core local tools into deferred catalog.
+        core_names = self._discovery_core_name_set()
+        if self._defer_local_tools:
+            for name, tool_obj in list(built.tool_runtime._tools.items()):
+                if name in core_names or name in DISCOVERY_META_TOOL_NAMES:
+                    continue
+                runtime.register_pending_local(name, tool_obj)
+                del built.tool_runtime._tools[name]
+                catalog.tools.append(
+                    ToolStub(
+                        name=name,
+                        description=getattr(tool_obj, "description", "") or "",
+                        source="local",
+                        activated=False,
+                        parameters=getattr(tool_obj, "parameters", None) or {},
+                    )
+                )
+
+        # Remaining (core) tools — searchable and already activated
         for tool_obj in built.tool_runtime._tools.values():
             name = getattr(tool_obj, "name", "") or ""
             if not name:
+                continue
+            if catalog.tool_by_name(name) is not None:
                 continue
             catalog.tools.append(
                 ToolStub(
@@ -3838,7 +3931,6 @@ class Agent:
         for stub in mcp_stubs or []:
             existing = catalog.tool_by_name(stub.name)
             if existing:
-                # Prefer MCP metadata when names collide
                 existing.source = "mcp"
                 existing.server_id = stub.server_id
                 existing.mcp_client = stub.mcp_client
@@ -3849,19 +3941,6 @@ class Agent:
             else:
                 catalog.tools.append(stub)
 
-        def _on_skill_body(skill_name: str, body: str) -> None:
-            block = f"## Skill: {skill_name}\n{body.strip()}"
-            if built.instructions:
-                built.instructions = f"{built.instructions.rstrip()}\n\n{block}"
-            else:
-                built.instructions = block
-
-        runtime = DiscoveryRuntime(
-            catalog,
-            skill_loader=loader,
-            tool_runtime=built.tool_runtime,
-            on_skill_body=_on_skill_body,
-        )
         for meta in make_discovery_tools(runtime):
             built.tool_runtime._tools[meta.name] = meta
             if catalog.tool_by_name(meta.name) is None:
@@ -3874,7 +3953,19 @@ class Agent:
                     )
                 )
 
-        note = DISCOVERY_SYSTEM_NOTE.strip()
+        note_parts = [DISCOVERY_SYSTEM_NOTE.strip()]
+        skill_note = format_skill_catalog_for_prompt(catalog.skills)
+        if skill_note:
+            note_parts.append(skill_note)
+        if self._defer_local_tools:
+            deferred = [t.name for t in catalog.tools if not t.activated]
+            if deferred:
+                note_parts.append(
+                    "Deferred tools (search_tools / activate_tool): "
+                    + ", ".join(sorted(deferred)[:40])
+                    + ("…" if len(deferred) > 40 else "")
+                )
+        note = "\n\n".join(note_parts)
         if built.instructions:
             built.instructions = f"{built.instructions.rstrip()}\n\n{note}"
         else:

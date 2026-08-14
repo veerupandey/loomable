@@ -25,11 +25,15 @@ from loomable.kernel.skills import SkillLoader, SkillManifest
 
 __all__ = [
     "CapabilityCatalog",
+    "DISCOVERY_META_TOOL_NAMES",
+    "DISCOVERY_SYSTEM_NOTE",
     "DiscoveryRuntime",
     "SkillStub",
     "ToolStub",
+    "format_skill_catalog_for_prompt",
     "make_discovery_tools",
     "rank_match",
+    "tool_schema_payload",
 ]
 
 
@@ -74,6 +78,49 @@ class CapabilityCatalog:
             if t.name.lower() == key:
                 return t
         return None
+
+
+def tool_schema_payload(tool: Any) -> dict[str, Any]:
+    """OpenAI-style function schema for an activated tool (or best-effort stub)."""
+    if hasattr(tool, "schema") and callable(tool.schema):
+        try:
+            sch = tool.schema()
+            if isinstance(sch, dict):
+                return sch
+        except Exception:  # noqa: BLE001
+            pass
+    return {
+        "type": "function",
+        "function": {
+            "name": getattr(tool, "name", "") or "",
+            "description": getattr(tool, "description", "") or "",
+            "parameters": getattr(tool, "parameters", None)
+            or {"type": "object", "properties": {}},
+        },
+    }
+
+
+DISCOVERY_META_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "search_skills",
+        "load_skill",
+        "search_tools",
+        "search_mcp",
+        "activate_tool",
+    }
+)
+
+
+def format_skill_catalog_for_prompt(skills: list[SkillStub]) -> str:
+    """Level-1 skill disclosure: names + descriptions only."""
+    if not skills:
+        return ""
+    lines = ["Available skills (call load_skill(name) to load full instructions):"]
+    for s in skills:
+        status = "loaded" if s.loaded else "not loaded"
+        desc = (s.description or "").strip() or "(no description)"
+        lines.append(f"- {s.name} [{status}]: {desc}")
+    return "\n".join(lines)
 
 
 def rank_match(query: str, name: str, description: str = "") -> float:
@@ -317,7 +364,8 @@ class DiscoveryRuntime:
                 "name": stub.name,
                 "source": "mcp",
                 "server_id": stub.server_id,
-                "hint": "Tool is now callable on the next model turn.",
+                "schema": tool_schema_payload(mcp_tool),
+                "hint": "Tool is now callable; schema included below.",
             }
 
         pending = self._pending_local.get(stub.name)
@@ -328,7 +376,8 @@ class DiscoveryRuntime:
                 "ok": True,
                 "name": stub.name,
                 "source": stub.source,
-                "hint": "Tool is now callable on the next model turn.",
+                "schema": tool_schema_payload(pending),
+                "hint": "Tool is now callable; schema included below.",
             }
 
         # Already in runtime (eager mode)
@@ -336,7 +385,12 @@ class DiscoveryRuntime:
             tools = getattr(self.tool_runtime, "_tools", {}) or {}
             if stub.name in tools:
                 stub.activated = True
-                return {"ok": True, "name": stub.name, "already_activated": True}
+                return {
+                    "ok": True,
+                    "name": stub.name,
+                    "already_activated": True,
+                    "schema": tool_schema_payload(tools[stub.name]),
+                }
 
         return {
             "ok": False,
@@ -417,6 +471,8 @@ def make_discovery_tools(runtime: DiscoveryRuntime) -> list[FunctionTool]:
 
 DISCOVERY_SYSTEM_NOTE = """\
 Capability discovery: use search_skills / load_skill for workflows, search_tools
-for local tools, search_mcp + activate_tool for MCP tools. Prefer searching
-before assuming a tool exists. After load/activate, call the tool on the next turn.
+for deferred local tools, search_mcp + activate_tool for MCP tools. Prefer
+searching before assuming a tool exists. After load/activate, call the tool
+(schemas for activated tools are returned by activate_tool and also appear on
+the next turn).
 """

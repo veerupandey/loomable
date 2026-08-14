@@ -182,3 +182,78 @@ async def test_make_discovery_tools_json() -> None:
     payload = json.loads(_content(raw))
     assert payload["skills"]
     assert payload["skills"][0]["name"] == "research"
+
+
+@pytest.mark.asyncio
+async def test_discovery_defers_non_core_local_tools() -> None:
+    async def core_ping() -> str:
+        return "ping"
+
+    async def heavy_pdf() -> str:
+        return "pdf"
+
+    agent = Agent(
+        model=_FakeProvider(),
+        discovery=True,
+        defer_local_tools=True,
+        discovery_core_tools=["core_ping"],
+        tools=[
+            FunctionTool(core_ping, name="core_ping", description="Core"),
+            FunctionTool(heavy_pdf, name="heavy_pdf", description="Heavy PDF"),
+        ],
+    )
+    built = agent.build()
+    names = set(built.tool_runtime._tools)
+    assert "core_ping" in names
+    assert "heavy_pdf" not in names
+    assert "search_tools" in names
+    stub = built.discovery.catalog.tool_by_name("heavy_pdf")
+    assert stub is not None and stub.activated is False
+    out = built.discovery.activate_tool("heavy_pdf")
+    assert out["ok"] and "schema" in out
+    assert out["schema"]["function"]["name"] == "heavy_pdf"
+    assert "heavy_pdf" in built.tool_runtime._tools
+
+
+@pytest.mark.asyncio
+async def test_discovery_progressive_skills_metadata_only(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: Demo workflow\n---\n\n# Demo\n\nSECRET_BODY_TOKEN\n",
+        encoding="utf-8",
+    )
+    agent = Agent(
+        model=_FakeProvider(),
+        discovery=True,
+        skills=[tmp_path / "skills"],
+        tools=[],
+    )
+    built = agent.build()
+    prompt = built.instructions or ""
+    assert "SECRET_BODY_TOKEN" not in prompt
+    assert "demo" in prompt.lower()
+    assert "Available skills" in prompt or "load_skill" in prompt.lower()
+    loaded = built.discovery.load_skill("demo")
+    assert loaded["ok"]
+    assert "SECRET_BODY_TOKEN" in loaded["body"]
+    assert "SECRET_BODY_TOKEN" in (built.instructions or "")
+
+
+@pytest.mark.asyncio
+async def test_eager_skills_true_injects_body(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: Demo\n---\n\nEAGER_BODY\n",
+        encoding="utf-8",
+    )
+    agent = Agent(
+        model=_FakeProvider(),
+        discovery=True,
+        eager_skills=True,
+        skills=[tmp_path / "skills"],
+        tools=[],
+    )
+    built = agent.build()
+    assert "EAGER_BODY" in (built.instructions or "")

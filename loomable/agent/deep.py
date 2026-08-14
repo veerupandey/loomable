@@ -29,6 +29,7 @@ from loomable.providers.resilient import RetryPolicy
 
 __all__ = [
     "DEEP_AGENT_INSTRUCTIONS",
+    "DEEP_DISCOVERY_CORE_TOOLS",
     "SpecialistSpec",
     "create_deep_agent",
     "create_research_agent",
@@ -39,6 +40,41 @@ __all__ = [
 ]
 
 logger = logging.getLogger("loomable.agent.deep")
+
+# Always-advertised tools under discovery schema budget. Everything else is
+# searchable via search_tools / activate_tool (images, pdf, code_exec, …).
+DEEP_DISCOVERY_CORE_TOOLS: frozenset[str] = frozenset(
+    {
+        # Planning
+        "write_todos",
+        "read_todos",
+        "update_todo",
+        # Workspace
+        "write_file",
+        "read_file",
+        "edit_file",
+        "ls",
+        "grep",
+        "glob",
+        "delete_file",
+        # Research essentials
+        "web_search",
+        "fetch_url",
+        "extract_text",
+        "register_source",
+        "verify_source",
+        "register_claim",
+        "list_sources",
+        "format_bibliography",
+        # Delegation / context
+        "task",
+        "task_batch",
+        "think",
+        "compact_conversation",
+        "memory",
+        "plan",
+    }
+)
 
 DEEP_AGENT_INSTRUCTIONS = """\
 You are a loomable deep agent: a long-horizon agent built solely on loomable
@@ -60,8 +96,9 @@ Operating rules:
 5. Register important sources with register_source; call verify_source on key
    URLs; link important findings with register_claim(claim, source_id, quote).
    End deliverables with format_bibliography (or paste its output into the report).
-6. For visual evidence: discover_images on a source page, then fetch_image +
-   analyze_image; store notes under images/.
+6. For visual evidence: search_tools/activate_tool for image tools, then
+   discover_images on a source page, fetch_image + analyze_image; store notes
+   under images/.
 7. Use task / task_batch to spawn specialists for isolated research or drafting
    when that work would bloat your own context. Pass a crisp task description.
    Prefer task_batch when researching multiple angles in parallel.
@@ -72,7 +109,9 @@ Operating rules:
    survive beyond this session (if the memory tool is available).
 9. When chat context feels heavy, call compact_conversation with a short
    checkpoint summary so the workspace remains the source of truth.
-10. Finish by writing the user-facing deliverable under reports/ with write_file,
+10. Skills: if a matching skill is listed (e.g. research), call load_skill(name)
+   before following its workflow. Use search_skills when unsure.
+11. Finish by writing the user-facing deliverable under reports/ with write_file,
    then mark todos completed in at most one update_todo call and STOP. Do not
    keep updating todos after the report exists — emit your final answer
    summarizing the deliverable path. Do not stop after format_bibliography alone —
@@ -694,6 +733,10 @@ def create_deep_agent(
         subagents=subagents,
         skills=resolved_skills,
         discovery=discovery,
+        discovery_core_tools=list(DEEP_DISCOVERY_CORE_TOOLS),
+        # Progressive skills: metadata in prompt; load_skill for full body.
+        # Callers can pass eager_skills=True via agent_kwargs for legacy behavior.
+        eager_skills=agent_kwargs.pop("eager_skills", None),
         session_id=session_id,
         session_store=session_store,
         memory_backend=memory_backend,
