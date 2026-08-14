@@ -5,7 +5,7 @@ builds hybrid+MMR agentic tools across two corpora, and asserts hard queries.
 
 Run::
 
-    python examples/advanced/05_complex_agentic_rag.py
+    python examples/advanced/08_complex_agentic_rag.py
 """
 
 from __future__ import annotations

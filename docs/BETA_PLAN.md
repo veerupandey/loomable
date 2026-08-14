@@ -35,7 +35,7 @@
 5. **Serve baseline:** reference auth middleware (API key or bearer) on `mount_*`; locked-down example + test that anonymous `/run` is rejected when auth enabled.
 6. **Public surface freeze:** top-level `__all__` covered by a unit test; either wire or clearly mark `ExtensionRegistry` as kernel-internal/experimental.
 7. **Durability E2E:** docker-compose Postgres path green for checkpointer + Memory + Case resume (documented command).
-8. **Deep gate:** `04_live_gemini_gate.py` remains PASS on a supported model; publish measured schema budget (revise ≥50% target or ship `discovery_core="slim"` profile).
+8. **Deep gate:** `05_live_gemini_gate.py` remains PASS on a supported model; publish measured schema budget (revise ≥50% target or ship `discovery_core="slim"` profile).
 9. **Docs ops:** CHANGELOG for beta cut; README install matches packaging; examples index includes `deep_agent/`; SECURITY.md with report path.
 10. **Quality bar:** no open P0 security issues in toolkits (SSRF/path); `require_tools` / deliverable-complete behavior covered by tests.
 
@@ -152,7 +152,7 @@ W3 Serve auth baseline  ─┘
 | Postgres durability | `docker compose up` + documented E2E script |
 | Cancel | New unit/serve tests |
 | Auth mount | Example test anonymous rejected |
-| Deep | `DEEP_AGENT_LIVE=1 python examples/deep_agent/04_live_gemini_gate.py` PASS |
+| Deep | `DEEP_AGENT_LIVE=1 python examples/deep_agent/05_live_gemini_gate.py` PASS |
 | Install | Fresh venv `pip install` from beta artifact; `import loomable; loomable.__version__` |
 
 ---

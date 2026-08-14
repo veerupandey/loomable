@@ -4,7 +4,9 @@ USE WHEN: The built-in patterns (sequential, parallel, route)
 don't fit your topology. You need conditional edges, cycles,
 or custom routing logic.
 
-This is the power-user layer for explicit DAG construction.
+For most branching, prefer ``Workflow(...).branch(...)`` or
+``route(...)`` from ``loomable.flow.helpers``. This example is the
+power-user layer for explicit DAG construction.
 """
 
 import asyncio
@@ -13,6 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from loomable.agent import Agent
+from loomable.content import AgentOutput
 from loomable.flow.flow import Flow
 from loomable.flow.nodes import Node, Edge
 from loomable.providers.openai import AzureOpenAIProvider
@@ -42,6 +45,19 @@ creative_handler = Agent(
     instructions="Provide an imaginative, creative response.",
 )
 
+
+def _node_text(state, key: str) -> str:
+    """SharedState stores AgentOutput (or plain values) — read text safely."""
+    value = state.get(key)
+    if value is None:
+        return ""
+    if isinstance(value, AgentOutput):
+        return (value.text() or "").lower()
+    if hasattr(value, "text") and callable(value.text):
+        return (value.text() or "").lower()
+    return str(value).lower()
+
+
 # --- Build custom flow with conditional edges ---
 
 nodes = {
@@ -51,10 +67,16 @@ nodes = {
 }
 
 edges = [
-    Edge(source="classify", target="technical",
-         condition=lambda state: "technical" in str(state.get("classify") or "").lower()),
-    Edge(source="classify", target="creative",
-         condition=lambda state: "creative" in str(state.get("classify") or "").lower()),
+    Edge(
+        source="classify",
+        target="technical",
+        condition=lambda state: "technical" in _node_text(state, "classify"),
+    ),
+    Edge(
+        source="classify",
+        target="creative",
+        condition=lambda state: "creative" in _node_text(state, "classify"),
+    ),
 ]
 
 flow = Flow(nodes, edges=edges, engine="sequential")

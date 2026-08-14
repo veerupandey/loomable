@@ -80,7 +80,7 @@ Loomable already has the enterprise spine. We beat them by combining:
 - [x] **Public cookbook**: `examples/deep_agent/02_progressive_discovery.py`
       — scripted `search_skills` → `load_skill` → `search_tools` →
       `activate_tool` walk, no network required.
-- [x] **Live Gemini research gate**: `examples/deep_agent/04_live_gemini_gate.py`
+- [x] **Live Gemini research gate**: `examples/deep_agent/05_live_gemini_gate.py`
       passed (`stop_reason=final`, accept ok, ≥1 source, report written).
       Schema reduction vs all-eager measured at **17%** with the default
       `discovery_core="research"` allowlist (images/PDF deferred).
@@ -99,7 +99,7 @@ Loomable already has the enterprise spine. We beat them by combining:
   - **Slim profile**: fewer always-advertised tools (`DEEP_DISCOVERY_CORE_SLIM`);
     verify/claim/bibliography activate via `search_tools` when needed.
 - **Live Gemini research brief**: `stop_reason=final`, accept ok, ≥1 cited source —
-  **PASS** via `examples/deep_agent/04_live_gemini_gate.py`
+  **PASS** via `examples/deep_agent/05_live_gemini_gate.py`
   (`DEEP_AGENT_LIVE=1`, ~52s): `accept_ok=true`, `reports/gate.md` written,
   `sources_count=1`, `stop_reason=final`.
 - **Skill start**: research body absent until `load_skill` (unless `eager_skills`)
@@ -108,7 +108,7 @@ Loomable already has the enterprise spine. We beat them by combining:
 ## Live gate (Gemini)
 
 ```bash
-DEEP_AGENT_LIVE=1 python examples/deep_agent/04_live_gemini_gate.py
+DEEP_AGENT_LIVE=1 python examples/deep_agent/05_live_gemini_gate.py
 ```
 
 Latest measured result (committed narrative; re-run anytime):

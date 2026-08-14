@@ -1,9 +1,13 @@
-"""Retry Loop — Quality gate with automatic retry.
+"""Agent verifier retry — Quality gate with automatic retry.
 
 USE WHEN: You need verified output quality. The agent retries
 until a verifier function approves the result.
 
-Combines Agent + Loop + Verifier for self-correcting behavior.
+This demo uses Agent-level ``verifier=`` + ``retry_on_failure=True``.
+For a Flow-level quality gate, use ``Loop`` from ``loomable.flow``::
+
+    from loomable.flow import Loop
+    loop = Loop(agent, verifier=verify_has_code, max_iterations=3)
 """
 
 import asyncio

@@ -483,6 +483,37 @@ def test_example_07_knowledge_base_runs() -> None:
     runpy.run_path(str(script), run_name="__main__")
 
 
+def test_example_08_team_knowledge_base_runs() -> None:
+    import runpy
+
+    script = Path(__file__).resolve().parents[2] / "examples" / "agents" / "08_team_knowledge_base.py"
+    runpy.run_path(str(script), run_name="__main__")
+
+
+def test_example_build_retriever_runs() -> None:
+    import runpy
+
+    script = (
+        Path(__file__).resolve().parents[2]
+        / "examples"
+        / "advanced"
+        / "05_build_retriever.py"
+    )
+    runpy.run_path(str(script), run_name="__main__")
+
+
+def test_example_checkpointing_runs() -> None:
+    import runpy
+
+    script = (
+        Path(__file__).resolve().parents[2]
+        / "examples"
+        / "advanced"
+        / "03_checkpointing.py"
+    )
+    runpy.run_path(str(script), run_name="__main__")
+
+
 def test_env_files_are_not_committed() -> None:
     import subprocess
 

@@ -10,16 +10,16 @@ Demonstrates (real APIs when keys are set):
 
 Scripted CI path (no API key)::
 
-    python examples/deep_agent/03_live_multimodal_research.py
+    python examples/deep_agent/04_live_multimodal_research.py
 
 Live::
 
     DEEP_AGENT_LIVE=1 GEMINI_API_KEY=... \\
-      python examples/deep_agent/03_live_multimodal_research.py
+      python examples/deep_agent/04_live_multimodal_research.py
 
     # or OpenAI
     DEEP_AGENT_LIVE=1 OPENAI_API_KEY=... DEEP_MODEL=openai:gpt-4o-mini \\
-      python examples/deep_agent/03_live_multimodal_research.py
+      python examples/deep_agent/04_live_multimodal_research.py
 """
 
 from __future__ import annotations

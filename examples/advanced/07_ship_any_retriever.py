@@ -2,7 +2,7 @@
 
 Run::
 
-    python examples/advanced/04_ship_any_retriever.py
+    python examples/advanced/07_ship_any_retriever.py
 """
 
 from __future__ import annotations

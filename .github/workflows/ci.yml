@@ -54,7 +54,7 @@ jobs:
           DEEP_AGENT_LIVE: "1"
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
-        run: python examples/deep_agent/04_live_gemini_gate.py
+        run: python examples/deep_agent/05_live_gemini_gate.py
       - name: Live Postgres
         if: ${{ secrets.POSTGRES_URL != '' }}
         env:

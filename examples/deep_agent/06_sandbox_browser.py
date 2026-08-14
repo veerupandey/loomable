@@ -8,12 +8,12 @@ Illustrates the layering:
 
 Run (no network required for the scripted smoke path)::
 
-    python examples/deep_agent/05_sandbox_browser.py
+    python examples/deep_agent/06_sandbox_browser.py
 
 Live Lightpanda (optional)::
 
     # install/start Lightpanda per https://lightpanda.io/docs/usage/mcp
-    DEEP_AGENT_BROWSER=1 python examples/deep_agent/05_sandbox_browser.py
+    DEEP_AGENT_BROWSER=1 python examples/deep_agent/06_sandbox_browser.py
 """
 
 from __future__ import annotations

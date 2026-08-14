@@ -691,7 +691,7 @@ agent = Agent(
 |-------|--------|----------------|
 | Conversation | `ConversationMemory` (`short=`) | L1 turns + L2 summaries for `session_id` |
 | User | `UserMemory` (`long=`) | Cross-session facts via `NoteStore` (scoped) |
-| Knowledge | `KnowledgeMemory` | RAG docs into the prompt |
+| Knowledge | `KnowledgeMemory` | Passive RAG into the prompt, or `store`/`sources`/`knowledge_base` → `search_*` tools |
 | Working | `WorkingMemory` | Flow blackboard (`TieredMemoryStore`) — not Agent chat |
 
 ### Scopes (user_id, claim_id, …)
@@ -1521,7 +1521,7 @@ hits = await retriever.retrieve("OAuth", k=5, filters={"page": 3, "tags": ["poli
 
 Ship **any** custom retriever the same way — implement ``name`` + ``async retrieve``
 (optional ``description``) and pass ``Agent(retrievers=[...])``. See
-``examples/advanced/04_ship_any_retriever.py``.
+``examples/advanced/07_ship_any_retriever.py``.
 
 **Multi-corpus** (routed composite)::
 
@@ -1545,8 +1545,8 @@ PDFs are handled inside ``ingest``: extract pages, then page-chunk (split
 oversized pages with overlap — never truncate). Pass the ``.pdf`` path; do not
 pre-split.
 
-See ``examples/advanced/03_agentic_retriever.py`` and
-``examples/advanced/05_complex_agentic_rag.py``.
+See ``examples/advanced/06_agentic_retriever.py`` and
+``examples/advanced/08_complex_agentic_rag.py``.
 
 ## MCP Integration
 
