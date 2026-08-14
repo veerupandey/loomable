@@ -45,7 +45,7 @@ class _Scripted:
                 tool_calls=[
                     ToolCall(
                         id="1",
-                        tool_name="docs",
+                        tool_name="search_docs",
                         args={"query": "OAuth2 login", "k": 2},
                     )
                 ],
@@ -55,7 +55,6 @@ class _Scripted:
 
 async def main() -> None:
     docs = _seed()
-    # Ingest (pluggable store — memory here; use open_vector_store(path=...) for zvec)
     corpus = await ingest(
         [docs],
         name="docs",
@@ -64,13 +63,14 @@ async def main() -> None:
         strategy="auto",
         base_mode="hybrid",
     )
-    # Agentic stack — every stage swappable
+    # Tool name becomes search_docs (agent-facing). Corpus id stays "docs".
     retriever = await build_agentic_retriever(
         corpus,
-        mode="auto",       # or "chunks" | "file" | custom ModeRouter
-        rewrite="off",     # or "multi_query" / "hyde" with llm=
-        rerank="score",    # or "llm" / custom Reranker
-        compress="off",    # or "llm" / custom HitCompressor
+        name="search_docs",
+        mode="auto",
+        rewrite="off",
+        rerank="mmr",
+        compress="off",
     )
     agent = Agent(
         model=ModelSpec(provider="scripted", provider_impl=_Scripted()),

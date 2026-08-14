@@ -13,6 +13,7 @@
 - Agent L3 memory **defaults to Alibaba zvec** at `.loomable/memory_zvec` (`LongTermStore()` / `open_vector_store()`); use `engine="memory"`|`faiss`|`postgres` to opt out
 - **Agentic retrieval**: `ingest` / `Corpus`, `AgenticRetriever`, `CompositeRetriever` with pluggable rewrite / mode router / rerank / compress / corpus router
 - Embedders: **Gemini**, **Azure OpenAI**, **Hugging Face** (local MiniLM / Inference API) + batch `embed_many`; MMR reranker for diversity
+- Ship-any-retriever: `Agent(retrievers=[...])` registers each as a `search_*` tool with query/k schema + system-prompt hint; `ensure_search_tool_name`
 - Stability policy ([docs/STABILITY.md](docs/STABILITY.md)), SECURITY.md, beta graduation plan
 - `BuiltAgent.cancel()` / `Agent.cancel()` with active `RunContext` tracking
 - SSE / stream client disconnect triggers cooperative cancel

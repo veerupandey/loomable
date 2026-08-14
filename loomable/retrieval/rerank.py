@@ -213,14 +213,14 @@ def resolve_reranker(spec: str | bool | Any | None, *, llm: Any | None = None) -
     if spec is None or spec is False or spec == "off":
         return IdentityReranker()
     if spec is True:
-        return ScoreReranker()
+        return MMRReranker()
     if isinstance(spec, str):
         key = spec.strip().lower()
         if key in {"off", "none", "identity", ""}:
             return IdentityReranker()
-        if key in {"score", "true", "on"}:
+        if key in {"score"}:
             return ScoreReranker()
-        if key == "mmr":
+        if key in {"mmr", "true", "on"}:
             return MMRReranker()
         if key == "llm":
             if llm is None:

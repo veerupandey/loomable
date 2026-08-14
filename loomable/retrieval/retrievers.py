@@ -144,7 +144,7 @@ class HybridRetriever(Retriever):
         *,
         vector: VectorRetriever,
         lexical: LexicalRetriever,
-        vector_weight: float = 0.6,
+        vector_weight: float = 0.7,
     ) -> None:
         self.name = name
         self.vector = vector

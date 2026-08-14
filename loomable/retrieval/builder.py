@@ -58,23 +58,25 @@ def _make_store(
 async def build_retriever(
     sources: Sequence[Any],
     *,
-    name: str = "retrieve",
-    mode: str = "vector",
+    name: str = "search_docs",
+    mode: str = "hybrid",
     strategy: str | ChunkStrategy = "auto",
     embedder: Any | None = None,
     store: LongTermStore | None = None,
     backend: VectorBackend | None = None,
     persist_path: str | Path | None = None,
-    vector_weight: float = 0.6,
+    vector_weight: float = 0.7,
 ) -> Retriever:
-    """Build a ready-to-use :class:`~loomable.kernel.contracts.Retriever`.
+    """Build a ready-to-ship :class:`~loomable.kernel.contracts.Retriever` tool.
 
     Parameters
     ----------
     sources:
         Files, directories, inline strings, dicts, or :class:`Document`s.
+    name:
+        Agent tool name (normalized to ``search_*``).
     mode:
-        ``"vector"`` (default), ``"lexical"``, or ``"hybrid"``.
+        ``"hybrid"`` (default, RRF), ``"vector"``, or ``"lexical"``.
     strategy:
         Chunk strategy name (``auto`` / ``text`` / ``markdown`` / ``code`` /
         ``html`` / ``pdf``) or a custom :class:`ChunkStrategy`.
@@ -94,37 +96,38 @@ async def build_retriever(
 
         retriever = await build_retriever(
             ["./docs", "./README.md"],
-            name="docs",
+            name="search_docs",
             mode="hybrid",
             persist_path="./.loomable/docs_zvec",  # Alibaba zvec on disk
         )
-        # Or FAISS / Postgres:
-        # from loomable.providers.vector_store import open_vector_store
-        # store = open_vector_store(engine="faiss", path="./.loomable/docs_faiss",
-        #                          dimensions=384, device="auto")
-        # store = open_vector_store(postgres_url=DSN, dimensions=1536)
-        # retriever = await build_retriever([...], store=store)
-        agent = Agent(model=..., retrievers=[retriever])
+        agent = Agent(model=..., retrievers=[retriever])  # tool: search_docs
     """
+    from loomable.retrieval.naming import ensure_search_tool_name
+
+    tool_name = ensure_search_tool_name(name)
     _docs, chunks = await build_corpus(sources, strategy=strategy)
-    mode_key = (mode or "vector").strip().lower()
+    mode_key = (mode or "hybrid").strip().lower()
     emb = embedder or HashingEmbedder()
 
     if mode_key == "lexical":
-        return LexicalRetriever(name, chunks)
+        return LexicalRetriever(tool_name, chunks)
 
     lt = _make_store(store=store, backend=backend, persist_path=persist_path)
-    vector = VectorRetriever(name if mode_key == "vector" else f"{name}__vector", store=lt, embedder=emb)
+    vector = VectorRetriever(
+        tool_name if mode_key == "vector" else f"{tool_name}__vector",
+        store=lt,
+        embedder=emb,
+    )
     await vector.index_chunks(chunks)
 
     if mode_key == "vector":
-        vector.name = name
+        vector.name = tool_name
         return vector
 
     if mode_key == "hybrid":
-        lexical = LexicalRetriever(f"{name}__lexical", chunks)
+        lexical = LexicalRetriever(f"{tool_name}__lexical", chunks)
         return HybridRetriever(
-            name, vector=vector, lexical=lexical, vector_weight=vector_weight
+            tool_name, vector=vector, lexical=lexical, vector_weight=vector_weight
         )
 
     raise ValueError(f"mode must be 'vector', 'lexical', or 'hybrid', got {mode!r}")

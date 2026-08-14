@@ -1,12 +1,12 @@
 """Retriever-to-Tool adapters for the loomable agent framework.
 
-Exposes any Retriever as an invocable Tool (MCP-style or API-style) with no
-Kernel source changes. The adapter wraps a Retriever instance and delegates
-invoke() to the retriever's retrieve() method.
+Expose any :class:`~loomable.kernel.contracts.Retriever` as an invocable Tool
+with a proper JSON schema so the agent LLM can call it. Registration happens
+via ``Agent(retrievers=[...])`` — the tool name is ``retriever.name``.
 
 Error contract:
-- If the retriever raises an exception, the adapter produces a ToolResult
-  with an error naming the retriever (Req 16.5).
+- If the retriever raises, the adapter returns a ToolResult error naming the
+  retriever (Req 16.5).
 """
 
 from __future__ import annotations
@@ -16,35 +16,43 @@ from typing import Any
 from loomable.kernel.contracts import Retriever, Tool
 from loomable.kernel.models import ToolResult
 
+_RETRIEVER_PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "query": {
+            "type": "string",
+            "description": "Natural-language search query to look up in this knowledge base.",
+        },
+        "k": {
+            "type": "integer",
+            "description": "Maximum number of results to return (default 5).",
+            "default": 5,
+        },
+    },
+    "required": ["query"],
+}
+
 
 class RetrieverTool(Tool):
-    """Adapter that wraps a Retriever as an invocable Tool.
+    """Adapter that wraps any Retriever as an agent tool.
 
-    This allows any Retriever to be exposed to an Agent as an MCP-style or
-    API-style tool without modifying Kernel source code. The agent invokes
-    the tool with a query (and optional k), and receives retrieved content.
+    The model sees ``name``, ``description``, and ``parameters`` (query + k).
+    ``invoke({"query": ..., "k": ...})`` delegates to ``retriever.retrieve``.
 
     Args:
-        retriever: The Retriever instance to wrap.
-        description: Optional description override. Defaults to a generated
-            description based on the retriever name.
+        retriever: Any object with ``.name`` and ``async retrieve(query, k)``.
+        description: Optional override; otherwise uses ``retriever.description``
+            or a generated search hint.
     """
 
     def __init__(self, retriever: Retriever, description: str | None = None) -> None:
         self._retriever = retriever
         self.name: str = retriever.name
-        self.description: str = description or f"Retriever tool: {retriever.name}"
+        self.parameters: dict[str, Any] = dict(_RETRIEVER_PARAMETERS)
+        self.description: str = description or _default_description(retriever)
 
     async def invoke(self, args: dict[str, Any]) -> ToolResult:
-        """Invoke the wrapped retriever with query and k from args.
-
-        Args:
-            args: Must contain 'query' (str). May contain 'k' (int, default 5).
-
-        Returns:
-            ToolResult with retrieved content on success, or ToolResult with
-            error naming the retriever on failure.
-        """
+        """Invoke the wrapped retriever with query and k from args."""
         query: str = args.get("query", "")
         k: int = args.get("k", 5)
 
@@ -60,3 +68,13 @@ class RetrieverTool(Tool):
             content=results,
             metadata={"retriever_name": self._retriever.name, "query": query, "k": k},
         )
+
+
+def _default_description(retriever: Retriever) -> str:
+    custom = (getattr(retriever, "description", None) or "").strip()
+    if custom:
+        return custom
+    return (
+        f"Search knowledge base '{retriever.name}'. "
+        "Call this tool to retrieve documents, facts, or context needed to answer the user."
+    )

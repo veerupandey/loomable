@@ -162,8 +162,9 @@ def test_resolve_rewriter_variants() -> None:
 def test_resolve_reranker_and_compressor() -> None:
     assert resolve_reranker(None).name == "off"
     assert resolve_reranker(False).name == "off"
-    assert resolve_reranker(True).name == "score"
+    assert resolve_reranker(True).name == "mmr"
     assert resolve_reranker("score").name == "score"
+    assert resolve_reranker("mmr").name == "mmr"
     assert resolve_reranker("llm", llm=_FakeLLM("id")).name == "llm"
     with pytest.raises(ValueError, match="llm"):
         resolve_reranker("llm")
@@ -529,7 +530,7 @@ async def test_retriever_tool_adapter_and_error(tmp_path: Path) -> None:
     ok = await tool.invoke({"query": "OAuth2", "k": 2})
     assert ok.error is None
     assert ok.content
-    assert ok.metadata["retriever_name"] == "docs"
+    assert ok.metadata["retriever_name"] == "search_docs"
 
     class Boom:
         name = "boom"
@@ -554,7 +555,7 @@ async def test_agent_tool_roundtrip(tmp_path: Path) -> None:
         base_mode="hybrid",
     )
     agent = Agent(
-        model=ModelSpec(provider="scripted", provider_impl=_ScriptedAgent("docs")),
+        model=ModelSpec(provider="scripted", provider_impl=_ScriptedAgent("search_docs")),
         retrievers=[retriever],
         use_llm_summarizer=False,
     )

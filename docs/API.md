@@ -1436,7 +1436,7 @@ from loomable.retrieval import ingest, build_agentic_retriever
 
 corpus = await ingest(
     ["./docs", "./README.md", {"id": "note", "text": "Inline knowledge"}],
-    name="docs",
+    name="docs",           # corpus id (routing)
     store=open_vector_store(engine="faiss", dimensions=3072, device="cpu"),
     embedder=GeminiEmbedder(),  # or HuggingFaceEmbedder() / AzureOpenAIEmbedder(...)
     strategy="auto",       # text | markdown | code | html | pdf | auto | custom
@@ -1445,14 +1445,19 @@ corpus = await ingest(
 
 retriever = await build_agentic_retriever(
     corpus,
+    name="search_docs",    # agent tool name (auto-prefixed if you pass "docs")
     mode="auto",           # chunks | file | auto | custom ModeRouter
     rewrite="off",         # off | multi_query | hyde | custom QueryRewriter
     rerank="mmr",          # off | score | mmr | llm | custom Reranker
     compress="off",        # off | llm | custom HitCompressor
     # llm=provider,       # needed for multi_query / hyde / llm rerank / llm mode
 )
-agent = Agent(model=provider, retrievers=[retriever])
+agent = Agent(model=provider, retrievers=[retriever])  # LLM calls search_docs(query, k)
 ```
+
+Ship **any** custom retriever the same way — implement ``name`` + ``async retrieve``
+(optional ``description``) and pass ``Agent(retrievers=[...])``. See
+``examples/advanced/04_ship_any_retriever.py``.
 
 **Multi-corpus** (routed composite)::
 

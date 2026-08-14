@@ -52,7 +52,7 @@ class Corpus:
     store: LongTermStore | None = None
     embedder: Any = None
     base_mode: str = "hybrid"
-    vector_weight: float = 0.6
+    vector_weight: float = 0.7
     strategy: str | ChunkStrategy = "auto"
     _vector: VectorRetriever | None = field(default=None, repr=False)
     _lexical: LexicalRetriever | None = field(default=None, repr=False)
@@ -194,7 +194,7 @@ async def ingest(
     backend: VectorBackend | None = None,
     persist_path: str | Path | None = None,
     base_mode: str = "hybrid",
-    vector_weight: float = 0.6,
+    vector_weight: float = 0.7,
 ) -> Corpus:
     """Ingest sources into a named :class:`Corpus` (pluggable store/strategy/mode)."""
     corpus = Corpus(

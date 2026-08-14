@@ -37,7 +37,7 @@ class _ScriptedRetrieve:
             return ModelResponse(
                 content="",
                 tool_calls=[
-                    ToolCall(id="1", tool_name="docs", args={"query": "OAuth2 login", "k": 2})
+                    ToolCall(id="1", tool_name="search_docs", args={"query": "OAuth2 login", "k": 2})
                 ],
             )
         return ModelResponse(content="retrieved")

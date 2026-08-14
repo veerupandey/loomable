@@ -1,4 +1,9 @@
-"""Agentic retriever — pluggable rewrite / route / base / rerank / compress."""
+"""Agentic retriever — pluggable rewrite / route / base / rerank / compress.
+
+``AgenticRetriever`` / ``CompositeRetriever`` are ready-to-ship
+:class:`~loomable.kernel.contracts.Retriever` tools. Pass them to
+``Agent(retrievers=[...])``; tool names are normalized to ``search_*``.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +11,11 @@ from typing import Any, Sequence
 
 from loomable.kernel.contracts import Retriever
 from loomable.retrieval.corpus import Corpus
+from loomable.retrieval.naming import (
+    DEFAULT_SEARCH_DOCS,
+    DEFAULT_SEARCH_KNOWLEDGE,
+    ensure_search_tool_name,
+)
 from loomable.retrieval.rerank import resolve_compressor, resolve_reranker
 from loomable.retrieval.rewrite import resolve_rewriter
 from loomable.retrieval.route import (
@@ -36,13 +46,16 @@ def _merge_hits(groups: Sequence[Sequence[dict[str, Any]]], *, k: int) -> list[d
 
 
 class AgenticRetriever(Retriever):
-    """Single-corpus agentic retriever with pluggable stages.
+    """Single-corpus agentic search tool (hybrid RRF + optional MMR by default).
 
     Pipeline::
 
         query → rewrite → mode route (chunks|file) → base retrieve → rerank → compress
 
-    Attach to an agent as a tool via ``Agent(retrievers=[...])``.
+    Ship to an agent::
+
+        agent = Agent(model=..., retrievers=[AgenticRetriever(corpus)])
+        # tool name defaults to search_<corpus.name> e.g. search_docs
     """
 
     def __init__(
@@ -50,15 +63,27 @@ class AgenticRetriever(Retriever):
         corpus: Corpus,
         *,
         name: str | None = None,
+        description: str | None = None,
         mode: str | Any = "auto",
         rewrite: str | Any | None = "off",
-        rerank: str | bool | Any | None = True,
+        rerank: str | bool | Any | None = "mmr",
         compress: str | bool | Any | None = "off",
         llm: Any | None = None,
         fetch_k: int | None = None,
     ) -> None:
         self.corpus = corpus
-        self.name = name or corpus.name
+        # Agent tool name (search_*); corpus.name stays the collection id.
+        self.name = ensure_search_tool_name(
+            name, default=ensure_search_tool_name(corpus.name)
+        )
+        self.description = (
+            (description if description is not None else "")
+            or (corpus.description or "").strip()
+            or (
+                f"Search the '{corpus.name}' knowledge base for relevant documents "
+                "and cite them when answering."
+            )
+        )
         self.rewriter = resolve_rewriter(rewrite, llm=llm)
         self.mode_router = resolve_mode_router(mode, llm=llm)
         self.reranker = resolve_reranker(rerank, llm=llm)
@@ -142,22 +167,30 @@ class AgenticRetriever(Retriever):
 
 
 class CompositeRetriever(Retriever):
-    """Multi-corpus agentic router (pluggable :class:`CorpusRouter`)."""
+    """Multi-corpus search tool (pluggable :class:`CorpusRouter`).
+
+    Agent tool name defaults to ``search_knowledge``. Children are keyed by
+    ``corpus.name`` for routing, independent of each child's tool name.
+    """
 
     def __init__(
         self,
         corpora: Sequence[Corpus | AgenticRetriever],
         *,
-        name: str = "knowledge",
+        name: str = DEFAULT_SEARCH_KNOWLEDGE,
+        description: str | None = None,
         corpus_router: str | Any = "all",
         llm: Any | None = None,
         # Defaults applied when wrapping bare Corpus objects
         mode: str | Any = "auto",
         rewrite: str | Any | None = "off",
-        rerank: str | bool | Any | None = True,
+        rerank: str | bool | Any | None = "mmr",
         compress: str | bool | Any | None = "off",
     ) -> None:
-        self.name = name
+        self.name = ensure_search_tool_name(name, default=DEFAULT_SEARCH_KNOWLEDGE)
+        self.description = (description or "").strip() or (
+            "Search across configured knowledge corpora and return the best matching passages."
+        )
         self.llm = llm
         self.router = resolve_corpus_router(corpus_router, llm=llm)
         self._children: dict[str, AgenticRetriever] = {}
@@ -198,7 +231,7 @@ class CompositeRetriever(Retriever):
 async def build_agentic_retriever(
     sources: Sequence[Any] | Corpus | Sequence[Corpus],
     *,
-    name: str = "docs",
+    name: str = DEFAULT_SEARCH_DOCS,
     description: str = "",
     # ingestion
     strategy: Any = "auto",
@@ -207,21 +240,28 @@ async def build_agentic_retriever(
     backend: Any | None = None,
     persist_path: Any | None = None,
     base_mode: str = "hybrid",
-    vector_weight: float = 0.6,
+    vector_weight: float = 0.7,
     # agentic stages (all pluggable)
     mode: str | Any = "auto",
     rewrite: str | Any | None = "off",
-    rerank: str | bool | Any | None = True,
+    rerank: str | bool | Any | None = "mmr",
     compress: str | bool | Any | None = "off",
     corpus_router: str | Any = "all",
     llm: Any | None = None,
 ) -> Retriever:
-    """Build an :class:`AgenticRetriever` or :class:`CompositeRetriever`.
+    """Build a shippable search :class:`~loomable.kernel.contracts.Retriever`.
 
     ``sources`` may be raw ingest inputs, a single :class:`Corpus`, or a list
-    of corpora for multi-corpus routing.
+    of corpora for multi-corpus routing. The returned object's ``.name`` is the
+    agent tool name (``search_*``).
     """
     from loomable.retrieval.corpus import ingest
+
+    tool_name = ensure_search_tool_name(name, default=DEFAULT_SEARCH_DOCS)
+    # Corpus collection id: strip search_ prefix so routing keys stay short.
+    corpus_id = name
+    if corpus_id.lower().startswith("search_"):
+        corpus_id = corpus_id[len("search_") :] or "docs"
 
     # Multi-corpus: list of Corpus
     if (
@@ -231,7 +271,8 @@ async def build_agentic_retriever(
     ):
         return CompositeRetriever(
             list(sources),  # type: ignore[arg-type]
-            name=name,
+            name=tool_name,
+            description=description or None,
             corpus_router=corpus_router,
             llm=llm,
             mode=mode,
@@ -245,7 +286,7 @@ async def build_agentic_retriever(
     else:
         corpus = await ingest(
             sources,  # type: ignore[arg-type]
-            name=name,
+            name=corpus_id,
             description=description,
             strategy=strategy,
             embedder=embedder,
@@ -258,7 +299,8 @@ async def build_agentic_retriever(
 
     return AgenticRetriever(
         corpus,
-        name=name,
+        name=tool_name,
+        description=description or None,
         mode=mode,
         rewrite=rewrite,
         rerank=rerank,

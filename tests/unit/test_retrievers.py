@@ -134,6 +134,14 @@ class TestRetrieverTool:
 
         assert tool.description == "Search custom docs"
 
+    async def test_parameters_schema_advertises_query_and_k(self) -> None:
+        """Agent models need a real JSON schema to call the tool correctly."""
+        tool = RetrieverTool(FakeRetriever("search_kb"))
+        assert tool.parameters["type"] == "object"
+        assert "query" in tool.parameters["properties"]
+        assert "k" in tool.parameters["properties"]
+        assert tool.parameters["required"] == ["query"]
+
     async def test_no_kernel_change_needed(self) -> None:
         """RetrieverTool extends Tool without any Kernel modification.
 
