@@ -44,12 +44,14 @@ from loomable.memory.compose import (
     is_kernel_memory_manager,
     is_memory_bundle,
 )
+from loomable.providers.vector_store import open_vector_store
 
 StoreKind = Literal["sqlite", "file", "postgres", "memory"]
 
 __all__ = [
     "StoreKind",
     "open_session_store",
+    "open_vector_store",
     "SessionStore",
     "FileSessionStore",
     "BackendSessionStore",

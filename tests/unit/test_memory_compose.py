@@ -5,7 +5,8 @@ from __future__ import annotations
 import pytest
 
 from loomable.agent import Agent, ModelSpec, NoteStore
-from loomable.kernel.long_term import LongTermStore, open_vector_store
+from loomable.kernel.long_term import LongTermStore
+from loomable.providers.vector_store import open_vector_store
 from loomable.kernel.models import ModelRequest, ModelResponse
 from loomable.memory import (
     ConversationMemory,

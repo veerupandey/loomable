@@ -11,7 +11,7 @@ import asyncio
 from pathlib import Path
 
 from loomable.agent import Agent, ModelSpec
-from loomable.kernel.long_term import open_vector_store
+from loomable.providers.vector_store import open_vector_store
 from loomable.kernel.models import ModelRequest, ModelResponse, ToolCall
 from loomable.retrieval import build_agentic_retriever, ingest
 

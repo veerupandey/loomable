@@ -8,7 +8,8 @@ from loomable.agent import Agent, ModelSpec, NoteStore, Team
 from loomable.agent.context import RunContext
 from loomable.case import Case
 from loomable.flow.workflow import Workflow
-from loomable.kernel.long_term import LongTermStore, open_vector_store
+from loomable.kernel.long_term import LongTermStore
+from loomable.providers.vector_store import open_vector_store
 from loomable.kernel.models import ModelRequest, ModelResponse
 from loomable.memory import open_session_store
 

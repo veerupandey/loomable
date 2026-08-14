@@ -11,7 +11,8 @@ from typing import Any, Sequence
 from loomable.codeindex.chunking import CodeChunk, iter_code_chunks
 from loomable.codeindex.embedders import HashingEmbedder
 from loomable.kernel.contracts import VectorBackend
-from loomable.kernel.long_term import LongTermStore, open_vector_store  # noqa: F401
+from loomable.kernel.long_term import LongTermStore
+from loomable.providers.vector_store import open_vector_store  # noqa: F401
 
 
 @dataclass(frozen=True)

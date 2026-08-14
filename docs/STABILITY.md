@@ -11,7 +11,7 @@ the declared scope. Breaking changes are rare and require a deprecation note in
 | `Agent`, `BuiltAgent`, `Team` | Core runnable agents |
 | `Workflow`, `Step`, `Loop`, `Condition`, `Parallel_Group` | Durable multi-step |
 | `Case`, `Board`, `WorkItem` | Goal + WorkItems board |
-| `Memory`, `MemoryScope`, `ConversationMemory`, `UserMemory`, `KnowledgeMemory`, `WorkingMemory`, `open_session_store` | Composable memory |
+| `Memory`, `MemoryScope`, `ConversationMemory`, `UserMemory`, `KnowledgeMemory`, `WorkingMemory`, `open_session_store`, `open_vector_store` | Composable memory + vector store factory |
 | `create_deep_agent` | Long-horizon / research harness |
 | `tool`, `RunResult`, `ContextPolicy`, `spawn_specialist` | DX helpers |
 | Checkpointers (`JsonFile`, `SQLite`, `InMemory`, `Postgres`) | Durability |

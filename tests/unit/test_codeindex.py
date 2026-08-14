@@ -8,7 +8,8 @@ import pytest
 
 from loomable.agent import ModelSpec, create_deep_agent
 from loomable.codeindex import CodeIndex, HashingEmbedder
-from loomable.kernel.long_term import InMemoryVectorBackend, open_vector_store, LongTermStore
+from loomable.kernel.long_term import InMemoryVectorBackend, LongTermStore
+from loomable.providers.vector_store import open_vector_store
 from loomable.kernel.models import ModelRequest, ModelResponse
 from loomable.skills import list_bundled_skills
 from loomable.toolkits import CodeTools

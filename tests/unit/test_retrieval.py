@@ -79,7 +79,8 @@ async def test_build_retriever_vector_and_lexical(tmp_path: Path) -> None:
     (docs_dir / "billing.md").write_text(
         "# Billing\n\nInvoices and discounts.\n", encoding="utf-8"
     )
-    from loomable.kernel.long_term import LongTermStore, open_vector_store
+    from loomable.kernel.long_term import LongTermStore
+    from loomable.providers.vector_store import open_vector_store
 
     vector = await build_retriever(
         [docs_dir],

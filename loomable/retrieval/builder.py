@@ -99,7 +99,7 @@ async def build_retriever(
             persist_path="./.loomable/docs_zvec",  # Alibaba zvec on disk
         )
         # Or FAISS / Postgres:
-        # from loomable.kernel.long_term import open_vector_store
+        # from loomable.providers.vector_store import open_vector_store
         # store = open_vector_store(engine="faiss", path="./.loomable/docs_faiss",
         #                          dimensions=384, device="auto")
         # store = open_vector_store(postgres_url=DSN, dimensions=1536)

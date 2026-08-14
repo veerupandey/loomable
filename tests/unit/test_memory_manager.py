@@ -8,7 +8,8 @@ Tests cover:
 
 import pytest
 
-from loomable.kernel.long_term import InMemoryVectorBackend, LongTermStore, open_vector_store
+from loomable.kernel.long_term import InMemoryVectorBackend, LongTermStore
+from loomable.providers.vector_store import open_vector_store
 from loomable.kernel.memory import MemoryManager
 from loomable.kernel.models import StructuredSummary, Turn
 
