@@ -118,3 +118,45 @@ def test_open_session_store_rejects_unknown() -> None:
 
 def test_session_store_default_still_sqlite() -> None:
     assert isinstance(SessionStore(), SessionStore)
+
+
+@pytest.mark.asyncio
+async def test_compose_conversation_store_with_zvec_notes() -> None:
+    """L1/L2 session store and L3 NoteStore(zvec) are independent axes."""
+    from loomable.agent import NoteStore
+    from loomable.kernel.long_term import LongTermStore
+
+    class _Emb:
+        async def embed(self, text: str) -> list[float]:
+            return [float(len(text) % 5), 1.0, 0.0]
+
+    store = open_session_store("memory")
+    notes = NoteStore(long_term=LongTermStore(), embedder=_Emb())
+
+    a1 = Agent(
+        model=_model(),
+        session_id="compose-1",
+        session_store=store,
+        note_store=notes,
+        memory_tool=True,
+        modalities="text",
+    )
+    await a1.arun("My name is Alex")
+    await notes.write("who", "User name is Alex", tags=["identity"])
+
+    recalled = await notes.recall("name", k=1)
+    assert recalled and "Alex" in recalled[0].text
+
+    a2 = Agent(
+        model=_model(),
+        session_id="compose-1",
+        session_store=store,
+        resume=True,
+        note_store=notes,
+        memory_tool=True,
+        modalities="text",
+    )
+    r2 = await a2.arun("What is my name?")
+    assert "Alex" in (r2.output.text() or "")
+    assert await notes.read("who") is not None
+

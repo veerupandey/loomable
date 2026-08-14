@@ -587,156 +587,172 @@ All support `complete()` and `stream()`.
 
 ## Memory
 
-L1/L2 conversation memory activates with `session_id`. Persistence is pluggable.
+Agent memory has **two independent axes** — pick each backend separately and compose.
 
-### Conversation Memory (default)
+| Axis | What the user is storing | Lives under | Knobs |
+|------|--------------------------|-------------|-------|
+| **Conversation** | Chat turns (L1) + rolled-up summaries (L2) for one `session_id` | `session_store` / `memory_backend` | `session_id`, `resume`, `memory_window`, compaction |
+| **Long-term** | Episodic notes + RAG facts (L3 vectors) | `note_store` / `knowledge`+`embedder` | `memory_tool`, embedder, vector backend |
+
+```
+Agent
+├── Conversation (L1/L2) → session_store / memory_backend
+│     sqlite | file | postgres | memory | custom MemoryBackend
+└── Long-term (L3)
+      ├── note_store + memory_tool  → model write/recall notes
+      └── knowledge + embedder      → RAG into the prompt
+            zvec (default, in-process) | PgVector | custom VectorBackend
+```
+
+### How to think about it (perspectives)
+
+1. **Same chat, same process** — only `session_id`. Default in-process SQLite holds L1/L2. No L3 unless you add `note_store`.
+2. **Same chat across processes / restarts** — durable L1/L2 (`postgres` / `file` / sqlite file path) + `resume=True` on the *second* `Agent(...)`.
+3. **Facts that should outlive the chat window** — L3 via `note_store` + `memory_tool=True` (model writes notes) or `knowledge`+`embedder` (RAG).
+4. **Postgres for chat, zvec for notes** — common prod/demo split: durable conversation in Postgres; fast in-process episodic notes in zvec (lost on process exit unless you switch L3 to `PgVectorBackend`).
+5. **Case / Workflow durability** — `PostgresCheckpointer` is a third concern (node/board resume). It is **not** Agent chat memory.
+
+`resume=True` means “this session row must already exist.” First turn: omit it (or create the session). Later Agents: pass `resume=True`.
+
+### Minimal chat (same process)
 
 ```python
 agent = Agent(model="openai:gpt-4o-mini", session_id="conv-1")
 await agent.arun("My name is Alice")
-await agent.arun("What's my name?")  # → Alice (same process)
+await agent.arun("What's my name?")  # Alice
 ```
 
-Cross-process / new Agent: pass the same store and `resume=True`.
-
-### Pluggable L1/L2 stores (sqlite / file / postgres / custom)
+### Conversation store (L1/L2) — including Postgres
 
 ```python
-from loomable import Agent
 from loomable.memory import open_session_store
 
-# SQLite file
 store = open_session_store("sqlite", path="sessions.db")
+# store = open_session_store("file", path="./.sessions")
+# store = open_session_store("postgres", url=DSN, user_id="alice")
+# store = open_session_store("memory")
 
-# One JSON file per session
-store = open_session_store("file", path="./.sessions")
+# First Agent: create / overwrite this session_id
+agent = Agent(model=..., session_id="conv-1", session_store=store)
+await agent.arun("I prefer dark mode")
 
-# Postgres (pip install 'loomable[postgres]')
-store = open_session_store("postgres", url=POSTGRES_URL, user_id="alice")
-
-# In-process (tests)
-store = open_session_store("memory")
-
-agent = Agent(model=..., session_id="conv-1", session_store=store, resume=True)
+# Later process: reload L1/L2
+agent2 = Agent(model=..., session_id="conv-1", session_store=store, resume=True)
 ```
 
-Or pass any `MemoryBackend` directly:
+Or pass a KV backend (whole session saved under `session:{id}`):
 
 ```python
-from loomable.providers.backends.postgres import PostgresMemoryBackend
-from loomable.kernel.stores import SQLiteMemoryBackend, InMemoryMemoryBackend
-
 agent = Agent(
     model=...,
     session_id="conv-1",
-    memory_backend=PostgresMemoryBackend(POSTGRES_URL, user_id="alice"),
-    resume=True,
+    memory_backend=PostgresMemoryBackend(DSN, user_id="alice"),
 )
-# Also works: SQLiteMemoryBackend("kv.db"), InMemoryMemoryBackend(), or your own
+# later: same memory_backend + resume=True
 ```
 
-Custom backends only need `async read/write/delete/exists` (`MemoryBackend` protocol).
-Wrap with `BackendSessionStore(backend)` if you prefer `session_store=`.
+Custom: implement `MemoryBackend` (`read`/`write`/`delete`/`exists`) → `memory_backend=`,  
+or implement `save(session)` / `resume(session_id)` → `session_store=`.
 
-### Memory knobs
-
-```python
-agent = Agent(
-    model="openai:gpt-4o-mini",
-    session_id="conv-1",
-    session_store=store,
-    resume=True,
-    use_memory=True,
-    memory_window=8,
-    compaction_threshold=16,
-    use_llm_summarizer=True,
-)
-```
-
-### Memory Tiers
-
-| Tier | What | Scope | How to provide |
-|------|------|-------|----------------|
-| L1 (turns) | Raw conversation | Per session | `session_id` + `session_store` / `memory_backend` |
-| L2 (summaries) | Compacted older history | Per session | Same store; auto at `compaction_threshold` |
-| L3 (episodic) | Vector notes / RAG | Cross-session | `note_store` / `knowledge`+`embedder` |
-
-### Pinned Facts
-
-```python
-built = agent.build()
-built.pin_fact("API key: sk-abc123")  # never summarized away
-```
-
-### Cross-Session Notes (long-term memory)
+### Long-term (L3): zvec or Postgres vectors
 
 ```python
 from loomable.agent import NoteStore
-from loomable.kernel import LongTermStore
-from loomable.providers import AzureOpenAIEmbedder
+from loomable.kernel.long_term import LongTermStore  # default backend = zvec
+from loomable.providers import OpenAIEmbedder
 
-store = NoteStore(
-    long_term=LongTermStore(),
-    embedder=AzureOpenAIEmbedder(),
+# Process-local L3 (zvec)
+notes = NoteStore(long_term=LongTermStore(), embedder=OpenAIEmbedder())
+
+# Durable L3 (Postgres)
+from loomable.providers.backends.postgres import PgVectorBackend
+notes = NoteStore(
+    long_term=LongTermStore(
+        backend=PgVectorBackend(DSN, dimensions=1536, user_id="alice"),
+        backend_name="postgres",
+    ),
+    embedder=OpenAIEmbedder(),
 )
 
-agent = Agent(
-    model="openai:gpt-4o-mini",
-    memory_tool=True,
-    note_store=store,
-)
-# The model can now write/read/recall durable notes across sessions
+agent = Agent(model=..., session_id="conv-1", note_store=notes, memory_tool=True)
 ```
 
-### Cross-Session User Memory (user_id)
+### Compose: Postgres conversation + zvec L3
 
-Scope memory per user with `user_id` — facts persist across sessions for the same user:
+Axes are independent — pass both. See `examples/memory/03_compose_postgres_zvec.py`.
 
 ```python
+from loomable import Agent
+from loomable.agent import NoteStore
+from loomable.kernel.long_term import LongTermStore
+from loomable.memory import open_session_store
+from loomable.providers import OpenAIEmbedder
+
+DSN = "postgresql://loomable:loomable@127.0.0.1:5432/loomable"
+store = open_session_store("postgres", url=DSN, user_id="alice")
+notes = NoteStore(long_term=LongTermStore(), embedder=OpenAIEmbedder())  # zvec L3
+
 agent = Agent(
     model="openai:gpt-4o-mini",
-    session_id="conv-123",
-    user_id="alice",         # memory scoped to this user across all sessions
+    session_id="conv-1",
+    session_store=store,          # durable L1/L2
+    note_store=notes,             # in-process L3
+    memory_tool=True,
+    memory_window=8,
+    compaction_threshold=16,
+)
+await agent.arun("Remember I prefer teal")
+
+agent2 = Agent(
+    model="openai:gpt-4o-mini",
+    session_id="conv-1",
+    session_store=store,
+    resume=True,                  # reload chat from Postgres
+    note_store=notes,             # same process → same zvec notes
+    memory_tool=True,
 )
 ```
 
-### PostgreSQL (durable memory + checkpoints)
+### Compose matrix
+
+| Want | L1/L2 conversation | L3 long-term |
+|------|--------------------|--------------|
+| Local demo | default / `file` / `memory` | zvec `LongTermStore()` |
+| Prod chat, ephemeral notes | `postgres` | zvec |
+| Prod chat + durable notes | `postgres` | `PgVectorBackend` |
+| All Postgres | `PostgresMemoryBackend` | `PgVectorBackend` |
+| Case/Workflow resume | — | use `PostgresCheckpointer` (separate) |
+
+### Knobs
+
+| Param | Effect |
+|-------|--------|
+| `session_id` | Enables L1/L2 + persist after each run |
+| `resume=True` | Reload L1/L2 from store on new Agent (session must exist) |
+| `memory_window` | Max raw L1 turns replayed |
+| `compaction_threshold` | Spill oldest L1 → L2 summaries |
+| `use_llm_summarizer` | LLM compaction |
+| `note_store` + `memory_tool=True` | L3 notes tool |
+| `knowledge` + `embedder` | RAG prefix (own zvec store today) |
+
+Pinned facts (never compacted):
+
+```python
+agent.build().pin_fact("Customer prefers dark mode")
+```
+
+### Postgres install
 
 ```bash
 pip install 'loomable[postgres]'
 docker compose up -d
+# POSTGRES_URL=postgresql://loomable:loomable@127.0.0.1:5432/loomable
 ```
 
-```python
-from loomable import Agent, Case, PostgresCheckpointer
-from loomable.memory import open_session_store
-from loomable.providers.backends.postgres import PgVectorBackend, PostgresMemoryBackend
-from loomable.kernel.long_term import LongTermStore
-from loomable.agent import NoteStore
-
-DSN = "postgresql://loomable:loomable@127.0.0.1:5432/loomable"
-
-# L1/L2 conversation memory in Postgres
-agent = Agent(
-    model="openai:gpt-4o-mini",
-    session_id="conv-1",
-    session_store=open_session_store("postgres", url=DSN, user_id="alice"),
-    resume=True,
-)
-
-# Or: memory_backend=PostgresMemoryBackend(DSN, user_id="alice")
-
-# Case / Workflow checkpoints
-case = Case(model="openai:gpt-4o-mini", board=True, session_id="inc-1",
-            checkpointer=PostgresCheckpointer(DSN))
-
-# L3 notes
-note_store = NoteStore(
-    long_term=LongTermStore(backend=PgVectorBackend(DSN, dimensions=1536, user_id="alice"),
-                            backend_name="postgres"),
-    embedder=embedder,
-)
-```
+`PostgresCheckpointer` is for Case/Workflow resume — not Agent chat history.  
+`Agent(user_id=...)` is metadata; pass `user_id=` on Postgres backends for tenant isolation.  
+`memory_tool=True` without `note_store` is a no-op.  
+`knowledge` RAG builds its own zvec store today — separate from `note_store`.
 
 ---
 

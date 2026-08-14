@@ -10,7 +10,10 @@ Use with::
     # store = open_session_store("postgres", url=POSTGRES_URL, user_id="alice")
     # store = open_session_store("memory")
 
-    agent = Agent(model=..., session_id="chat-1", session_store=store, resume=True)
+    agent = Agent(model=..., session_id="chat-1", session_store=store)
+    await agent.arun("hi")
+    # later process / new Agent:
+    agent2 = Agent(model=..., session_id="chat-1", session_store=store, resume=True)
 
 Or pass a :class:`~loomable.kernel.contracts.MemoryBackend` directly::
 
@@ -18,8 +21,8 @@ Or pass a :class:`~loomable.kernel.contracts.MemoryBackend` directly::
         model=...,
         session_id="chat-1",
         memory_backend=PostgresMemoryBackend(DSN, user_id="alice"),
-        resume=True,
     )
+    # later: same memory_backend + resume=True
 """
 
 from __future__ import annotations
