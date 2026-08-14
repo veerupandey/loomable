@@ -690,6 +690,7 @@ class Case:
         embedder: Any = None,
         knowledge_top_k: int = 3,
         user_id: str | None = None,
+        memory: Any | None = None,
     ) -> None:
         from loomable.agent.memory_opts import filter_memory_kwargs
 
@@ -704,6 +705,7 @@ class Case:
 
         agent_memory = filter_memory_kwargs(
             {
+                "memory": memory,
                 "session_id": session_id,
                 "user_id": user_id,
                 "session_store": session_store,
@@ -718,6 +720,14 @@ class Case:
                 "knowledge_top_k": knowledge_top_k,
             }
         )
+        # If a Memory bundle was provided, expand it into agent_memory for roles.
+        if memory is not None and hasattr(memory, "to_agent_kwargs"):
+            from loomable.memory.compose import is_memory_bundle
+
+            if is_memory_bundle(memory):
+                composed = memory.with_user_id(user_id).to_agent_kwargs()
+                for k, v in composed.items():
+                    agent_memory.setdefault(k, v)
         # Case session_id is the checkpointer thread; role agents get scoped ids.
         if session_id is not None:
             agent_memory["session_id"] = session_id
@@ -804,6 +814,7 @@ class Case:
             embedder=mem.get("embedder"),
             knowledge_top_k=int(mem.get("knowledge_top_k", 3) or 3),
             user_id=mem.get("user_id"),
+            memory=getattr(agent, "_memory_bundle", None) or mem.get("memory"),
         )
 
     def as_workflow(self) -> Workflow:

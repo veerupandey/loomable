@@ -312,7 +312,8 @@ agent = Agent(
     tools=[...],                        # list of @tool-decorated functions
     subagents=[...],                    # list of Agent instances for delegation
     session_id="conv-1",                # enables multi-turn memory
-    user_id="alice",                    # scopes long-term memory per user
+    user_id="alice",                    # scopes UserMemory notes when using Memory.compose
+    memory=None,                        # Memory.compose(conversation=..., user=...)
     debug=True,                         # prints trace to stderr
 )
 ```
@@ -611,53 +612,68 @@ All support `complete()` and `stream()`.
 
 ## Memory
 
-Agent memory has **two independent axes** — pick each backend separately and compose.
+Compose memory layers and pass **one object** to the Agent:
 
-| Axis | What the user is storing | Lives under | Knobs |
-|------|--------------------------|-------------|-------|
-| **Conversation** | Chat turns (L1) + rolled-up summaries (L2) for one `session_id` | `session_store` / `memory_backend` | `session_id`, `resume`, `memory_window`, compaction |
-| **Long-term** | Episodic notes + RAG facts (L3 vectors) | `note_store` / `knowledge`+`embedder` | `memory_tool`, embedder, vector backend |
+```python
+from loomable import Agent, Memory, ConversationMemory, UserMemory, open_session_store
+from loomable.agent import NoteStore
+from loomable.kernel.long_term import LongTermStore
 
+memory = Memory.compose(
+    # short-term / thread (L1+L2)
+    conversation=ConversationMemory(
+        store=open_session_store("postgres", url=DSN, user_id="alice"),
+        window=8,
+        compaction_threshold=16,
+    ),
+    # long-term user facts (L3) — scoped by Agent(user_id=...)
+    user=UserMemory(
+        note_store=NoteStore(LongTermStore(), embedder),
+        memory_tool=True,    # agentic tool
+        auto_extract=True,   # Always-mode lite (heuristic facts from user text)
+    ),
+    # optional RAG
+    # knowledge=KnowledgeMemory(documents=[...], embedder=embedder),
+)
+
+agent = Agent(
+    model="openai:gpt-4o-mini",
+    memory=memory,
+    session_id="conv-1",
+    user_id="alice",  # scopes UserMemory note ids/tags
+)
 ```
-Agent
-├── Conversation (L1/L2) → session_store / memory_backend
-│     sqlite | file | postgres | memory | custom MemoryBackend
-└── Long-term (L3)
-      ├── note_store + memory_tool  → model write/recall notes
-      └── knowledge + embedder      → RAG into the prompt
-            zvec (default, in-process) | PgVector | custom VectorBackend
-```
+
+| Layer | Class | What it stores |
+|-------|--------|----------------|
+| Conversation | `ConversationMemory` (`short=`) | L1 turns + L2 summaries for `session_id` |
+| User | `UserMemory` (`long=`) | Cross-session facts via `NoteStore` (user-scoped) |
+| Knowledge | `KnowledgeMemory` | RAG docs into the prompt |
+| Working | `WorkingMemory` | Flow blackboard (`TieredMemoryStore`) — not Agent chat |
+
+Legacy kwargs (`session_store=`, `note_store=`, `memory_backend=`) still work and **override** the matching compose layer when both are set.
+
+`user_id` is real for `UserMemory`: notes are stored as `{user_id}:{note_id}` via `ScopedNoteStore`. Pass the same `user_id` into Postgres stores for tenant isolation on L1/L2.
 
 ### How to think about it (perspectives)
 
-1. **Same chat, same process** — only `session_id`. Default in-process SQLite holds L1/L2. No L3 unless you add `note_store`.
-2. **Same chat across processes / restarts** — durable L1/L2 (`postgres` / `file` / sqlite file path) + `resume=True` on the *second* `Agent(...)`.
-3. **Facts that should outlive the chat window** — L3 via `note_store` + `memory_tool=True` (model writes notes) or `knowledge`+`embedder` (RAG).
-4. **Postgres for chat, zvec for notes** — common prod/demo split: durable conversation in Postgres; fast in-process episodic notes in zvec (lost on process exit unless you switch L3 to `PgVectorBackend`).
-5. **Case / Workflow durability** — `PostgresCheckpointer` is a third concern (node/board resume). It is **not** Agent chat memory.
+1. **Same chat, same process** — only `session_id` (default in-process SQLite).
+2. **Durable chat** — `ConversationMemory(store=open_session_store(...))` + `resume=True` on reload.
+3. **User remembers across chats** — `UserMemory` + `user_id` (+ optional `auto_extract`).
+4. **Postgres chat + zvec notes** — compose both layers; backends stay independent.
+5. **Case / Workflow resume** — `checkpointer` is separate from Agent memory.
 
-`resume=True` means “this session row must already exist.” First turn: omit it (or create the session). Later Agents: pass `resume=True`.
+`resume=True` means “this session row must already exist.” First turn: omit it. Later Agents: pass `resume=True`.
 
 ### Same kwargs on Team / Case / Agent-in-Flow
 
 | Surface | Conversation L1/L2 | Long-term L3 | Notes |
 |---------|--------------------|--------------|-------|
-| **Agent** | `session_store` / `memory_backend` | `note_store` / `knowledge` | Canonical API |
-| **Team** | Same kwargs → **coordinator** Agent | Same → coordinator | Members keep the memory you gave each member Agent |
-| **Case** | Same kwargs → default planner/worker/synth (role-scoped `session_id`) | Shared `note_store` / knowledge | `Case.from_agent` copies Agent memory; `checkpointer` stays separate |
-| **Flow / Workflow step** | Agent’s own store | Agent’s own `note_store` | `Flow(memory=True)` is TieredMemory (blackboard), **not** Agent chat |
-| **mount_agent** | `bind_session(session_id)` reloads L1/L2 when a durable store is set | unchanged | Same bind path as Case checkpoints |
-
-```python
-# Team — identical memory knobs as Agent (on the coordinator)
-Team(members, model=..., session_store=store, note_store=notes, memory_tool=True)
-
-# Case — identical knobs; roles get session_id "{id}:planner" etc.
-Case(model=..., session_id="c1", session_store=store, note_store=notes, memory_tool=True)
-
-# Flow — wrap Agents that already have memory configured
-wf.step("research", Agent(model=..., session_id="r1", session_store=store))
-```
+| **Agent** | `memory=` compose or `session_store` | `UserMemory` / `note_store` | Canonical API |
+| **Team** | Same kwargs → **coordinator** | Same → coordinator | Members keep their own memory |
+| **Case** | Same → role-scoped sessions | Shared notes | `from_agent` copies memory |
+| **Flow step** | Agent’s own memory | Agent’s own notes | `Flow(memory=True)` is TieredMemory blackboard |
+| **mount_agent** | `bind_session` reloads L1/L2 | unchanged | |
 
 ### Minimal chat (same process)
 
@@ -677,11 +693,9 @@ store = open_session_store("sqlite", path="sessions.db")
 # store = open_session_store("postgres", url=DSN, user_id="alice")
 # store = open_session_store("memory")
 
-# First Agent: create / overwrite this session_id
 agent = Agent(model=..., session_id="conv-1", session_store=store)
 await agent.arun("I prefer dark mode")
 
-# Later process: reload L1/L2
 agent2 = Agent(model=..., session_id="conv-1", session_store=store, resume=True)
 ```
 
@@ -693,20 +707,15 @@ agent = Agent(
     session_id="conv-1",
     memory_backend=PostgresMemoryBackend(DSN, user_id="alice"),
 )
-# later: same memory_backend + resume=True
 ```
-
-Custom: implement `MemoryBackend` (`read`/`write`/`delete`/`exists`) → `memory_backend=`,  
-or implement `save(session)` / `resume(session_id)` → `session_store=`.
 
 ### Long-term (L3): zvec or Postgres vectors
 
 ```python
 from loomable.agent import NoteStore
-from loomable.kernel.long_term import LongTermStore  # default backend = zvec
+from loomable.kernel.long_term import LongTermStore
 from loomable.providers import OpenAIEmbedder
 
-# Process-local L3 (zvec)
 notes = NoteStore(long_term=LongTermStore(), embedder=OpenAIEmbedder())
 
 # Durable L3 (Postgres)
@@ -718,73 +727,28 @@ notes = NoteStore(
     ),
     embedder=OpenAIEmbedder(),
 )
-
-agent = Agent(model=..., session_id="conv-1", note_store=notes, memory_tool=True)
-```
-
-### Compose: Postgres conversation + zvec L3
-
-Axes are independent — pass both. See `examples/memory/03_compose_postgres_zvec.py`.
-
-```python
-from loomable import Agent
-from loomable.agent import NoteStore
-from loomable.kernel.long_term import LongTermStore
-from loomable.memory import open_session_store
-from loomable.providers import OpenAIEmbedder
-
-DSN = "postgresql://loomable:loomable@127.0.0.1:5432/loomable"
-store = open_session_store("postgres", url=DSN, user_id="alice")
-notes = NoteStore(long_term=LongTermStore(), embedder=OpenAIEmbedder())  # zvec L3
-
-agent = Agent(
-    model="openai:gpt-4o-mini",
-    session_id="conv-1",
-    session_store=store,          # durable L1/L2
-    note_store=notes,             # in-process L3
-    memory_tool=True,
-    memory_window=8,
-    compaction_threshold=16,
-)
-await agent.arun("Remember I prefer teal")
-
-agent2 = Agent(
-    model="openai:gpt-4o-mini",
-    session_id="conv-1",
-    session_store=store,
-    resume=True,                  # reload chat from Postgres
-    note_store=notes,             # same process → same zvec notes
-    memory_tool=True,
-)
 ```
 
 ### Compose matrix
 
-| Want | L1/L2 conversation | L3 long-term |
-|------|--------------------|--------------|
-| Local demo | default / `file` / `memory` | zvec `LongTermStore()` |
-| Prod chat, ephemeral notes | `postgres` | zvec |
-| Prod chat + durable notes | `postgres` | `PgVectorBackend` |
-| All Postgres | `PostgresMemoryBackend` | `PgVectorBackend` |
-| Case/Workflow resume | — | use `PostgresCheckpointer` (separate) |
+| Want | Conversation | User / L3 |
+|------|--------------|-----------|
+| Local demo | default / file / memory | zvec `LongTermStore()` |
+| Prod chat, ephemeral notes | postgres | zvec |
+| Prod chat + durable notes | postgres | `PgVectorBackend` |
+| Case/Workflow resume | — | `PostgresCheckpointer` (separate) |
 
 ### Knobs
 
 | Param | Effect |
 |-------|--------|
-| `session_id` | Enables L1/L2 + persist after each run |
-| `resume=True` | Reload L1/L2 from store on new Agent (session must exist) |
-| `memory_window` | Max raw L1 turns replayed |
-| `compaction_threshold` | Spill oldest L1 → L2 summaries |
-| `use_llm_summarizer` | LLM compaction |
-| `note_store` + `memory_tool=True` | L3 notes tool |
-| `knowledge` + `embedder` | RAG prefix (own zvec store today) |
-
-Pinned facts (never compacted):
-
-```python
-agent.build().pin_fact("Customer prefers dark mode")
-```
+| `memory=Memory.compose(...)` | Unified layers |
+| `session_id` | Enables L1/L2 persist |
+| `user_id` | Scopes `UserMemory` notes |
+| `resume=True` | Reload L1/L2 (session must exist) |
+| `UserMemory(auto_extract=True)` | Heuristic facts after each turn |
+| `UserMemory(memory_tool=True)` | Agentic memory tool |
+| `memory_window` / `compaction_threshold` | Replay + L2 spill |
 
 ### Postgres install
 
@@ -795,8 +759,7 @@ docker compose up -d
 ```
 
 `PostgresCheckpointer` is for Case/Workflow resume — not Agent chat history.  
-`Agent(user_id=...)` is metadata; pass `user_id=` on Postgres backends for tenant isolation.  
-`memory_tool=True` without `note_store` is a no-op.  
+`memory_tool=True` without a note store is a no-op.  
 `knowledge` RAG builds its own zvec store today — separate from `note_store`.
 
 ---

@@ -15,6 +15,7 @@ from typing import Any
 
 # Keys forwarded identically on Agent, Team (parent), and Case (role agents).
 MEMORY_KEYS: tuple[str, ...] = (
+    "memory",
     "session_id",
     "user_id",
     "resume",
@@ -34,6 +35,7 @@ MEMORY_KEYS: tuple[str, ...] = (
 
 # Attribute names on Agent for the corresponding kwargs.
 _AGENT_ATTR: dict[str, str] = {
+    "memory": "_memory_bundle",
     "session_id": "_session_id",
     "user_id": "_user_id",
     "resume": "_resume",
