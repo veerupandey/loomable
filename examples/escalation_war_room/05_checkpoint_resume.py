@@ -3,6 +3,11 @@
 Simulates a crash after the gather step: incomplete checkpoint is written,
 process "dies", then a new Workflow with the same session_id + checkpointer
 resumes and skips gather.
+
+NOTE: This exam uses tiny callables only to force an incomplete checkpoint.
+For normal apps, put ``Agent``s on ``Workflow.step(...)`` — Agents already
+consume the previous Agent's output (see ``examples/advanced/03_checkpointing.py``
+and ``examples/patterns/02_pipeline.py``).
 """
 
 from __future__ import annotations

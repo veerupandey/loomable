@@ -30,6 +30,25 @@ def tool_names(request: ModelRequest) -> set[str]:
     return names
 
 
+def _last_user_text(request: ModelRequest) -> str:
+    """Best-effort extract of the latest user turn (for offline echo scripts)."""
+    for message in reversed(request.messages or []):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            chunks: list[str] = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    chunks.append(str(part.get("text") or ""))
+                elif isinstance(part, str):
+                    chunks.append(part)
+            return "".join(chunks)
+    return ""
+
+
 def scripted_model(
     steps: Sequence[Step],
     *,
@@ -40,6 +59,9 @@ def scripted_model(
     Each step is either:
       - ``str`` — final text response
       - ``{"tool": name, "args": {...}}`` — one tool call
+      - ``{"echo": "APPROVED: {input}"}`` — format prior agent/user text
+        (``{input}`` is replaced with the latest user turn — what Workflow
+        already passed from the previous Agent)
       - ``callable(request, n) -> ModelResponse`` — custom turn
     """
 
@@ -60,6 +82,10 @@ def scripted_model(
                 return step(request, self.n)
             if isinstance(step, str):
                 return ModelResponse(content=step)
+            if isinstance(step, dict) and "echo" in step:
+                template = str(step["echo"])
+                prior = _last_user_text(request)
+                return ModelResponse(content=template.replace("{input}", prior))
             if isinstance(step, dict) and "tool" in step:
                 return ModelResponse(
                     content=str(step.get("content") or ""),
