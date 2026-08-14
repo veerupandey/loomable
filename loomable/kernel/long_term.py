@@ -114,8 +114,17 @@ class LongTermStore:
     def close(self) -> None:
         """Release backend resources (e.g. Alibaba zvec collection lock)."""
         closer = getattr(self.backend, "close", None)
-        if callable(closer):
-            closer()
+        if not callable(closer):
+            return
+        result = closer()
+        if hasattr(result, "__await__"):
+            import asyncio
+
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                asyncio.run(result)
+            # If a loop is already running, prefer ``await store.aclose()``.
 
     async def aclose(self) -> None:
         closer = getattr(self.backend, "aclose", None) or getattr(self.backend, "close", None)

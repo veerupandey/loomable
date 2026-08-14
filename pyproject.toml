@@ -47,6 +47,8 @@ web = ["ddgs"]
 postgres = ["asyncpg>=0.29.0"]
 zvec = ["zvec>=0.5.0"]
 faiss = ["faiss-cpu>=1.8.0"]
+chroma = ["chromadb>=0.5.0"]
+milvus = ["pymilvus[milvus_lite]>=2.4.0"]
 huggingface = ["sentence-transformers>=2.2.0"]
 embeddings = ["sentence-transformers>=2.2.0"]
 toolkits = ["pypdf", "python-pptx", "httpx", "beautifulsoup4", "ddgs"]
@@ -56,6 +58,8 @@ retrieval = [
     "sentence-transformers>=2.2.0",
     "pypdf",
     "beautifulsoup4",
+    "chromadb>=0.5.0",
+    "pymilvus[milvus_lite]>=2.4.0",
 ]
 
 
