@@ -12,10 +12,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from loomable.agent import Agent, Team
-from loomable.providers.openai import AzureOpenAIProvider
+import sys
+from pathlib import Path
 
-provider = AzureOpenAIProvider()
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _provider import require_provider  # noqa: E402
+
+from loomable.agent import Agent, Team
+
+provider = require_provider()
 
 # --- Define team members ---
 

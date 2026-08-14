@@ -1,15 +1,12 @@
 """STRESS EXAM — Full enterprise spine under pressure.
 
-Combines in one run (what real SEV war rooms need):
+Agents / Team / Workflow only — prior output chains automatically:
+
   1) Workflow gather (tools + md/pdf/pptx)
   2) Kill after gather → resume (durability)
-  3) Hard Team broadcast (triage + SLA parallel specialists)
-  4) spawn_specialist cert auditor (ephemeral)
-  5) Multimodal dashboard glance
-  6) Scribe with write_json schema + response_model
-  7) Session memory across resume
-
-Observes UX/behavior into output/STRESS_OBSERVATIONS.md for framework fixes.
+  3) Hard Team broadcast (triage + SLA)
+  4) Cert auditor Agent
+  5) Scribe with write_json schema + response_model
 """
 
 from __future__ import annotations
@@ -19,23 +16,12 @@ import json
 import shutil
 import time
 import traceback
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from loomable import (
-    Agent,
-    JsonFileCheckpointer,
-    Step,
-    Team,
-    Workflow,
-    spawn_specialist,
-    tool,
-)
-from loomable.agent.run import RunResult
-from loomable.content import AgentOutput, Text
+from loomable import Agent, JsonFileCheckpointer, Team, Workflow, tool
 from loomable.persist.checkpoint import Checkpoint
 from loomable.toolkits import FileTools, PDFTools, PPTTools
 
@@ -115,13 +101,6 @@ class EvidencePack(BaseModel):
     open_questions: list[str] = Field(default_factory=list)
 
 
-class SpecialistNotes(BaseModel):
-    triage_view: str
-    sla_view: str
-    cert_audit: str
-    visual_hint: str = ""
-
-
 class FinalPacket(BaseModel):
     incident_id: str
     customer: str
@@ -145,14 +124,6 @@ def _prepare() -> Path:
     for item in FIXTURES.iterdir():
         shutil.copy2(item, WORK / "fixtures" / item.name)
     return WORK
-
-
-def _text_of(inp: Any) -> str:
-    if hasattr(inp, "text") and callable(inp.text):
-        return inp.text()
-    if isinstance(inp, RunResult):
-        return inp.output.text()
-    return str(inp)
 
 
 # ---------------------------------------------------------------------------
@@ -195,14 +166,20 @@ def make_team() -> Team:
         model=make_provider(),
         role="Triage Lead",
         goal="Classify SEV and root hypothesis from evidence",
-        instructions="Be terse. Output: severity + one hypothesis + 2 checks.",
+        instructions=(
+            "You receive EvidencePack text from the prior gather step. "
+            "Be terse. Output: severity + one hypothesis + 2 checks."
+        ),
         modalities="text",
     )
     sla = Agent(
         model=make_provider(),
         role="SLA Officer",
         goal="State SLA risk and bridge requirement",
-        instructions="Be terse. Output: breach risk + bridge ETA urgency.",
+        instructions=(
+            "You receive EvidencePack text from the prior gather step. "
+            "Be terse. Output: breach risk + bridge ETA urgency."
+        ),
         modalities="text",
     )
     return Team(
@@ -214,64 +191,16 @@ def make_team() -> Team:
     )
 
 
-async def specialists_step(inp: Any, *, context=None) -> RunResult:
-    """Hard Team broadcast + ephemeral cert auditor + optional image glance."""
-    evidence = _text_of(inp)
-    note(f"specialists_step input_chars={len(evidence)}")
-
-    team = make_team()
-    t0 = time.monotonic()
-    team_result = await team.arun(
-        "From this EvidencePack, give your specialist view:\n" + evidence[:6000]
-    )
-    note(f"team_broadcast_ms={(time.monotonic()-t0)*1000:.0f} hard={team_result.metadata.get('hard')}")
-
-    t1 = time.monotonic()
-    cert = await spawn_specialist(
+def make_cert_auditor() -> Agent:
+    return Agent(
         model=make_provider(),
         role="Cert Auditor",
         goal="Assess CHG-55219 cert rotation risk on connector pools",
-        task=(
-            "Given this war-room evidence, list 3 concrete checks for CHG-55219 "
-            "cert rotation causing connector pool saturation. Be short.\n\n"
-            + evidence[:3500]
+        instructions=(
+            "You receive prior gather + specialist output. "
+            "List 3 concrete checks for CHG-55219 cert rotation. Be short."
         ),
         modalities="text",
-    )
-    note(f"spawn_specialist_ms={(time.monotonic()-t1)*1000:.0f} chars={len(cert)}")
-
-    visual = ""
-    dash = WORK / "fixtures" / "dashboard_spike.png"
-    if dash.exists():
-        try:
-            t2 = time.monotonic()
-            vision = Agent(
-                model=make_provider(),
-                role="Visual Analyst",
-                instructions="One sentence: what the chart shows about failures vs success.",
-                modalities="text+image",
-            )
-            vres = await vision.arun(
-                "Glance this settlement error chart for BharatNova escalation.",
-                images=[str(dash)],
-            )
-            visual = vres.output.text()
-            note(f"vision_ms={(time.monotonic()-t2)*1000:.0f}")
-        except Exception as exc:  # noqa: BLE001
-            visual = f"(vision failed: {exc})"
-            note(f"VISION_FAIL {exc}")
-
-    notes = SpecialistNotes(
-        triage_view=team_result.output.text()[:2000],
-        sla_view="(included in broadcast)",
-        cert_audit=cert[:2000],
-        visual_hint=visual[:1000],
-    )
-    return RunResult(
-        output=AgentOutput(parts=[Text(notes.model_dump_json(indent=2))]),
-        session_id=SESSION,
-        structured=notes,
-        metadata={"team_hard": True},
     )
 
 
@@ -281,7 +210,7 @@ def make_scribe(work: Path, *, resumed: bool) -> Agent:
         role="War-room Scribe",
         goal="Write brief + FinalPacket JSON",
         instructions=(
-            "You receive EvidencePack JSON then SpecialistNotes JSON context.\n"
+            "You receive prior gather/specialist Agent output as your input.\n"
             "1) write_file output/stress_brief.md with impact, hypothesis, SLA, actions.\n"
             "2) write_json output/final_packet.json as FinalPacket "
             "(severity SEV-*, set resumed="
@@ -318,19 +247,17 @@ async def run_stress() -> FinalPacket:
 
     t0 = time.monotonic()
     gather_result = await wf_gather.arun(ESCALATION_EMAIL)
-    note(f"gather_ms={(time.monotonic()-t0)*1000:.0f} tools={len(gather_result.tool_activity or [])}")
-    pack = gather_result.structured
-    if not isinstance(pack, EvidencePack):
-        # Fallback: try parse text
-        note(f"GATHER_STRUCTURED_MISS type={type(pack)} — parsing text")
-        pack = EvidencePack.model_validate_json(gather_result.output.text())
+    note(
+        f"gather_ms={(time.monotonic()-t0)*1000:.0f} "
+        f"tools={len(gather_result.tool_activity or [])}"
+    )
+    assert gather_result.structured is not None or (gather_result.output.text() or "").strip()
 
     # Simulate crash: incomplete checkpoint with gather done
     from loomable.flow.state import SharedState
 
     state = SharedState()
     state.write("gather", gather_result.output)
-    # Also stash specialists placeholder not run yet
     await cp.put(
         Checkpoint(
             thread_id=SESSION,
@@ -344,57 +271,34 @@ async def run_stress() -> FinalPacket:
     )
     note("KILL simulated after gather — incomplete checkpoint written")
 
-    # ---- Phase 2: resume → specialists → scribe ----
-    # Build a workflow that includes gather (skipped) + specialists + scribe
-    calls = {"gather": 0}
-
-    async def gather_guard(inp, *, context=None):
-        calls["gather"] += 1
-        note("ERROR gather re-executed after resume!")
-        return await gatherer.arun(inp)
-
-    async def specialists_wrap(inp, *, context=None):
-        # Prefer restored gather output
-        return await specialists_step(inp, context=context)
-
+    # ---- Phase 2: resume — Agents/Team only, no parse glue ----
+    gather2 = make_gatherer(work)
+    specialists = make_team()
+    cert = make_cert_auditor()
     scribe = make_scribe(work, resumed=True)
-
-    async def scribe_wrap(inp, *, context=None):
-        # Combine evidence + specialist notes for scribe
-        evidence = pack.model_dump_json(indent=2)
-        notes = _text_of(inp)
-        prompt = (
-            "EvidencePack:\n"
-            + evidence
-            + "\n\nSpecialistNotes:\n"
-            + notes
-            + "\n\nProduce FinalPacket. Set resumed=true."
-        )
-        return await scribe.arun(prompt)
 
     wf2 = (
         Workflow("stress-full", session_id=SESSION, checkpointer=cp, memory=True)
-        .step("gather", gather_guard)
-        .step("specialists", specialists_wrap)
-        .step("scribe", scribe_wrap)
+        .step("gather", gather2)
+        .step("specialists", specialists)
+        .step("cert", cert)
+        .step("scribe", scribe)
     )
 
     t1 = time.monotonic()
     final = await wf2.arun(ESCALATION_EMAIL, resume=True)
+    skipped = final.metadata.get("skipped_nodes") or []
     note(
         f"resume_full_ms={(time.monotonic()-t1)*1000:.0f} "
         f"resumed={final.metadata.get('resumed')} "
-        f"skipped={final.metadata.get('skipped_nodes')} "
-        f"gather_recalls={calls['gather']}"
+        f"skipped={skipped}"
     )
 
-    if calls["gather"] != 0:
-        note("FAIL: gather was re-run after resume")
+    assert final.metadata.get("resumed") is True
+    assert "gather" in skipped, f"resume must skip gather, got {skipped}"
 
     packet = final.structured
-    if not isinstance(packet, FinalPacket):
-        note(f"SCRIBE_STRUCTURED_MISS type={type(packet)} — parsing")
-        packet = FinalPacket.model_validate_json(final.output.text())
+    assert isinstance(packet, FinalPacket), type(packet)
 
     brief = work / "output" / "stress_brief.md"
     packet_path = work / "output" / "final_packet.json"
@@ -409,14 +313,14 @@ async def run_stress() -> FinalPacket:
     shutil.copy2(brief, OUTPUT / "stress_brief.md")
     shutil.copy2(packet_path, OUTPUT / "final_packet.json")
 
-    # Assertions
-    assert calls["gather"] == 0, "resume must skip gather"
-    assert final.metadata.get("resumed") is True
     assert packet.severity.startswith("SEV-")
     assert packet.next_actions
     assert packet.incident_id.upper().startswith("INC")
     assert not final.metadata.get("required_tools_missing"), final.metadata
-    note(f"FINAL severity={packet.severity} confidence={packet.confidence} resumed={packet.resumed}")
+    note(
+        f"FINAL severity={packet.severity} confidence={packet.confidence} "
+        f"resumed={packet.resumed}"
+    )
     return packet
 
 

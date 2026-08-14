@@ -11,10 +11,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _provider import require_provider  # noqa: E402
+
 from pydantic import BaseModel
 
 from loomable.agent import Agent
-from loomable.providers.openai import AzureOpenAIProvider
 
 
 class ReviewResult(BaseModel):
@@ -25,7 +30,7 @@ class ReviewResult(BaseModel):
     approved: bool
 
 
-provider = AzureOpenAIProvider()
+provider = require_provider()
 
 agent = Agent(
     model=provider,

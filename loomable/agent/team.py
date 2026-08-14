@@ -83,6 +83,28 @@ def _member_label(member: Agent, index: int) -> str:
     return getattr(member, "_role", None) or getattr(member, "_name", None) or f"member_{index}"
 
 
+def _input_as_text(value: Any) -> str:
+    """Coerce Workflow/Agent prior output into plain text for Team hard modes.
+
+    Matches :func:`loomable.content.to_agent_input` so ``AgentOutput`` /
+    ``RunResult`` chain seamlessly — callers must not parse manually.
+    """
+    from loomable.content import to_agent_input
+
+    if isinstance(value, str):
+        return value
+    agent_input = to_agent_input(value)
+    chunks: list[str] = []
+    for message in agent_input.messages:
+        for part in message.parts:
+            if part.data is not None:
+                try:
+                    chunks.append(part.data.decode("utf-8"))
+                except Exception:  # noqa: BLE001
+                    continue
+    return "".join(chunks)
+
+
 class Team:
     """Explicit multi-agent orchestration.
 
@@ -267,10 +289,10 @@ class Team:
     ) -> "RunResult":
         """Run the team and return a :class:`~loomable.agent.run.RunResult`."""
         if self._hard and self._mode == "broadcast":
-            text = input if isinstance(input, str) else str(input)
+            text = _input_as_text(input)
             return await self._run_broadcast(text)
         if self._hard and self._mode == "sequential":
-            text = input if isinstance(input, str) else str(input)
+            text = _input_as_text(input)
             return await self._run_sequential(text)
 
         # Soft path: rebuild delegation tools with budgets if needed
@@ -369,7 +391,7 @@ class Team:
             StreamBridge,
         )
 
-        text = input if isinstance(input, str) else str(input)
+        text = _input_as_text(input)
         rid = uuid.uuid4().hex
         sid = session_id or self._session_id or ""
         bus = AsyncStreamBus(run_id=rid, session_id=sid)
