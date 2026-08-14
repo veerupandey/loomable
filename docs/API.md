@@ -710,8 +710,9 @@ MemoryScope.of(user_id="alice", claim_id="CLM-4421")
   (e.g. `session_id=f"claim:{claim_id}"`) and/or Postgres `user_id=` tenant  
   (`scope.tenant_key()`).
 
-Legacy kwargs (`session_store=`, `note_store=`, `memory_backend=`) still work and
-**override** the matching compose layer when both are set.
+Prefer `Memory.compose` for new code. Flat kwargs (`session_store=`, `note_store=`,
+`memory_backend=`) still work and **override** the matching compose layer when both
+are set.
 
 `user_id` + `scopes` are applied automatically when using `Memory.compose` or when
 you pass a bare `note_store=` with `user_id`/`scopes`.
