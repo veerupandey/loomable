@@ -66,8 +66,9 @@ class MemoryBackend(Protocol):
 class VectorBackend(Protocol):
     """Pluggable long-term vector memory backend.
 
-    Structural protocol so that zvec, FAISS, Pinecone, or any conforming
-    vector store can be used without agent changes.
+    Structural protocol so that Alibaba zvec, Postgres (`PgVectorBackend`),
+    FAISS, Pinecone, or any conforming vector store can be used without
+    agent changes.
     """
 
     async def index(self, id: str, vector: list[float], metadata: dict[str, Any]) -> None:

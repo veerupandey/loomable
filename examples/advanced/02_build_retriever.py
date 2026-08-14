@@ -60,7 +60,7 @@ async def main() -> None:
         name="docs",
         mode="hybrid",
         strategy="auto",
-        persist_path=ROOT / "docs.zvec.json",
+        persist_path=ROOT / "docs_zvec",  # Alibaba zvec (pip install loomable[zvec])
     )
     agent = Agent(
         model=ModelSpec(provider="scripted", provider_impl=_Scripted()),

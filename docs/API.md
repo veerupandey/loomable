@@ -429,7 +429,8 @@ agent = create_deep_agent(
 )
 
 ```python
-# Deep code — index a repo (default file-backed zvec) + coding skill + sandbox
+# Deep code — index a repo (Alibaba zvec on disk by default) + coding skill + sandbox
+# Swap store via open_vector_store(postgres_url=...) or backend=PgVectorBackend(...)
 agent = create_deep_agent(
     model,
     profile="code",
@@ -772,22 +773,29 @@ agent = Agent(
 )
 ```
 
-### Long-term (L3): zvec or Postgres vectors
+### Long-term (L3): Alibaba zvec, Postgres, or any VectorBackend
+
+**zvec** means [Alibaba Zvec](https://github.com/alibaba/zvec) — a real
+file-based embedded vector DB (`pip install loomable[zvec]`). Postgres or any
+object satisfying `VectorBackend` can replace it when provided.
 
 ```python
 from loomable.agent import NoteStore
-from loomable.kernel.long_term import LongTermStore
+from loomable.kernel.long_term import LongTermStore, open_vector_store
 from loomable.providers import OpenAIEmbedder
 
+# Ephemeral (in-memory — no optional deps)
 notes = NoteStore(long_term=LongTermStore(), embedder=OpenAIEmbedder())
 
-# Durable L3 (Postgres)
-from loomable.providers.backends.postgres import PgVectorBackend
+# Alibaba zvec on disk
 notes = NoteStore(
-    long_term=LongTermStore(
-        backend=PgVectorBackend(DSN, dimensions=1536, user_id="alice"),
-        backend_name="postgres",
-    ),
+    long_term=open_vector_store(path="./.loomable/notes_zvec", dimensions=1536),
+    embedder=OpenAIEmbedder(),
+)
+
+# Postgres vectors (or pass backend= for FAISS / Pinecone / …)
+notes = NoteStore(
+    long_term=open_vector_store(postgres_url=DSN, dimensions=1536, user_id="alice"),
     embedder=OpenAIEmbedder(),
 )
 ```
@@ -796,9 +804,9 @@ notes = NoteStore(
 
 | Want | Conversation | User / L3 |
 |------|--------------|-----------|
-| Local demo | default / file / memory | zvec `LongTermStore()` |
-| Prod chat, ephemeral notes | postgres | zvec |
-| Prod chat + durable notes | postgres | `PgVectorBackend` |
+| Local demo | default / file / memory | in-memory `LongTermStore()` |
+| File-backed notes | any | Alibaba zvec via `path=` / `open_vector_store(path=...)` |
+| Prod chat + durable notes | postgres | `PgVectorBackend` / `open_vector_store(postgres_url=...)` |
 | Case/Workflow resume | — | `PostgresCheckpointer` (separate) |
 
 ### Knobs
@@ -1400,14 +1408,17 @@ retriever = await build_retriever(
     name="docs",
     mode="hybrid",              # vector | lexical | hybrid
     strategy="auto",            # text | markdown | code | html | pdf | auto
-    persist_path="./.loomable/docs.zvec.json",  # file-backed zvec
-    # embedder=OpenAIEmbedder(), store=LongTermStore(backend=...),
+    persist_path="./.loomable/docs_zvec",  # Alibaba zvec on disk (pip install loomable[zvec])
+    # Or Postgres / any VectorBackend:
+    # from loomable.kernel.long_term import open_vector_store
+    # store=open_vector_store(postgres_url=DSN, dimensions=1536),
 )
 agent = Agent(model=provider, retrievers=[retriever])
 ```
 
 Chunk strategies are pluggable via ``register_strategy``. Deep code
-(``CodeIndex`` / ``profile="code"``) uses the same ``code`` strategy and zvec store.
+(``CodeIndex`` / ``profile="code"``) uses the same ``code`` strategy and the
+same pluggable store (Alibaba zvec by path, or Postgres / custom backend).
 
 See ``examples/advanced/02_build_retriever.py``.
 

@@ -717,7 +717,7 @@ def create_deep_agent(
         try:
             from loomable.codeindex import CodeIndex
 
-            persist = root / ".loomable" / "codeindex.zvec.json"
+            persist = root / ".loomable" / "codeindex_zvec"
             resolved_index = CodeIndex.build_sync(
                 repo,
                 embedder=embedder,

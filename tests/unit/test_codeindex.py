@@ -8,7 +8,7 @@ import pytest
 
 from loomable.agent import ModelSpec, create_deep_agent
 from loomable.codeindex import CodeIndex, HashingEmbedder
-from loomable.kernel.long_term import LongTermStore, ZvecVectorBackend
+from loomable.kernel.long_term import InMemoryVectorBackend, LongTermStore
 from loomable.kernel.models import ModelRequest, ModelResponse
 from loomable.skills import list_bundled_skills
 from loomable.toolkits import CodeTools
@@ -42,24 +42,29 @@ def _write_mini_repo(root: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_zvec_persist_roundtrip(tmp_path: Path) -> None:
-    path = tmp_path / "store.json"
-    store = LongTermStore(path=path)
+async def test_alibaba_zvec_persist_roundtrip(tmp_path: Path) -> None:
+    pytest.importorskip("zvec")
+    path = tmp_path / "zvec_coll"
+    store = LongTermStore(path=path, dimensions=2)
     await store.index("a", [1.0, 0.0], {"text": "hello"})
-    assert path.is_file()
-    store2 = LongTermStore(path=path)
+    store.close()  # release Alibaba zvec collection lock before reopen
+    store2 = LongTermStore(path=path, dimensions=2)
     hits = await store2.query([1.0, 0.0], k=1)
     assert hits and hits[0]["text"] == "hello"
+    assert float(hits[0]["score"]) >= 0.99
+    store2.close()
 
 
 @pytest.mark.asyncio
 async def test_codeindex_build_search_and_map(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_mini_repo(repo)
-    persist = tmp_path / "idx.json"
-    index = await CodeIndex.build(repo, persist_path=persist, embedder=HashingEmbedder())
+    index = await CodeIndex.build(
+        repo,
+        store=LongTermStore(),  # in-memory (no zvec required)
+        embedder=HashingEmbedder(),
+    )
     assert index.size >= 2
-    assert persist.is_file()
     mapping = index.repo_map()
     assert "auth.py" in mapping
     hits = await index.search("AuthService login verify token", k=5)
@@ -73,7 +78,7 @@ async def test_codeindex_build_search_and_map(tmp_path: Path) -> None:
 async def test_code_tools(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_mini_repo(repo)
-    index = await CodeIndex.build(repo, persist_path=tmp_path / "i.json")
+    index = await CodeIndex.build(repo, store=LongTermStore(), embedder=HashingEmbedder())
     tools = {t.name: t for t in CodeTools(index).tools()}
     mapped = await tools["repo_map"].invoke({"max_entries": 20})
     assert "auth.py" in str(mapped.content)
@@ -87,11 +92,10 @@ async def test_code_tools(tmp_path: Path) -> None:
 async def test_pluggable_backend(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_mini_repo(repo)
-    backend = ZvecVectorBackend()  # in-memory custom backend
+    backend = InMemoryVectorBackend()
     index = await CodeIndex.build(
         repo, backend=backend, embedder=HashingEmbedder(), persist_path=None
     )
-    # Override default file path by passing backend= — store uses custom
     assert index.size >= 1
     hits = await index.search("login", k=3)
     assert hits
@@ -105,11 +109,13 @@ def test_coding_skill_bundled() -> None:
 async def test_create_deep_agent_profile_code(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_mini_repo(repo)
+    # Avoid requiring zvec for this wiring test: prebuild with in-memory store.
+    index = await CodeIndex.build(repo, store=LongTermStore(), embedder=HashingEmbedder())
     agent = create_deep_agent(
         ModelSpec(provider="scripted", provider_impl=_Noop()),
         workspace=tmp_path / "ws",
         profile="code",
-        repo=repo,
+        code_index=index,
         enable_task_tool=False,
         think_tool=True,
         use_llm_summarizer=False,

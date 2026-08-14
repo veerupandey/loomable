@@ -33,8 +33,8 @@ the declared scope. Breaking changes are rare and require a deprecation note in
 | `discovery_core="research-slim"` | Schema-budget profile; defaults may shift |
 | `loomable.sandbox` / `ShellTools` / Docker sandbox | Soft isolation; Docker experimental |
 | Bundled `browser` skill | Assumes Lightpanda (or compatible) MCP |
-| `loomable.codeindex` / `CodeTools` / `profile="code"` | Deep code; zvec default, pluggable store |
-| `loomable.retrieval` (`build_retriever`, chunk strategies) | Framework RAG; shared by deep code |
+| `loomable.codeindex` / `CodeTools` / `profile="code"` | Deep code; Alibaba zvec file store by default, pluggable `VectorBackend` |
+| `loomable.retrieval` (`build_retriever`, chunk strategies) | Framework RAG; Alibaba zvec / Postgres / custom store |
 
 ## Beta limits
 
