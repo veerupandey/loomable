@@ -1,33 +1,37 @@
 # Deep Agent (loomable)
 
-LangGraph-style **deep agent harness** on loomable — built to **match and beat**
-[langchain-ai/deepagents](https://github.com/langchain-ai/deepagents), and to
-outpace Agno / CrewAI on **research defaults** (search → fetch → cite → vision →
-verified deliverable) without locking you into LangGraph or a mega-toolkit catalog.
+**A loomable-only deep agent that beats other deep-agent stacks** — no LangGraph,
+no deepagents dependency, no Agno/Crew lock-in.
+
+Built to outperform [langchain-ai/deepagents](https://github.com/langchain-ai/deepagents),
+Agno teams, and CrewAI crews on **research + long-horizon delivery**: shared
+workspace offload, verified citations, parallel specialists, and an accept gate
+that refuses to finish without a real report.
 
 | Pillar | Loomable |
 |--------|----------|
 | Planning | `TodoTools` (`write_todos` / `read_todos` / `update_todo`) |
-| Filesystem | `WorkspaceTools` (virtual FS + disk mirror + offload) |
-| Subagents | `task` / `task_batch` + named `specialists=` + `delegate_to_*` |
-| Context | think/plan, `Memory.compose`, LLM summarizer, **tool offload** (not truncate) |
+| Filesystem | `WorkspaceTools` + **token-aware** offload (not truncate) |
+| Subagents | `task` / `task_batch` + named `specialists=` + Case spawn |
+| Context | `compact_conversation`, think/plan, `Memory.compose`, summarizer |
 | Research | Search + URL + Image + Citation (`verify_source` / `register_claim`) |
 | Hard tasks | research accept gate, optional `mode="case"`, AG-UI / Team / Workflow |
 
-## Why loomable wins on deep research
+## Why loomable deep agents win
 
-| Capability | deepagents | Agno | CrewAI | loomable |
-|------------|------------|------|--------|----------|
-| Search + full-page fetch | BYO | Toolkits / paid | BYO | **Bundled by default** |
-| Large tool results | Offload to FS | Session/memory | Weak | Offload to **shared workspace** (`.offload/`) |
-| Subagents | Named + async preview | Strong Team | Strong Crew | **`task` + `task_batch` + named specialists + shared FS** |
-| Citations / claim basis | None | Integrations | Weak | **`register_source` / `verify_source` / `register_claim`** |
-| Multimodal research | Text-first | Via integrations | Weak | **`fetch_image` + `analyze_image`** (SSRF-safe) |
-| Deliverable gate | Soft | Soft | Manager review | **`write_file:reports/` + accept verifier** |
-| Parallel fan-out | Multi-task | broadcast/tasks | async kickoff | **`tool_concurrency=4` + `task_batch`** |
-| Code exec | Sandbox execute | Workspace shell | Limited | Opt-in `code_exec=True` (HITL) |
-| Enterprise spine | LangGraph-only | AgentOS | Crews/Flows | **Agent / Team / Case / Workflow + AG-UI** |
-| Stack lock-in | LangChain + LangGraph | Agno stack | Crew stack | **One framework** |
+| Capability | deepagents | Agno | CrewAI | **loomable** |
+|------------|------------|------|--------|--------------|
+| Pure stack | LangChain+LangGraph | Agno | Crew | **loomable only** |
+| Search + full-page fetch | BYO | Toolkits / paid | BYO | **Bundled** |
+| Large tool results | Offload | Session/memory | Weak | **Token-aware shared `.offload/`** |
+| Subagents | Named + async preview | Strong Team | Strong Crew | **`task` + `task_batch` + shared FS** |
+| Citations / claims | None | Integrations | Weak | **`register` / `verify` / `register_claim`** |
+| Multimodal research | Text-first | Integrations | Weak | **Vision tools (SSRF-safe)** |
+| Deliverable gate | Soft | Soft | Manager | **`reports/` + accept verifier** |
+| Parallel fan-out | Multi-task | broadcast | async | **`tool_concurrency` + `task_batch`** |
+| Context compact | Strong story | Good | Good | **`compact_conversation` + L2** |
+| Code exec | Sandbox | Shell+HITL | Limited | Opt-in `code_exec` + HITL |
+| Enterprise spine | LangGraph | AgentOS | Flows | **Agent / Team / Case / Workflow + AG-UI** |
 
 ## Quick start
 
@@ -55,6 +59,7 @@ agent = create_research_agent(
             description="Finds and fetches primary sources",
         ),
     },
+    memory_files=[Path("AGENTS.md")],  # optional always-on project memory
 )
 await agent.arun("Research X; write reports/x.md with citations")
 ```
@@ -90,15 +95,13 @@ DEEP_AGENT_LIVE=1 GEMINI_API_KEY=... \
 
 ## Framework notes
 
-- Deep defaults: `token_budget=128000` (context), `max_run_tokens=0` (unbounded spend),
-  `max_tool_iterations=40`, `tool_concurrency=4`, `tool_timeout=60`, model `RetryPolicy`.
-- Truncating large tools loses evidence → deep post-hook **offloads** to `.offload/`.
-  Specialists inherit the same offload hooks + skills + budgets.
-- Uncapped fetch can blow context → deep caps URL extract at **8000** chars with markers;
-  private hosts blocked on URL **and** image fetch (hop-by-hop redirect checks).
-- `read_file` supports `offset`/`limit` so offload dumps stay sliced.
-- `create_research_agent` requires `write_file` under `reports/` **and** `register_source`,
-  then runs a research accept verifier (retry once on failure).
-- `task_batch` fans out up to 8 specialists in parallel; `subagent_type` selects named
-  specialists from `specialists=`.
-- Live Gemini: use `GEMINI_MODEL=gemini-flash-latest` (older `gemini-2.0-flash` IDs may 404).
+- Deep defaults: `token_budget=128000`, `max_run_tokens=0`, `max_tool_iterations=40`,
+  `tool_concurrency=4`, `tool_timeout=60`, model `RetryPolicy`,
+  **token-aware offload** (`offload_threshold_tokens=3000`).
+- Specialists inherit offload hooks + skills + budgets from the deep factory.
+- Case mode inherits the same runtime knobs (iterations, hooks, skills, budgets).
+- URL + image fetch: private hosts blocked with hop-by-hop redirect checks.
+- `create_research_agent` requires `write_file` under `reports/` **and**
+  `register_source`, then runs a research accept verifier.
+- `task_batch` fans out up to 8 specialists; `subagent_type` selects named specialists.
+- Live Gemini: use `GEMINI_MODEL=gemini-flash-latest`.

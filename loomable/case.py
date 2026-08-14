@@ -282,6 +282,11 @@ async def map_specialists(
     memory_tool: bool = False,
     knowledge: list[str] | None = None,
     embedder: Any = None,
+    max_tool_iterations: int | None = None,
+    token_budget: int | None = None,
+    max_run_tokens: int | None = None,
+    tool_hooks: list[Any] | None = None,
+    skills: list[Any] | None = None,
 ) -> list[str]:
     """Dispatch: spawn one ephemeral specialist per plan step (parallel)."""
     from loomable.agent.delegation import spawn_specialist
@@ -302,6 +307,11 @@ async def map_specialists(
                 memory_tool=memory_tool,
                 knowledge=knowledge,
                 embedder=embedder,
+                max_tool_iterations=max_tool_iterations,
+                token_budget=token_budget,
+                max_run_tokens=max_run_tokens,
+                tool_hooks=tool_hooks,
+                skills=skills,
             )
 
         if sem is None:
@@ -340,6 +350,7 @@ def _default_agent(
     tools: list[Any] | None = None,
     modalities: str | None = None,
     memory: dict[str, Any] | None = None,
+    runtime: dict[str, Any] | None = None,
 ) -> Any:
     from loomable.agent.builder import Agent
     from loomable.agent.memory_opts import role_scoped_memory
@@ -354,6 +365,21 @@ def _default_agent(
     }
     if memory:
         kwargs.update(role_scoped_memory(memory, role=role.lower().replace(" ", "_")))
+    if runtime:
+        for key in (
+            "max_tool_iterations",
+            "token_budget",
+            "max_run_tokens",
+            "tool_hooks",
+            "skills",
+            "tool_timeout",
+            "tool_concurrency",
+            "resilience",
+            "think_tool",
+            "require_tools",
+        ):
+            if key in runtime and runtime[key] is not None:
+                kwargs[key] = runtime[key]
     return Agent(**kwargs)
 
 
@@ -376,6 +402,8 @@ def build_case_workflow(
     board: Board | None = None,
     # Agent-identical memory (applied to default role agents)
     agent_memory: dict[str, Any] | None = None,
+    # Deep-agent runtime knobs (iterations, offload hooks, skills, budgets)
+    agent_runtime: dict[str, Any] | None = None,
 ) -> Workflow:
     """Build a Workflow: plan → dispatch → synthesize → optional accept loop."""
     if model is None and (planner is None or worker is None):
@@ -407,16 +435,22 @@ def build_case_workflow(
             ),
             modalities=modalities,
             memory=agent_memory,
+            runtime=agent_runtime,
         )
     if worker is None and mode == "reuse":
         worker = _default_agent(
             model,
             role="Worker",
             goal="Execute one plan step thoroughly",
-            instructions="Complete ONLY the assigned step. Be concrete and concise.",
+            instructions=(
+                "Complete ONLY the assigned step. Be concrete and concise. "
+                "Prefer workspace files for large evidence; use offloaded paths "
+                "with read_file(offset, limit) instead of pasting blobs."
+            ),
             tools=tools_list,
             modalities=modalities,
             memory=agent_memory,
+            runtime=agent_runtime,
         )
     if synthesizer is None:
         synthesizer = _default_agent(
@@ -429,6 +463,7 @@ def build_case_workflow(
             ),
             modalities=modalities,
             memory=agent_memory,
+            runtime=agent_runtime,
         )
 
     async def plan_step(inp: Any, *, context: RunContext | None = None) -> RunResult:
@@ -482,6 +517,7 @@ def build_case_workflow(
             if model is None:
                 raise ValueError("dispatch='spawn' requires model=")
             mem = agent_memory or {}
+            rt = agent_runtime or {}
             texts = await map_specialists(
                 steps,
                 model=model,
@@ -492,6 +528,11 @@ def build_case_workflow(
                 memory_tool=bool(mem.get("memory_tool", False)),
                 knowledge=mem.get("knowledge"),
                 embedder=mem.get("embedder"),
+                max_tool_iterations=rt.get("max_tool_iterations"),
+                token_budget=rt.get("token_budget"),
+                max_run_tokens=rt.get("max_run_tokens"),
+                tool_hooks=rt.get("tool_hooks"),
+                skills=rt.get("skills"),
             )
         else:
             async def _work(step: str) -> str:
@@ -691,6 +732,7 @@ class Case:
         knowledge_top_k: int = 3,
         user_id: str | None = None,
         memory: Any | None = None,
+        agent_runtime: dict[str, Any] | None = None,
     ) -> None:
         from loomable.agent.memory_opts import filter_memory_kwargs
 
@@ -748,6 +790,7 @@ class Case:
             concurrency=concurrency,
             board=self.board,
             agent_memory=agent_memory or None,
+            agent_runtime=agent_runtime,
         )
         self._workflow: Workflow | None = None
         self.session_id = session_id or ""
@@ -790,6 +833,17 @@ class Case:
         if max_rounds is None:
             max_rounds = max(1, int(getattr(agent, "_max_verify_retries", 1) or 1) + 1)
         mem = memory_kwargs_from_agent(agent)
+        runtime = {
+            "max_tool_iterations": getattr(agent, "_max_tool_iterations", None) or 40,
+            "token_budget": getattr(agent, "_token_budget", None) or 64_000,
+            "max_run_tokens": getattr(agent, "_max_run_tokens", None),
+            "tool_hooks": getattr(agent, "_tool_hooks", None),
+            "skills": getattr(agent, "_skills", None),
+            "tool_timeout": getattr(agent, "_tool_timeout", None),
+            "tool_concurrency": getattr(agent, "_tool_concurrency", None),
+            "resilience": getattr(agent, "_resilience", None),
+            "think_tool": bool(getattr(agent, "_think_tool", False)),
+        }
         return cls(
             model=getattr(agent, "_model", None),
             goal=str(getattr(agent, "_goal", "") or ""),
@@ -815,6 +869,7 @@ class Case:
             knowledge_top_k=int(mem.get("knowledge_top_k", 3) or 3),
             user_id=mem.get("user_id"),
             memory=getattr(agent, "_memory_bundle", None) or mem.get("memory"),
+            agent_runtime=runtime,
         )
 
     def as_workflow(self) -> Workflow:
