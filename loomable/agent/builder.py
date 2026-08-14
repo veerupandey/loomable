@@ -2997,8 +2997,17 @@ class Agent:
             self._capabilities = capabilities_for(capabilities)
         else:
             self._capabilities = None
-        # multimodal=True is a deprecated no-op alias: media is allowed by default.
-        _ = multimodal  # retained for back-compat; default capabilities already include media
+        # multimodal=True is a deprecated no-op: media is allowed by default.
+        if multimodal:
+            import warnings
+
+            warnings.warn(
+                "Agent(multimodal=True) is deprecated and has no effect; "
+                "media input is enabled by default. Use modalities= or text_only= "
+                "to restrict capabilities.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self._token_budget = token_budget
         # None → spend uses token_budget (legacy). Deep agents pass 0 for unbounded.
         self._max_run_tokens = max_run_tokens

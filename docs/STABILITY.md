@@ -12,17 +12,25 @@ the declared scope. Breaking changes are rare and require a deprecation note in
 | `Workflow`, `Step`, `Loop`, `Condition`, `Parallel_Group` | Durable multi-step |
 | `Case`, `Board`, `WorkItem` | Goal + WorkItems board |
 | `Memory`, `MemoryScope`, `ConversationMemory`, `UserMemory`, `KnowledgeMemory`, `WorkingMemory`, `open_session_store`, `open_vector_store` | Composable memory + vector store factory |
-| `create_deep_agent` | Long-horizon / research harness |
+| `create_deep_agent` | Long-horizon / research harness (`profile="research"` / `"code"`) |
 | `tool`, `RunResult`, `ContextPolicy`, `spawn_specialist` | DX helpers |
 | Checkpointers (`JsonFile`, `SQLite`, `InMemory`, `Postgres`) | Durability |
 | `loomable.serve.mount_agent` / `mount_case` | AG-UI HTTP + SSE (optional `api_key=`) |
 | Bundled skills via `resolve_skills` / `list_bundled_skills` | Progressive skills |
 
-## Deprecated but kept
+## Removed from public API (this beta cut)
 
 | Symbol | Replacement |
 |--------|-------------|
 | `create_research_agent` | `create_deep_agent(..., profile="research")` |
+| `Channel` / `ChannelMessage` / `InMemoryChannel` | Use `Team` / `Workflow` / subagents |
+| `DEEP_AGENT_INSTRUCTIONS` (package export) | Internal to `create_deep_agent` |
+
+## Deprecated (warn, still accepted)
+
+| Symbol | Replacement |
+|--------|-------------|
+| `Agent(multimodal=True)` | No-op; media is default. Use `modalities=` / `text_only=` |
 
 ## Experimental / kernel-internal
 
@@ -30,6 +38,7 @@ the declared scope. Breaking changes are rare and require a deprecation note in
 |---------|--------|
 | `loomable.kernel.registry.ExtensionRegistry` | Not wired into Agent discovery; may change |
 | Flow optimizer (`loomable.flow.optimizer`) | Advanced; not part of beta DX |
+| Low-level `Flow` / `Node` / `Edge` / `TieredMemoryStore` | Escape hatch; prefer `Workflow` |
 | `discovery_core="research-slim"` | Schema-budget profile; defaults may shift |
 | `loomable.sandbox` / `ShellTools` / Docker sandbox | Soft isolation; Docker experimental |
 | Bundled `browser` skill | Assumes Lightpanda (or compatible) MCP |

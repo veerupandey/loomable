@@ -29,7 +29,7 @@
 ## Exit criteria (measurable — ship beta when all green)
 
 1. **Packaging:** version `0.2.0bN` (or `0.2.0`), classifier `4 - Beta`, README badge beta, `__version__` matches pyproject, installable from PyPI **or** GitHub Release wheel with documented `pip install`.
-2. **Stability policy:** `docs/STABILITY.md` — stable vs experimental APIs; deprecation window for breaks; `create_research_agent` marked deprecated-stable-alias.
+2. **Stability policy:** `docs/STABILITY.md` — stable vs experimental APIs; deprecation window for breaks.
 3. **CI:** 3.11 + 3.12 green on `tests/unit` + `tests/properties` + `tests/toolkits` + non-live `tests/integration`; optional gated jobs for `POSTGRES_URL` and `DEEP_AGENT_LIVE`.
 4. **Cancel contract:** public cancel API + SSE disconnect → `RunContext.cancel`; tests assert `stop_reason=cancelled` and no further model calls.
 5. **Serve baseline:** reference auth middleware (API key or bearer) on `mount_*`; locked-down example + test that anonymous `/run` is rejected when auth enabled.
@@ -54,7 +54,7 @@
 | STABILITY.md | Stable: Agent, Team, Workflow, Case, Memory, create_deep_agent, mount_*; Experimental: ExtensionRegistry, Flow optimizer, slim discovery profile |
 | CHANGELOG.md | Beta cut notes + migration from 0.1 |
 | Public surface test | Fail CI if top-level exports drift undocumented |
-| Deprecate alias | `create_research_agent` → warn once, keep working |
+| Research profile | `create_deep_agent(..., profile="research")` |
 
 ### W2 — Reliability (production agent bar)
 
