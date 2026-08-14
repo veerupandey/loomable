@@ -41,42 +41,74 @@ class HtmlChunker:
 
 
 class PdfChunker:
-    """PDF text is expected already extracted on Document.text; page-split if markers."""
+    """Page-aware PDF chunking.
+
+    Expects ``--- Page N ---`` markers from ingest. Each page becomes one
+    chunk when it fits; oversized pages are split with overlap (no truncation).
+    """
 
     name = "pdf"
 
-    def __init__(self) -> None:
-        self._text = TextChunker(max_chars=2_500)
+    def __init__(self, *, max_chars: int = 2_500, overlap: int = 200) -> None:
+        self.max_chars = max(200, int(max_chars))
+        self._text = TextChunker(max_chars=self.max_chars, overlap=overlap)
 
     def chunk(self, document: Document) -> list:
         text = document.text or ""
-        if "--- Page " in text:
-            parts = re.split(r"\n?--- Page \d+ ---\n?", text)
-            chunks = []
-            from loomable.retrieval.types import Chunk, merge_metadata
+        if "--- Page " not in text:
+            return self._text.chunk(document)
 
-            for i, part in enumerate(parts):
-                part = part.strip()
-                if not part:
-                    continue
+        from loomable.retrieval.types import Chunk, merge_metadata
+
+        parts = re.split(r"\n?--- Page (\d+) ---\n?", text)
+        # re.split with a capture group: [preamble, num, body, num, body, ...]
+        chunks: list = []
+        # parts[0] is text before first marker (usually empty)
+        i = 1
+        while i + 1 < len(parts):
+            try:
+                page_no = int(parts[i])
+            except ValueError:
+                page_no = (i // 2) + 1
+            body = (parts[i + 1] or "").strip()
+            i += 2
+            if not body:
+                continue
+            page_meta = merge_metadata(
+                document.metadata,
+                {
+                    "source": document.source,
+                    "path": document.source,
+                    "page": page_no,
+                },
+            )
+            if len(body) <= self.max_chars:
                 chunks.append(
                     Chunk(
-                        id=f"{document.id}:page:{i}",
-                        text=part[:8_000],
+                        id=f"{document.id}:page:{page_no}",
+                        text=body,
                         document_id=document.id,
                         start_line=1,
-                        end_line=part.count("\n") + 1,
+                        end_line=body.count("\n") + 1,
                         kind="page",
-                        name=f"page-{i}",
-                        metadata=merge_metadata(
-                            document.metadata,
-                            {"source": document.source, "path": document.source, "page": i},
-                        ),
+                        name=f"page-{page_no}",
+                        metadata=page_meta,
                     )
                 )
-            if chunks:
-                return chunks
-        return self._text.chunk(document)
+                continue
+            subdoc = Document(
+                id=f"{document.id}:page:{page_no}",
+                text=body,
+                source=document.source,
+                media_type="text/plain",
+                metadata=page_meta,
+            )
+            for j, sub in enumerate(self._text.chunk(subdoc)):
+                sub.kind = "page"
+                sub.name = f"page-{page_no}.{j}"
+                sub.metadata = merge_metadata(page_meta, sub.metadata)
+                chunks.append(sub)
+        return chunks or self._text.chunk(document)
 
 
 class AutoChunker:

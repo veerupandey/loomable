@@ -30,6 +30,18 @@ def test_list_strategies_includes_builtins() -> None:
         assert required in names
 
 
+def test_text_chunker_long_paragraph_does_not_shard() -> None:
+    from loomable.retrieval.chunking.text import TextChunker
+
+    para = ("alpha beta gamma sentence. " * 400)
+    doc = Document(id="x", text=para, source="x.txt")
+    chunks = TextChunker(max_chars=2_000, overlap=200).chunk(doc)
+    assert 2 <= len(chunks) <= 12
+    assert all(len(c.text) <= 2_200 for c in chunks)
+    blob = "".join(c.text for c in chunks)
+    assert "alpha" in blob
+
+
 @pytest.mark.asyncio
 async def test_markdown_and_code_chunkers(tmp_path: Path) -> None:
     md = Document(

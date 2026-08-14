@@ -196,7 +196,12 @@ async def ingest(
     base_mode: str = "hybrid",
     vector_weight: float = 0.7,
 ) -> Corpus:
-    """Ingest sources into a named :class:`Corpus` (pluggable store/strategy/mode)."""
+    """Ingest sources into a named :class:`Corpus` (pluggable store/strategy/mode).
+
+    ``strategy="auto"`` (default) is format-aware: PDFs are extracted with page
+    markers, then page-chunked (oversized pages split with overlap — never
+    truncated). Pass a ``.pdf`` path or directory; chunking is internal.
+    """
     corpus = Corpus(
         name=name,
         description=description or name,

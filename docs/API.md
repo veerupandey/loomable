@@ -1495,6 +1495,10 @@ Deep code (``CodeIndex``) shares the same chunk/store stack.
 (``loomable[pdf]``), DOCX (stdlib), PPTX (``loomable[ppt]``), JSON/CSV, notebooks,
 plus ``http(s)`` URLs (``load_url`` / pass a URL string to ``ingest``).
 
+PDFs are handled inside ``ingest``: extract pages, then page-chunk (split
+oversized pages with overlap — never truncate). Pass the ``.pdf`` path; do not
+pre-split.
+
 See ``examples/advanced/03_agentic_retriever.py`` and
 ``examples/advanced/05_complex_agentic_rag.py``.
 
