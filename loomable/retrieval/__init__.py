@@ -78,7 +78,13 @@ from loomable.retrieval.rerank import (
     ScoreReranker,
 )
 from loomable.retrieval.retrievers import HybridRetriever, LexicalRetriever, VectorRetriever
-from loomable.retrieval.rewrite import HyDERewriter, IdentityRewriter, MultiQueryRewriter
+from loomable.retrieval.rewrite import (
+    AgenticDecompositionRewriter,
+    HyDERewriter,
+    IdentityRewriter,
+    MultiQueryRewriter,
+    resolve_rewriter,
+)
 from loomable.retrieval.route import (
     AllCorporaRouter,
     DescriptionCorpusRouter,
@@ -148,6 +154,8 @@ __all__ = [
     "IdentityRewriter",
     "MultiQueryRewriter",
     "HyDERewriter",
+    "AgenticDecompositionRewriter",
+    "resolve_rewriter",
     "IdentityReranker",
     "ScoreReranker",
     "MMRReranker",
