@@ -152,8 +152,8 @@ await wf.update_state({"note": "human edit"})
 | `.verify` | `Workflow` | Verifier gate with hard repair budget (`max_retries + 1` attempts) |
 | `.route` | `Workflow` | N-way Router (Agno / LangGraph multi-edge); chooser may return `Command(goto=…)` |
 | `Command` | step return | `goto` + `update` state patch (LangGraph-style control) |
-| `get_state` / `update_state` / `list_states` | `Workflow` | Checkpoint control plane for resume / time-travel inspection |
-| `reducers=` | `Workflow` | Per-key SharedState merge (e.g. `append` for parallel joins) |
+| `get_state` / `update_state` / `list_states` / `fork_session` | `Workflow` | Checkpoint control plane for resume / time-travel |
+| `reducers=` | `Workflow` | Per-key SharedState merge (`append` / `extend` / `merge`) for parallel joins |
 | `complexity=` | `Step` / `.step` | `"low"` / `"high"` cost hint for model-tier optimization |
 | `_route_decision` | SharedState | Inspectable `{selected, choices, reason, handoff}` after routers / `.branch` / `.route` |
 

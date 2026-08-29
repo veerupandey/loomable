@@ -43,7 +43,7 @@ from .observability import (
 )
 from .optimizer import Optimizer, OptimizationRule
 from .runnable import FunctionRunnable, Runnable
-from .state import Reducer, SharedState, append, merge, overwrite
+from .state import Reducer, SharedState, append, extend, merge, overwrite
 
 # Workflow ergonomics: high-level composable classes
 from .command import Command
@@ -78,6 +78,7 @@ __all__ = [
     "SharedState",
     "overwrite",
     "append",
+    "extend",
     "merge",
     # Engines
     "ExecutionEngine",
