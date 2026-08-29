@@ -321,14 +321,22 @@ class SequentialEngine:
         """Resolve the input for a node.
 
         Strategy:
-        - Look at this node's incoming edges. If any upstream node has
-          produced output (stored in state), use the output from the
-          most recent predecessor (by topological order).
+        - If an incoming edge declares ``payload_key``, use ``state[payload_key]``
+          (edge data contract) when present.
+        - Otherwise look at upstream nodes with results in state; use the
+          output from the most recent predecessor (by topological order).
         - If no predecessor has output (first node), use the initial input.
         """
         edges = incoming_edges[node_id]
         if not edges:
             return initial_input
+
+        # Prefer explicit edge payload contracts
+        for edge in edges:
+            if edge.payload_key:
+                value = state.get(edge.payload_key)
+                if value is not None:
+                    return value
 
         # Find the latest predecessor (by topo order) that has a result
         predecessors = [e.source for e in edges]
