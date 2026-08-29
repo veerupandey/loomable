@@ -196,6 +196,9 @@ class ParallelEngine:
 
             final.metadata["stop_reason"] = StopReason.CANCELLED
         final.metadata["completed_node_ids"] = sorted(completed)
+        # Barrier already applied per-node state_updates into SharedState.
+        # Drop them so a parent SequentialEngine does not apply them again.
+        final.metadata.pop("state_updates", None)
         return final
 
     # ------------------------------------------------------------------

@@ -18,6 +18,9 @@
   - `Workflow(reducers={...})` — expose SharedState reducers for parallel joins
 - Nested `Flow` / `Parallel_Group` reuses the parent `SharedState` (parent keys no longer wiped by fan-out)
 - Final checkpoints record only nodes that actually ran (unselected `.route` / `.branch` arms are not marked completed)
+- Parallel/hierarchical engines no longer leak `state_updates` to parent (fixes double-apply with reducers)
+- `extend` SharedState reducer for list fan-in; `Workflow.fork_session()` for checkpoint time-travel forks
+- `InMemoryCheckpointer.fork()` for tests / in-memory time-travel
 
 ## 0.2.0b0 — public beta
 

@@ -848,6 +848,31 @@ class Workflow:
             )
         return out
 
+    async def fork_session(self, new_session_id: str) -> dict[str, Any]:
+        """Fork the current session checkpoint into a new session id (time-travel).
+
+        Requires a checkpointer that implements ``fork``. Returns the forked
+        state's ``get_state()`` view under the new session.
+        """
+        if self._checkpointer is None or self._session_id is None:
+            raise RuntimeError(
+                "fork_session() requires Workflow(..., checkpointer=..., session_id=...)"
+            )
+        if not hasattr(self._checkpointer, "fork"):
+            raise RuntimeError(
+                f"{type(self._checkpointer).__name__} does not support fork()"
+            )
+        forked = await self._checkpointer.fork(self._session_id, new_session_id)
+        if forked is None:
+            raise RuntimeError(
+                f"No checkpoint to fork for session_id={self._session_id!r}"
+            )
+        # Point this workflow at the forked thread for subsequent resume/get_state
+        self._session_id = new_session_id
+        if self._compiled_flow is not None:
+            self._compiled_flow._session_id = new_session_id
+        return await self.get_state()
+
     def _infer_next(self, session: dict[str, Any]) -> list[str] | None:
         """Best-effort next node ids from incomplete checkpoint."""
         completed = set(session.get("completed_node_ids") or [])
