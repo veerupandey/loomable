@@ -87,13 +87,14 @@ class Step:
 
         - ``"raise"`` (default) — propagate the exception
         - ``"retry"`` — retry up to ``max_retries`` times, then raise
+          :class:`StepFailed`
         - ``"skip"`` — return an empty result with ``metadata["step_skipped"]=True``
         - ``"fallback"`` — run ``fallback`` instead (requires ``fallback=``)
         - ``"stop"`` — raise :class:`StepFailed` to halt the graph
     max_retries:
-        Extra attempts after the first failure when ``on_failure="retry"``.
-        Defaults to ``0`` (no retries) unless ``on_failure="retry"``, in which
-        case it defaults to ``2``.
+        Extra attempts of the primary agent after the first failure, for any
+        ``on_failure`` policy. Defaults to ``2`` when ``on_failure="retry"``,
+        otherwise ``0``. After retries are exhausted, ``on_failure`` applies.
     fallback:
         Alternate Runnable/callable used when ``on_failure="fallback"``.
     reads:
@@ -175,7 +176,13 @@ class Step:
         If this Step has ``deps`` set, it overrides the ``deps`` on the
         RunContext for this execution only. A new or cloned RunContext is
         used to avoid mutating a shared context object.
+
+        ``max_retries`` always applies to the primary agent (try again on
+        transient failure). After retries are exhausted, ``on_failure``
+        decides whether to raise, skip, fallback, or stop.
         """
+        import asyncio
+
         if self._deps is not None:
             # Inject step-level deps without dropping the parent's cancel flag.
             if context is None:
@@ -185,21 +192,49 @@ class Step:
 
         attempts = 0
         last_exc: BaseException | None = None
-        max_attempts = 1 + (self.max_retries if self.on_failure == "retry" else 0)
+        max_attempts = 1 + self.max_retries
 
         while attempts < max_attempts:
+            if context is not None and context.cancelled:
+                from loomable.agent.context import StopReason
+                from loomable.content import AgentOutput, MediaPart, Modality
+
+                output = AgentOutput(
+                    parts=[
+                        MediaPart(
+                            modality=Modality.TEXT,
+                            media_type="text/plain",
+                            data=b"",
+                        )
+                    ]
+                )
+                return RunResult(
+                    output=output,
+                    session_id="",
+                    metadata={
+                        "stop_reason": StopReason.CANCELLED,
+                        "failure_policy": self.on_failure,
+                        "failure_attempts": attempts,
+                        "step_cancelled": True,
+                    },
+                )
+
             attempts += 1
             try:
                 result = await self._agent.arun(input, context=context)
                 if attempts > 1:
-                    result.metadata["failure_retries"] = attempts - 1
-                    result.metadata["failure_policy"] = self.on_failure
+                    meta = result.metadata if isinstance(result.metadata, dict) else {}
+                    result.metadata = meta
+                    meta["failure_retries"] = attempts - 1
+                    meta["failure_policy"] = self.on_failure
                 return result
             except BaseException as exc:
-                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                if isinstance(
+                    exc, (KeyboardInterrupt, SystemExit, asyncio.CancelledError)
+                ):
                     raise
                 last_exc = exc
-                if self.on_failure == "retry" and attempts < max_attempts:
+                if attempts < max_attempts:
                     continue
                 break
 
@@ -240,10 +275,12 @@ class Step:
         if self.on_failure == "fallback":
             assert self._fallback is not None
             result = await self._fallback.arun(input, context=context)
-            result.metadata["failure_policy"] = "fallback"
-            result.metadata["failure_error"] = str(exc)
-            result.metadata["failure_attempts"] = attempts
-            result.metadata["fallback_used"] = True
+            meta = result.metadata if isinstance(result.metadata, dict) else {}
+            result.metadata = meta
+            meta["failure_policy"] = "fallback"
+            meta["failure_error"] = str(exc)
+            meta["failure_attempts"] = attempts
+            meta["fallback_used"] = True
             return result
 
         if self.on_failure == "stop":

@@ -117,8 +117,15 @@ class WorkflowCompiler:
 
             elif isinstance(element, Parallel_Group):
                 node_id = element.name
-                # The Parallel_Group is already a Runnable (has arun).
-                # Treat it as a single composite node in the flow.
+                # Inherit durability so on_failure="stop" inside a parallel
+                # group still checkpoints successful siblings.
+                inner = getattr(element, "_compiled_flow", None)
+                if inner is not None and checkpointer is not None:
+                    inner._checkpointer = checkpointer
+                    # Scoped thread id avoids colliding with the parent flow.
+                    base = session_id or "default"
+                    inner._session_id = f"{base}::parallel::{node_id}"
+                # Treat as a single composite node in the outer flow.
                 nodes[node_id] = Node(node_id=node_id, runnable=element)
                 element_endpoints.append((node_id, node_id))
 
