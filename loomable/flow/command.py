@@ -12,8 +12,11 @@ routing, instead of relying only on ambient SharedState chaining::
     wf = Workflow("review").route(classify, quick_path=quick, full_audit=full)
 
 ``update`` is merged into SharedState (respecting Workflow reducers).
-``goto`` selects the next route target (used by ``Workflow.route`` / RouterNode).
-``resume`` is reserved for HITL resume payloads (passed to ``arun``).
+``goto`` selects the next ``Workflow.route`` / ``RouterNode`` arm (string or
+list of arms for multi-edge fan-out). It does **not** skip ahead in a plain
+``.step()`` chain — use ``.route`` / ``.branch`` for control flow.
+``resume`` is reserved for future HITL interrupt payloads (not consumed yet;
+use ``Workflow.approve`` + ``arun(resume=True)`` today).
 """
 
 from __future__ import annotations
@@ -33,11 +36,12 @@ class Command:
     update:
         Key/value patches written into SharedState after the node runs.
     goto:
-        Target node id or route choice name. For ``Workflow.route``, this is
-        the selected branch. For sequential graphs, engines may skip ahead
-        when the target appears later in topological order.
+        Route choice name (or list of names) for ``Workflow.route`` /
+        ``RouterNode``. Ignored as a jump target on ordinary ``.step`` nodes
+        (``update`` is still applied).
     resume:
-        Value supplied when continuing after an interrupt / HITL pause.
+        Reserved for mid-node interrupt payloads. Not yet wired — prefer
+        step-boundary HITL via ``confirm=True``.
     """
 
     update: dict[str, Any] = field(default_factory=dict)

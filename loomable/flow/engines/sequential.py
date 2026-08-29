@@ -150,7 +150,12 @@ class SequentialEngine:
             # - Otherwise (first node or no upstream results), use the
             #   initial flow input.
             node_input = self._resolve_input(
-                node_id, incoming_edges, state, input, order
+                node_id,
+                incoming_edges,
+                state,
+                input,
+                order,
+                reads=getattr(node, "reads", None),
             )
 
             # Emit node_start event (Req 13.3)
@@ -318,16 +323,24 @@ class SequentialEngine:
         state: SharedState,
         initial_input: Any,
         order: list[str],
+        *,
+        reads: str | None = None,
     ) -> Any:
         """Resolve the input for a node.
 
         Strategy:
-        - If an incoming edge declares ``payload_key``, use ``state[payload_key]``
-          (edge data contract) when present.
+        - If the node declares ``reads``, use ``state[reads]`` when present
+          (data contract — including nested-flow roots with no incoming edge).
+        - Else if an incoming edge declares ``payload_key``, use that key.
         - Otherwise look at upstream nodes with results in state; use the
           output from the most recent predecessor (by topological order).
         - If no predecessor has output (first node), use the initial input.
         """
+        if reads:
+            valued = state.get(reads)
+            if valued is not None:
+                return valued
+
         edges = incoming_edges[node_id]
         if not edges:
             return initial_input

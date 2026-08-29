@@ -190,6 +190,18 @@ class Step:
             else:
                 context = context.fork(deps=self._deps)
 
+        # Honor ``reads=`` even when this Step is invoked as a nested / root
+        # runnable (no incoming edge with payload_key). Prefer SharedState
+        # over ambient previous-node text — same contract as edge payload_key.
+        if (
+            self.reads
+            and context is not None
+            and context.shared_state is not None
+        ):
+            valued = context.shared_state.get(self.reads)
+            if valued is not None:
+                input = valued  # noqa: A001
+
         attempts = 0
         last_exc: BaseException | None = None
         max_attempts = 1 + self.max_retries

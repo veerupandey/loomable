@@ -202,6 +202,30 @@ class TestSnapshotRestore:
         restored = SharedState.restore(snap)
         assert restored.get("nested") == {"a": {"b": [1, 2, {"c": 3}]}}
 
+    def test_roundtrip_empty_mediapart_from_skipped_step(self):
+        """on_failure=skip writes empty bytes; resume must not MediaPartError."""
+        from loomable.content import AgentOutput
+        from loomable.content.parts import MediaPart, Modality
+
+        state = SharedState()
+        state.write(
+            "vendor",
+            AgentOutput(
+                parts=[
+                    MediaPart(
+                        modality=Modality.TEXT,
+                        media_type="text/plain",
+                        data=b"",
+                    )
+                ]
+            ),
+        )
+        snap = state.snapshot()
+        assert snap["vendor"]["parts"][0]["data_b64"] == ""
+        restored = SharedState.restore(snap)
+        out = restored.get("vendor")
+        assert out.parts[0].data == b""
+
 
 # ---------------------------------------------------------------------------
 # Tests: schema validation

@@ -113,6 +113,7 @@ class WorkflowCompiler:
                     require_confirmation=bool(
                         getattr(element, "require_confirmation", False)
                     ),
+                    reads=getattr(element, "reads", None),
                 )
                 element_endpoints.append((node_id, node_id))
 
@@ -259,7 +260,11 @@ class WorkflowCompiler:
             elif isinstance(element, Loop):
                 # Loop is already a Runnable — wrap as a single node.
                 node_id = f"_loop_{i}"
-                nodes[node_id] = Node(node_id=node_id, runnable=element)
+                nodes[node_id] = Node(
+                    node_id=node_id,
+                    runnable=element,
+                    reads=getattr(element, "reads", None),
+                )
                 element_endpoints.append((node_id, node_id))
 
             else:

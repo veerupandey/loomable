@@ -72,6 +72,10 @@ class Node:
     manager:
         When True, signals to the EngineSelector that this node acts
         as a manager in a Hierarchical engine layout (Req 9.4).
+    reads:
+        Optional SharedState key this node consumes (edge data contract).
+        Engines prefer ``state[reads]`` over ambient previous-node output,
+        including when this node is a nested-flow root with no incoming edge.
     """
 
     def __init__(
@@ -81,11 +85,13 @@ class Node:
         *,
         require_confirmation: bool = False,
         manager: bool = False,
+        reads: str | None = None,
     ) -> None:
         self.node_id = node_id
         self.runnable = runnable
         self.require_confirmation = require_confirmation
         self.manager = manager
+        self.reads = reads
 
     def __repr__(self) -> str:
         flags = []

@@ -28,6 +28,18 @@
 - Examples README + pattern docstrings clarify which routing / quality-gate API to pick
   (`Team(mode="route")` vs `Workflow.branch` vs `Workflow.route`; `.loop` vs `.verify`)
   so overlapping demos are not confused for the same feature.
+- `Command` docs: `goto` is route-arm selection only (no sequential skip-ahead); `resume` reserved / unwired
+
+### Fixed
+
+- `FlowPaused.node_id` convenience property (paused step name)
+- `Step(reads=)` honored when the step is a nested/root runnable (no incoming edge) —
+  SharedState contract now matches edge `payload_key` behavior
+- Compiled `Node.reads` + sequential/parallel engines resolve root-node data contracts
+- Top-level Flow writes `_workflow_input` so `.route` choosers after a pipeline can
+  still classify the original ticket (ambient input remains previous-step output)
+- SharedState checkpoint restore: empty skipped-step `MediaPart` (`data_b64=""`) no
+  longer raises `MediaPartError` on HITL resume
 
 ## 0.2.0b0 — public beta
 

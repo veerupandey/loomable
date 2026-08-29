@@ -115,9 +115,11 @@ print(wf.state.get("research").text())
 
 Declarative: `Workflow("pipe", steps=[Step("a", a), Step("b", b)])`.
 
-`confirm=True` requires `checkpointer=` + `session_id=`. Not supported inside `.parallel()` / `.branch()` / `.loop()`.
+`confirm=True` requires `checkpointer=` + `session_id=`. Not supported inside `.parallel()` / `.branch()` / `.loop()` / `.route()`. Catch `FlowPaused` and use `.node_id` (or `pending.tool_name`) before `approve` + `arun(resume=True)`.
 
 `Workflow(memory=True)` is a callable-step blackboard on `RunContext.memory` — **not** Agent chat memory. Agent steps share via SharedState output chaining.
+
+Top-level runs also write `_workflow_input` (the original `arun` argument) into SharedState. After a pipeline, `.route` choosers see the **previous step's output** as ambient input — read `_workflow_input` or your own keys when classifying the original ticket.
 
 `Loop(body=agent, verifier=..., max_iterations=3)` is a Runnable on its own. Workflow uses `.loop(..., until=)` or `.verify(body, check=..., max_retries=)` (bounded generate → check → repair).
 
@@ -148,14 +150,15 @@ await wf.update_state({"note": "human edit"})
 |------|--------|--------|
 | `on_failure=` | `Step` / `.step` | `raise` / `retry` / `skip` / `fallback` / `stop` — failure stays local |
 | `max_retries=` | `Step` / `.step` | Extra primary attempts before `on_failure` applies (default `2` for `retry`, else `0`) |
-| `reads=` | `Step` / `.step` | Engine feeds `state[reads]` instead of previous-node ambient output |
+| `reads=` | `Step` / `.step` | Feeds `state[reads]` instead of ambient previous output (works for nested/root steps too) |
 | `.verify` | `Workflow` | Verifier gate with hard repair budget (`max_retries + 1` attempts) |
 | `.route` | `Workflow` | N-way Router (Agno / LangGraph multi-edge); chooser may return `Command(goto=…)` |
-| `Command` | step return | `goto` + `update` state patch (LangGraph-style control) |
+| `Command` | step / chooser return | `goto` selects route arms; `update` patches SharedState (`resume` reserved / unwired) |
 | `get_state` / `update_state` / `list_states` / `fork_session` | `Workflow` | Checkpoint control plane for resume / time-travel |
 | `reducers=` | `Workflow` | Per-key SharedState merge (`append` / `extend` / `merge`) for parallel joins |
 | `complexity=` | `Step` / `.step` | `"low"` / `"high"` cost hint for model-tier optimization |
 | `_route_decision` | SharedState | Inspectable `{selected, choices, reason, handoff}` after routers / `.branch` / `.route` |
+| `_workflow_input` | SharedState | Original top-level `arun` input (for routers after a pipeline) |
 
 `on_failure="stop"` raises `StepFailed` after successful parallel siblings are committed (and checkpointed when a checkpointer is configured). `Workflow.state` still reflects completed work after a hard stop. Cooperative `cancel()` interrupts further retries.
 

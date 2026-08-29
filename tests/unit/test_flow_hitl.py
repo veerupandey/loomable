@@ -70,6 +70,7 @@ class TestFlowPausedException:
         exc = FlowPaused(pending=pending, thread_id="session-42")
         assert exc.pending is pending
         assert exc.thread_id == "session-42"
+        assert exc.node_id == "dangerous_node"
         assert "dangerous_node" in str(exc)
         assert "session-42" in str(exc)
 

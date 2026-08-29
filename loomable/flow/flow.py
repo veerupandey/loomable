@@ -352,6 +352,12 @@ class Flow:
         else:
             state = SharedState(reducers=self._reducers)
             ctx.shared_state = state
+            # Preserve the original user/flow input for later routers / HITL
+            # UIs. Ambient chaining still feeds the previous step's output to
+            # the next node; choosers that need the ticket text should read
+            # ``_workflow_input`` (or their own SharedState keys).
+            if "_workflow_input" not in state._data:
+                state.write("_workflow_input", input)
         # Attach deps if configured
         if self._deps is not None and ctx.deps is None:
             ctx.deps = self._deps
@@ -416,6 +422,14 @@ class Flow:
                     for pa in existing_cp.pending:
                         if pa.status in ("approved", "rejected"):
                             pending_decisions[pa.tool_name] = pa.status
+
+            # Re-seed original input if a restored checkpoint predates this key
+            if (
+                not nested
+                and state.get("_workflow_input") is None
+                and input is not None
+            ):
+                state.write("_workflow_input", input)
 
         # 4. Apply optimizer if enabled (Req 10.1, 10.2, 10.7, 10.8)
         optimized_flow = self
