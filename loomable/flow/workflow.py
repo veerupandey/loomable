@@ -574,12 +574,14 @@ class Workflow:
         try:
             result = await flow.arun(input, context=ctx, resume=resume)
         finally:
+            # Preserve SharedState even when a node raises (e.g. StepFailed),
+            # so callers can inspect completed work after a hard stop.
+            if ctx.shared_state is not None:
+                self._last_state = ctx.shared_state
+            elif self._last_state is None:
+                self._last_state = SharedState()
             if self._active_ctx is ctx:
                 self._active_ctx = None
-        if ctx.shared_state is not None:
-            self._last_state = ctx.shared_state
-        else:
-            self._last_state = SharedState()
         return result
 
     def cancel(self) -> bool:
@@ -617,13 +619,12 @@ class Workflow:
             ):
                 yield event
         finally:
+            if ctx.shared_state is not None:
+                self._last_state = ctx.shared_state
+            elif self._last_state is None:
+                self._last_state = SharedState()
             if self._active_ctx is ctx:
                 self._active_ctx = None
-
-        if ctx.shared_state is not None:
-            self._last_state = ctx.shared_state
-        elif self._last_state is None:
-            self._last_state = SharedState()
 
     async def approve(
         self,

@@ -16,6 +16,7 @@ _EXPECTED = {
     "Board",
     "WorkItem",
     "Step",
+    "StepFailed",
     "Loop",
     "Condition",
     "Parallel_Group",

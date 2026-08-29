@@ -194,6 +194,8 @@ class TestPublicSurface:
             "emit_node_start",
             "plan_and_execute",
             "Step",
+            "StepFailed",
+            "FAILURE_ACTIONS",
             "Workflow",
             "Condition",
             "ComposableElement",
