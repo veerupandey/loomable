@@ -1,14 +1,21 @@
-"""Graph engineering patterns — failure policy, verify gate, edge reads.
+"""Graph engineering — failure policy, edge ``reads=``, ``Workflow.verify``.
 
-USE WHEN: You want an explicit execution map instead of one long agent chain.
+USE WHEN: You want an explicit execution map (fan-out, local failure, data
+contracts, bounded repair) instead of one long agent chain.
 
-Patterns demonstrated (no live model required):
+Patterns in this file (no live model required):
 
-1. Fan-out independent work, join for synthesis
-2. Local failure policy (``on_failure="skip"``) so one branch cannot freeze the job
+1. Fan-out independent work, then join for synthesis
+2. Local failure (``on_failure="skip"``) so one branch cannot freeze the job
 3. Edge data contract (``reads=``) so draft consumes structured evidence, not
    ambient previous-node text
 4. ``Workflow.verify`` — generate → check → repair with a hard budget
+
+Related (different APIs — do not mix them up):
+
+- Agent / open-ended loop gates → ``patterns/01_retry_loop.py``
+- Happy-path parallel Agents only → ``patterns/03_fan_out.py``
+- N-way ``Command`` routing / ``get_state`` → ``patterns/08_route_command.py``
 """
 
 from __future__ import annotations

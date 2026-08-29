@@ -23,6 +23,12 @@
 - `InMemoryCheckpointer.fork()` for tests / in-memory time-travel
 - Empty `MapNode` publishes `map=[]` (+ totals metadata) so plan→map→synthesize / Case glue never sees an AgentOutput placeholder
 
+### Changed
+
+- Examples README + pattern docstrings clarify which routing / quality-gate API to pick
+  (`Team(mode="route")` vs `Workflow.branch` vs `Workflow.route`; `.loop` vs `.verify`)
+  so overlapping demos are not confused for the same feature.
+
 ## 0.2.0b0 — public beta
 
 ### Added

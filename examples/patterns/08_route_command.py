@@ -1,6 +1,17 @@
-"""LangGraph / Agno-style control plane — route + Command + get_state.
+"""N-way Workflow routing — ``Workflow.route`` + ``Command``.
 
-USE WHEN: Migrating from LangGraph multi-edge routing or Agno Router workflows.
+USE WHEN: A Workflow must pick among **named arms** (quick / full / human)
+from a chooser function — keywords, rules, or structured state — and optionally
+patch SharedState in the same return via ``Command(update=…)``.
+
+Also covers ``get_state()`` after the run (checkpoint control plane).
+
+Do **not** use this for:
+
+- Binary ``when`` / ``then`` / ``else_`` → ``Workflow.branch``
+  (``advanced/02_workflow_branch.py``)
+- LLM picks a Team specialist → ``Team(mode="route")``
+  (``patterns/04_router.py``)
 
 No live model required.
 """
