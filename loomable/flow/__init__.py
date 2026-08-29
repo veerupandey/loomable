@@ -46,10 +46,12 @@ from .runnable import FunctionRunnable, Runnable
 from .state import Reducer, SharedState, append, merge, overwrite
 
 # Workflow ergonomics: high-level composable classes
+from .command import Command
 from .step import Step, StepFailed, FAILURE_ACTIONS
 from .workflow import Workflow
 from .condition import Condition, ComposableElement
 from .parallel_group import Parallel_Group
+from .route import Route
 from .flow_class import FlowClass, start, listen, router
 
 __all__ = [
@@ -102,6 +104,8 @@ __all__ = [
     "Step",
     "StepFailed",
     "FAILURE_ACTIONS",
+    "Command",
+    "Route",
     "Workflow",
     "Condition",
     "ComposableElement",

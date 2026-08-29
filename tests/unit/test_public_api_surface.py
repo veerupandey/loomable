@@ -17,6 +17,8 @@ _EXPECTED = {
     "WorkItem",
     "Step",
     "StepFailed",
+    "Command",
+    "Route",
     "Loop",
     "Condition",
     "Parallel_Group",

@@ -49,13 +49,14 @@ def _as_steps(value: Any) -> list[Any]:
 
 
 def _wrap_runnable(value: Any, *, default_name: str | None = None) -> Any:
-    """Accept Step / Workflow / Loop / Condition / Parallel_Group / Agent / callable."""
+    """Accept Step / Workflow / Loop / Condition / Route / Parallel_Group / Agent / callable."""
     from loomable.flow.condition import Condition
     from loomable.flow.loop import Loop
     from loomable.flow.parallel_group import Parallel_Group
+    from loomable.flow.route import Route
     from loomable.flow.step import Step
 
-    if isinstance(value, (Step, Condition, Parallel_Group, Loop, Workflow)):
+    if isinstance(value, (Step, Condition, Parallel_Group, Loop, Workflow, Route)):
         return value
     if isinstance(value, dict):
         # {"name": runnable, ...} → Parallel_Group of Steps
@@ -91,10 +92,11 @@ def _collect_confirm_names(steps: list[Any]) -> list[str]:
 
 
 def _unsupported_confirm_sites(steps: list[Any]) -> list[str]:
-    """HITL sites that compile but never pause (branch / loop / parallel)."""
+    """HITL sites that compile but never pause (branch / loop / parallel / route)."""
     from loomable.flow.condition import Condition
     from loomable.flow.loop import Loop
     from loomable.flow.parallel_group import Parallel_Group
+    from loomable.flow.route import Route
     from loomable.flow.step import Step
 
     sites: list[str] = []
@@ -109,6 +111,16 @@ def _unsupported_confirm_sites(steps: list[Any]) -> list[str]:
             names = _collect_confirm_names(nested)
             if names:
                 sites.append(f"branch ({', '.join(names)})")
+        elif isinstance(element, Route):
+            nested = []
+            for branch in element.choices.values():
+                if isinstance(branch, list):
+                    nested.extend(branch)
+                else:
+                    nested.append(branch)
+            names = _collect_confirm_names(nested)
+            if names:
+                sites.append(f"route ({', '.join(names)})")
         elif isinstance(element, Loop):
             body = getattr(element, "_body", None)
             names = _collect_confirm_names([body] if body is not None else [])
@@ -166,6 +178,7 @@ class Workflow:
         embedder: Any = None,
         require_tools: list[str] | None = None,
         strict_require_tools: bool = False,
+        reducers: dict[str, Any] | None = None,
     ) -> None:
         self._name = name
         self._steps: list[Any] = list(steps) if steps is not None else []
@@ -178,6 +191,7 @@ class Workflow:
         self._embedder = embedder
         self._require_tools = list(require_tools) if require_tools else []
         self._strict_require_tools = bool(strict_require_tools)
+        self._reducers = dict(reducers) if reducers else None
         self._compiled_flow: Flow | None = None
         self._last_state: SharedState | None = None
         self._step_counter = 0
@@ -364,6 +378,45 @@ class Workflow:
         self._invalidate()
         return self
 
+    def route(
+        self,
+        chooser: Any,
+        choices: dict[str, Any] | None = None,
+        *,
+        handoff: bool = False,
+        **named: Any,
+    ) -> "Workflow":
+        """N-way route (Agno Router / LangGraph multi-edge).
+
+        ``chooser`` returns a choice name, list of names, or a
+        :class:`~loomable.flow.command.Command` with ``goto=``::
+
+            wf.route(
+                classify,
+                quick=quick_agent,
+                full=full_audit,
+                human=human_review,
+            )
+        """
+        from loomable.flow.route import Route
+
+        merged: dict[str, Any] = {}
+        if choices:
+            merged.update(choices)
+        merged.update(named)
+        if not merged:
+            raise ValueError("route() requires at least one choice")
+        # Normalize each choice into list of wrapped steps for the compiler
+        normalized: dict[str, Any] = {}
+        for key, value in merged.items():
+            if isinstance(value, list):
+                normalized[key] = [_wrap_runnable(v) for v in value]
+            else:
+                normalized[key] = _wrap_runnable(value, default_name=key)
+        self._steps.append(Route(chooser, normalized, handoff=handoff))
+        self._invalidate()
+        return self
+
     def loop(
         self,
         body: Any,
@@ -529,6 +582,7 @@ class Workflow:
                 session_id=self._session_id,
                 checkpointer=self._checkpointer,
                 events=self._events,
+                reducers=self._reducers,
             )
         return self._compiled_flow
 
@@ -663,6 +717,146 @@ class Workflow:
                     complete=True,
                 )
             )
+
+    async def get_state(self) -> dict[str, Any]:
+        """Return the current workflow state (LangGraph-style control plane).
+
+        Prefers an incomplete checkpoint when ``checkpointer`` + ``session_id``
+        are set; otherwise returns the in-memory state from the last run.
+        """
+        cp = None
+        if self._checkpointer is not None and self._session_id is not None:
+            cp = await self._checkpointer.get(self._session_id)
+
+        if cp is not None:
+            session = cp.session_state or {}
+            return {
+                "values": dict(session.get("shared_state") or {}),
+                "completed": list(session.get("completed_node_ids") or []),
+                "pending": [
+                    {
+                        "tool_name": p.tool_name,
+                        "call_id": p.call_id,
+                        "args": dict(p.args),
+                        "status": p.status,
+                    }
+                    for p in (cp.pending or [])
+                ],
+                "complete": bool(cp.complete),
+                "step": cp.step,
+                "thread_id": cp.thread_id,
+                "next": None if cp.complete else self._infer_next(session),
+            }
+
+        values: dict[str, Any] = {}
+        if self._last_state is not None:
+            values = self._last_state.snapshot()
+        return {
+            "values": values,
+            "completed": [],
+            "pending": [],
+            "complete": bool(values),
+            "step": 0,
+            "thread_id": self._session_id,
+            "next": None,
+        }
+
+    async def update_state(
+        self,
+        values: dict[str, Any],
+        *,
+        as_node: str | None = None,
+    ) -> dict[str, Any]:
+        """Patch SharedState on the current checkpoint (LangGraph update_state).
+
+        Requires ``checkpointer`` + ``session_id``. Writes an incomplete
+        checkpoint so the next ``arun(resume=True)`` picks up the patch.
+        When ``as_node`` is set, that node id is also marked completed.
+        """
+        if self._checkpointer is None or self._session_id is None:
+            raise RuntimeError(
+                "update_state() requires Workflow(..., checkpointer=..., session_id=...)"
+            )
+        from loomable.persist.checkpoint import Checkpoint
+
+        existing = await self._checkpointer.get(self._session_id)
+        session: dict[str, Any] = {}
+        step = 0
+        pending: list[Any] = []
+        if existing is not None:
+            session = dict(existing.session_state or {})
+            step = existing.step
+            pending = list(existing.pending or [])
+
+        shared = dict(session.get("shared_state") or {})
+        shared.update(values)
+        session["shared_state"] = shared
+
+        completed = list(session.get("completed_node_ids") or [])
+        if as_node and as_node not in completed:
+            completed.append(as_node)
+            session["completed_node_ids"] = completed
+
+        cp = Checkpoint(
+            thread_id=self._session_id,
+            step=step,
+            session_state=session,
+            complete=False,
+            pending=pending,
+        )
+        await self._checkpointer.put(cp)
+
+        # Mirror into in-memory state for immediate get_state / inspection
+        if self._last_state is None:
+            self._last_state = SharedState(reducers=self._reducers)
+        for key, value in values.items():
+            self._last_state.write(key, value)
+
+        return await self.get_state()
+
+    async def list_states(self) -> list[dict[str, Any]]:
+        """List checkpoint history for this workflow's session (time-travel)."""
+        if self._checkpointer is None or self._session_id is None:
+            if self._last_state is not None:
+                return [await self.get_state()]
+            return []
+        if not hasattr(self._checkpointer, "list"):
+            current = await self.get_state()
+            return [current] if current.get("values") or current.get("pending") else []
+        checkpoints = await self._checkpointer.list(self._session_id)
+        out: list[dict[str, Any]] = []
+        for cp in checkpoints:
+            session = cp.session_state or {}
+            out.append(
+                {
+                    "values": dict(session.get("shared_state") or {}),
+                    "completed": list(session.get("completed_node_ids") or []),
+                    "pending": [
+                        {
+                            "tool_name": p.tool_name,
+                            "call_id": p.call_id,
+                            "args": dict(p.args),
+                            "status": p.status,
+                        }
+                        for p in (cp.pending or [])
+                    ],
+                    "complete": bool(cp.complete),
+                    "step": cp.step,
+                    "thread_id": cp.thread_id,
+                    "timestamp": getattr(cp, "timestamp", None),
+                }
+            )
+        return out
+
+    def _infer_next(self, session: dict[str, Any]) -> list[str] | None:
+        """Best-effort next node ids from incomplete checkpoint."""
+        completed = set(session.get("completed_node_ids") or [])
+        try:
+            flow = self._ensure_compiled()
+        except Exception:  # noqa: BLE001
+            return None
+        remaining = [nid for nid in flow.nodes if nid not in completed]
+        return remaining[:1] if remaining else []
 
     def run(self, input: Any = None) -> RunResult:  # noqa: A002
         """Synchronous convenience wrapper around ``arun``."""

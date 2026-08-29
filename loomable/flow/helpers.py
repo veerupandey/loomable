@@ -130,6 +130,7 @@ def route(
                 source="router",
                 target=choice_id,
                 condition=_make_route_condition(choice_id),
+                payload_key="_route_input",
             )
         )
 

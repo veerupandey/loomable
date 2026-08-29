@@ -74,6 +74,33 @@ class FunctionRunnable:
         if isinstance(raw, RunResult):
             return raw
 
+        # LangGraph-style Command: state patch + optional goto
+        from loomable.flow.command import Command
+
+        if isinstance(raw, Command):
+            goto = raw.goto
+            if isinstance(goto, list):
+                text = ", ".join(str(g) for g in goto)
+            elif goto is not None:
+                text = str(goto)
+            else:
+                text = ""
+            output = AgentOutput(
+                parts=[
+                    MediaPart(
+                        modality=Modality.TEXT,
+                        media_type="text/plain",
+                        data=text.encode("utf-8"),
+                    )
+                ]
+            )
+            metadata = raw.to_metadata()
+            if goto is not None:
+                metadata["selection"] = goto
+            if raw.update:
+                metadata["state_updates"] = dict(raw.update)
+            return RunResult(output=output, session_id="", metadata=metadata)
+
         # Dict returns are treated as SharedState updates (plan_steps, etc.)
         # so plan→map→synthesize can pass lists without stringifying.
         if isinstance(raw, dict):

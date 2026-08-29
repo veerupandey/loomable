@@ -36,6 +36,7 @@
 | Plan → map → synth | `Workflow.map` | `patterns/05_plan_execute.py` |
 | Nested composition | nested `Workflow` / parallel | `patterns/06_nested_composition.py` |
 | Graph engineering | failure policy / `reads=` / `.verify` | `patterns/07_graph_engineering.py` |
+| Route + Command | `Workflow.route` / `Command(goto, update)` | `patterns/08_route_command.py` |
 | Goal + WorkItems board | `Case` | `escalation_war_room/10_case.py` |
 | AG-UI SSE (Agent) | `mount_agent` / `astream_events` | `escalation_war_room/12_agent_agui_sse.py` |
 | AG-UI SSE (Case) | `mount_case` | `escalation_war_room/11_case_sse.py` |
