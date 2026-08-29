@@ -140,10 +140,13 @@ wf = (
 | Knob | Where | Effect |
 |------|--------|--------|
 | `on_failure=` | `Step` / `.step` | `raise` / `retry` / `skip` / `fallback` / `stop` — failure stays local |
+| `max_retries=` | `Step` / `.step` | Extra primary attempts before `on_failure` applies (default `2` for `retry`, else `0`) |
 | `reads=` | `Step` / `.step` | Engine feeds `state[reads]` instead of previous-node ambient output |
 | `.verify` | `Workflow` | Verifier gate with hard repair budget (`max_retries + 1` attempts) |
 | `complexity=` | `Step` / `.step` | `"low"` / `"high"` cost hint for model-tier optimization |
 | `_route_decision` | SharedState | Inspectable `{selected, choices, reason, handoff}` after routers / `.branch` |
+
+`on_failure="stop"` raises `StepFailed` after successful parallel siblings are committed (and checkpointed when a checkpointer is configured). `Workflow.state` still reflects completed work after a hard stop. Cooperative `cancel()` interrupts further retries.
 
 ---
 
