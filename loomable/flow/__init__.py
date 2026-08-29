@@ -46,7 +46,7 @@ from .runnable import FunctionRunnable, Runnable
 from .state import Reducer, SharedState, append, merge, overwrite
 
 # Workflow ergonomics: high-level composable classes
-from .step import Step
+from .step import Step, StepFailed, FAILURE_ACTIONS
 from .workflow import Workflow
 from .condition import Condition, ComposableElement
 from .parallel_group import Parallel_Group
@@ -100,6 +100,8 @@ __all__ = [
     "plan_and_execute",
     # High-level Workflow API (preferred)
     "Step",
+    "StepFailed",
+    "FAILURE_ACTIONS",
     "Workflow",
     "Condition",
     "ComposableElement",

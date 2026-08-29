@@ -29,12 +29,13 @@
 | Custom retriever builders (experimental) | `build_retriever` / `Agent(retrievers=)` | `advanced/05_build_retriever.py`, `06_agentic_retriever.py`, `07_ship_any_retriever.py` |
 | Production hardening | resilience + hooks | `agents/06_production.py` |
 | Specialists | `Team` / subagents | `subagents/` |
-| Quality gate | Agent verifier / `Workflow.loop` | `patterns/01_retry_loop.py` |
+| Quality gate | Agent verifier / `Workflow.loop` / `.verify` | `patterns/01_retry_loop.py` |
 | Multi-step process | `Workflow.step` | `patterns/02_pipeline.py` |
 | Parallel branches | `Workflow.parallel` | `patterns/03_fan_out.py` |
 | Intent router | `Team(mode="route")` | `patterns/04_router.py` |
 | Plan → map → synth | `Workflow.map` | `patterns/05_plan_execute.py` |
 | Nested composition | nested `Workflow` / parallel | `patterns/06_nested_composition.py` |
+| Graph engineering | failure policy / `reads=` / `.verify` | `patterns/07_graph_engineering.py` |
 | Goal + WorkItems board | `Case` | `escalation_war_room/10_case.py` |
 | AG-UI SSE (Agent) | `mount_agent` / `astream_events` | `escalation_war_room/12_agent_agui_sse.py` |
 | AG-UI SSE (Case) | `mount_case` | `escalation_war_room/11_case_sse.py` |

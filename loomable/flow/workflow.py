@@ -236,6 +236,11 @@ class Workflow:
         confirm: bool | None = None,
         require_tools: list[str] | None = None,
         strict_require_tools: bool | None = None,
+        on_failure: str = "raise",
+        max_retries: int | None = None,
+        fallback: Any | None = None,
+        reads: str | None = None,
+        complexity: str | None = None,
     ) -> "Workflow":
         """Append a named step. ``.step("gather", agent)`` or ``.step(Step(...))``.
 
@@ -243,6 +248,12 @@ class Workflow:
         workflow before the step until ``approve(name)`` + ``arun(resume=True)``.
         ``require_tools`` / ``strict_require_tools`` apply when ``agent`` is an
         :class:`~loomable.agent.builder.Agent`.
+
+        Graph-engineering knobs:
+
+        - ``on_failure`` — ``raise`` / ``retry`` / ``skip`` / ``fallback`` / ``stop``
+        - ``reads`` — SharedState key this step consumes (edge data contract)
+        - ``complexity`` — ``"low"`` / ``"high"`` cost hint for model tiers
         """
         from loomable.flow.step import Step
 
@@ -253,6 +264,17 @@ class Workflow:
             element = _wrap_runnable(name)
             if require_confirmation and isinstance(element, Step):
                 element.require_confirmation = True
+            if isinstance(element, Step):
+                if on_failure != "raise":
+                    element.on_failure = on_failure  # type: ignore[assignment]
+                if max_retries is not None:
+                    element.max_retries = max_retries
+                if fallback is not None:
+                    element._fallback = Step._as_runnable(fallback, label="fallback")
+                if reads is not None:
+                    element.reads = reads
+                if complexity is not None:
+                    element.complexity = complexity  # type: ignore[assignment]
         else:
             if not isinstance(name, str) or not name:
                 raise ValueError("step name must be a non-empty string")
@@ -262,6 +284,11 @@ class Workflow:
                 description=description,
                 deps=deps,
                 require_confirmation=require_confirmation,
+                on_failure=on_failure,  # type: ignore[arg-type]
+                max_retries=max_retries,
+                fallback=fallback,
+                reads=reads,
+                complexity=complexity,  # type: ignore[arg-type]
             )
         inner = getattr(element, "_agent", None)
         if require_tools is not None or strict_require_tools is True:
@@ -363,6 +390,37 @@ class Workflow:
         self._steps.append(Loop(body=runnable, verifier=verifier, max_iterations=max_iterations))
         self._invalidate()
         return self
+
+    def verify(
+        self,
+        body: Any,
+        *,
+        check: Any,
+        max_retries: int = 2,
+        name: str | None = None,
+    ) -> "Workflow":
+        """Verify ``body`` output before it moves downstream (bounded repair cycle).
+
+        Graph shape::
+
+            WORK -> VERIFY -> PASS -> next
+                       |
+                       -> FAIL -> feedback -> WORK  (up to max_retries)
+
+        This is the graph-engineering form of ``.loop(..., until=)``: a
+        dedicated verifier gate with a hard iteration budget
+        (``max_retries + 1`` total attempts).
+        """
+        if check is None:
+            raise ValueError("verify() requires check= (Verifier or callable)")
+        if max_retries < 0:
+            raise ValueError("max_retries must be >= 0")
+        return self.loop(
+            body,
+            until=check,
+            max_iterations=max_retries + 1,
+            name=name,
+        )
 
     def map(
         self,

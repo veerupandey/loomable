@@ -131,6 +131,21 @@ class ParallelEngine:
             # 4c. Run all concurrently via SubagentManager (fault-isolated)
             outcomes: list[SubagentOutcome] = await manager.run_all(tasks)
 
+            # Hard-stop policies (Step.on_failure="stop") must halt the graph
+            # even inside a parallel superstep — re-raise before barrier commit.
+            for outcome in outcomes:
+                err = outcome.error
+                if err is None:
+                    continue
+                from loomable.flow.step import StepFailed
+
+                if isinstance(err, StepFailed):
+                    raise err
+                # SubagentManager may wrap; check __cause__ / message class name
+                cause = getattr(err, "__cause__", None)
+                if isinstance(cause, StepFailed):
+                    raise cause
+
             # 4d. Barrier: buffer writes and commit in node_id order (Req 7.2)
             self._barrier_commit(outcomes, state, sub_results)
 
@@ -255,13 +270,19 @@ class ParallelEngine:
     ) -> Any:
         """Resolve the input for a node.
 
-        Looks at incoming edges. If any upstream node has produced output
-        in state, uses the first one found (sorted by node_id for determinism).
-        Otherwise uses the initial input.
+        Prefer an incoming edge's ``payload_key`` (data contract). Otherwise
+        look at upstream outputs in state (sorted by node_id for determinism).
+        Fall back to the initial input.
         """
         edges = incoming_edges[node_id]
         if not edges:
             return initial_input
+
+        for edge in edges:
+            if edge.payload_key:
+                value = state.get(edge.payload_key)
+                if value is not None:
+                    return value
 
         # Check predecessors sorted by node_id for determinism
         predecessors = sorted(set(e.source for e in edges))

@@ -165,13 +165,16 @@ class WorkflowCompiler:
                         result = cond_fn(state)
                         if result:
                             selected = then_target
+                            reason = "condition_true"
                         elif else_target is not None:
                             selected = else_target
+                            reason = "condition_false"
                         else:
                             # No else branch — still route to then (will be
                             # a passthrough). Actually, we need a passthrough node.
                             # We'll route to the join node directly.
                             selected = then_target
+                            reason = "condition_true_no_else"
 
                         output = AgentOutput(
                             parts=[
@@ -182,7 +185,11 @@ class WorkflowCompiler:
                                 )
                             ]
                         )
-                        return RunResult(output=output, session_id="")
+                        return RunResult(
+                            output=output,
+                            session_id="",
+                            metadata={"selection": selected, "reason": reason},
+                        )
 
                     return chooser
 
@@ -246,10 +253,15 @@ class WorkflowCompiler:
 
         # Connect sequential elements with edges in declaration order.
         # Each element's exit connects to the next element's entry.
+        # When the target Step declares ``reads=``, the edge carries that
+        # SharedState key as its payload contract.
         for j in range(len(element_endpoints) - 1):
             _, exit_id = element_endpoints[j]
             entry_id, _ = element_endpoints[j + 1]
-            edges.append(Edge(source=exit_id, target=entry_id))
+            payload_key = getattr(steps[j + 1], "reads", None)
+            edges.append(
+                Edge(source=exit_id, target=entry_id, payload_key=payload_key)
+            )
 
         # Build the final Flow with all nodes and edges.
         # Convert the nodes dict to use Runnable values (Flow expects dict[str, Runnable]).
