@@ -14,7 +14,7 @@ import pytest
 from loomable import Command, Route, Step, Workflow
 from loomable.agent.run import RunResult
 from loomable.content import AgentOutput, MediaPart, Modality
-from loomable.flow.state import append
+from loomable.flow.state import extend
 from loomable.persist.checkpoint import InMemoryCheckpointer
 
 
@@ -168,23 +168,25 @@ class TestControlPlane:
         assert isinstance(states, list)
         assert len(states) >= 1
 
+    @pytest.mark.asyncio
+    async def test_fork_session(self):
+        cp = InMemoryCheckpointer()
+        wf = Workflow("s", session_id="src", checkpointer=cp).step(
+            "a", lambda i: "ok"
+        )
+        await wf.arun("x")
+        forked = await wf.fork_session("dst")
+        assert forked["thread_id"] == "dst"
+        assert wf._session_id == "dst"
+        dst = await cp.get("dst")
+        assert dst is not None
+        src = await cp.get("src")
+        assert src is not None
+
 
 class TestWorkflowReducers:
     @pytest.mark.asyncio
-    async def test_append_reducer_on_parallel_writes(self):
-        async def left(inp, *, context=None):  # noqa: A002
-            return _text("L")
-
-        async def right(inp, *, context=None):  # noqa: A002
-            return _text("R")
-
-        async def join(inp, *, context=None):  # noqa: A002
-            # Prefer reducer-backed key written via state_updates
-            items = None
-            if context and context.shared_state:
-                items = context.shared_state.get("items")
-            return _text(f"JOIN:{items}")
-
+    async def test_extend_reducer_on_parallel_writes(self):
         async def left_u(inp, *, context=None):  # noqa: A002
             return RunResult(
                 output=_text("L").output,
@@ -199,14 +201,44 @@ class TestWorkflowReducers:
                 metadata={"state_updates": {"items": ["R"]}},
             )
 
+        async def join(inp, *, context=None):  # noqa: A002
+            items = None
+            if context and context.shared_state:
+                items = context.shared_state.get("items")
+            return _text(f"JOIN:{items}")
+
         wf = (
-            Workflow("p", reducers={"items": append})
+            Workflow("p", reducers={"items": extend})
             .parallel(Step("left", left_u), Step("right", right_u))
             .step("join", join)
         )
         result = await wf.arun("x")
         text = result.output.text()
         assert "L" in text and "R" in text
+        # Must be flat — no nested lists, no double-apply from parent engine
+        assert wf.state.get("items") == ["L", "R"]
+
+    @pytest.mark.asyncio
+    async def test_parallel_does_not_double_apply_state_updates(self):
+        async def left(inp, *, context=None):  # noqa: A002
+            return RunResult(
+                output=_text("L").output,
+                session_id="",
+                metadata={"state_updates": {"n": 1}},
+            )
+
+        async def right(inp, *, context=None):  # noqa: A002
+            return RunResult(
+                output=_text("R").output,
+                session_id="",
+                metadata={"state_updates": {"n": 2}},
+            )
+
+        from loomable.flow.parallel_group import Parallel_Group
+
+        pg = Parallel_Group(Step("left", left), Step("right", right))
+        result = await pg.arun("x")
+        assert "state_updates" not in (result.metadata or {})
 
 
 class TestRouteComposable:

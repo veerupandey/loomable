@@ -80,6 +80,30 @@ class TestAppendReducer:
         assert state.get("log") == "event1"
         assert state.get("other") == "plain"
 
+    def test_append_wraps_list_payload(self):
+        state = SharedState(reducers={"log": append})
+        state.write("log", "a")
+        state.write("log", ["b"])
+        assert state.get("log") == ["a", ["b"]]
+
+
+class TestExtendReducer:
+    def test_extend_concatenates_lists(self):
+        from loomable.flow.state import extend
+
+        state = SharedState(reducers={"items": extend})
+        state.write("items", ["a"])
+        state.write("items", ["b", "c"])
+        assert state.get("items") == ["a", "b", "c"]
+
+    def test_extend_wraps_scalars(self):
+        from loomable.flow.state import extend
+
+        state = SharedState(reducers={"items": extend})
+        state.write("items", "a")
+        state.write("items", "b")
+        assert state.get("items") == ["a", "b"]
+
 
 # ---------------------------------------------------------------------------
 # Tests: merge reducer

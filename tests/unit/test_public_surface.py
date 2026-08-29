@@ -176,6 +176,7 @@ class TestPublicSurface:
             "SharedState",
             "overwrite",
             "append",
+            "extend",
             "merge",
             "ExecutionEngine",
             "SequentialEngine",

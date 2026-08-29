@@ -335,6 +335,34 @@ class InMemoryCheckpointer:
         """List all checkpoints for a thread in commit order."""
         return list(self._store.get(thread_id, []))
 
+    async def fork(self, source_thread_id: str, new_thread_id: str) -> Checkpoint | None:
+        """Fork from the latest checkpoint of source into a new thread."""
+        latest = await self.get(source_thread_id)
+        if latest is None:
+            return None
+        forked = Checkpoint(
+            thread_id=new_thread_id,
+            step=latest.step,
+            session_state=dict(latest.session_state),
+            stream_text=latest.stream_text,
+            usage=dict(latest.usage),
+            complete=latest.complete,
+            pending=[
+                PendingAction(
+                    tool_name=p.tool_name,
+                    call_id=p.call_id,
+                    args=dict(p.args),
+                    status=p.status,
+                )
+                for p in latest.pending
+            ],
+            event_kind="fork",
+            lineage_id=new_thread_id,
+            timestamp=time.time(),
+        )
+        await self.put(forked)
+        return forked
+
 
 class SQLiteCheckpointer:
     """A Checkpointer backed by stdlib sqlite3.

@@ -15,6 +15,7 @@ __all__ = [
     "SharedState",
     "overwrite",
     "append",
+    "extend",
     "merge",
 ]
 
@@ -106,9 +107,24 @@ def overwrite(existing: Any, incoming: Any) -> Any:
 
 
 def append(existing: Any, incoming: Any) -> Any:
-    """Append reducer: accumulates values into a list."""
+    """Append reducer: wraps each write as one list element.
+
+    ``write("log", "a"); write("log", "b")`` → ``["a", "b"]``.
+    If you intend to concatenate a list payload, use :func:`extend`.
+    """
     base = existing if isinstance(existing, list) else ([] if existing is None else [existing])
     return base + [incoming]
+
+
+def extend(existing: Any, incoming: Any) -> Any:
+    """Extend reducer: concatenates list payloads (fan-in / map-reduce).
+
+    ``write("items", ["a"]); write("items", ["b", "c"])`` → ``["a", "b", "c"]``.
+    Non-list values are treated as a single-element list.
+    """
+    base = existing if isinstance(existing, list) else ([] if existing is None else [existing])
+    extra = incoming if isinstance(incoming, list) else [incoming]
+    return base + extra
 
 
 def merge(existing: Any, incoming: Any) -> Any:

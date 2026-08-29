@@ -162,6 +162,9 @@ class HierarchicalEngine:
 
             final.metadata["stop_reason"] = StopReason.CANCELLED
         final.metadata["completed_node_ids"] = sorted(completed)
+        # Worker state_updates were already applied during the hierarchy run;
+        # don't leak them for a parent engine to re-apply.
+        final.metadata.pop("state_updates", None)
         return final
 
     @staticmethod
