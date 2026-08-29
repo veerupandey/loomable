@@ -1,10 +1,16 @@
-"""Quality gates — Agent verifier and Workflow.loop.
+"""Quality gates — Agent verifier and ``Workflow.loop``.
 
-USE WHEN: You need verified output quality with automatic retry.
+USE WHEN: You need verified output with automatic retry.
 
-Two layers:
-  - ``Agent(verifier=..., retry_on_failure=True)`` — single-agent gate
-  - ``Workflow(...).loop(agent, until=verify)`` — process-level gate
+Two layers in this file:
+
+- ``Agent(verifier=..., retry_on_failure=True)`` — single-agent gate
+- ``Workflow(...).loop(agent, until=verify)`` — keep running a body until the
+  check passes (or ``max_iterations``)
+
+For a **bounded** generate → check → repair step inside a larger pipeline
+(hard budget, optional ``reads=`` / ``on_failure``), use ``Workflow.verify``
+instead — see ``patterns/07_graph_engineering.py``.
 """
 
 import asyncio

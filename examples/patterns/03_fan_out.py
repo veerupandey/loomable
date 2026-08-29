@@ -1,7 +1,10 @@
-"""Fan-Out — same task, multiple perspectives via Workflow.parallel.
+"""Fan-Out — same task, multiple perspectives via ``Workflow.parallel``.
 
-USE WHEN: You want diverse viewpoints on the same question
-without any single agent dominating the analysis.
+USE WHEN: You want diverse viewpoints on the same question without any
+single agent dominating the analysis (happy-path parallel Agents).
+
+If a branch can fail without aborting the job (``on_failure=``), or you need
+``reads=`` / ``.verify``, see ``patterns/07_graph_engineering.py``.
 """
 
 import asyncio
