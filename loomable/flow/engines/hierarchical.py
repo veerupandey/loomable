@@ -161,6 +161,7 @@ class HierarchicalEngine:
             from loomable.agent.context import StopReason
 
             final.metadata["stop_reason"] = StopReason.CANCELLED
+        final.metadata["completed_node_ids"] = sorted(completed)
         return final
 
     @staticmethod

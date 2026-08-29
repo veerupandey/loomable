@@ -16,6 +16,8 @@
   - `Command(goto=..., update=...)` — combine routing with state patches from steps/choosers
   - `Workflow.get_state()` / `update_state()` / `list_states()` — checkpoint inspection, patch, time-travel list
   - `Workflow(reducers={...})` — expose SharedState reducers for parallel joins
+- Nested `Flow` / `Parallel_Group` reuses the parent `SharedState` (parent keys no longer wiped by fan-out)
+- Final checkpoints record only nodes that actually ran (unselected `.route` / `.branch` arms are not marked completed)
 
 ## 0.2.0b0 — public beta
 
