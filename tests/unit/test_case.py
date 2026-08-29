@@ -113,6 +113,26 @@ async def test_plan_and_execute_shared_state_glue() -> None:
 
 
 @pytest.mark.asyncio
+async def test_plan_and_execute_empty_plan_publishes_empty_map() -> None:
+    from loomable.flow.helpers import plan_and_execute
+
+    async def planner(inp):
+        return {"plan_steps": []}
+
+    async def worker(inp):
+        return f"worked:{inp}"
+
+    async def synthesizer(inp, *, context=None):
+        pieces = context.shared_state.get("map") if context else None
+        assert pieces == []
+        return "empty-ok"
+
+    flow = plan_and_execute(planner, worker, synthesizer)
+    result = await flow.arun("do it")
+    assert "empty-ok" in result.output.text()
+
+
+@pytest.mark.asyncio
 async def test_case_dispatch_reuse_with_accept() -> None:
     case = Case(
         model=_model(),

@@ -160,20 +160,30 @@ class MapNode:
                 items = raw
 
         if not items:
-            # No items to process — return empty result
+            # No items — still publish an empty list under "map" so synthesizers
+            # and Case glue see a list, not the MapNode's AgentOutput summary.
+            if context is not None and context.shared_state is not None:
+                context.shared_state.write("map", [])
             output = AgentOutput(
                 parts=[
                     MediaPart(
                         modality=Modality.TEXT,
                         media_type="text/plain",
-                        data=b"MapNode: no items to process",
+                        data=b"",
                     )
                 ]
             )
             return RunResult(
                 output=output,
                 session_id="",
-                metadata={"map_results": [], "map_errors": []},
+                metadata={
+                    "map_results": [],
+                    "map_errors": [],
+                    "map_total": 0,
+                    "map_succeeded": 0,
+                    "map_failed": 0,
+                    "state_updates": {"map": []},
+                },
             )
 
         # 2. Build delegated tasks with concurrency control
