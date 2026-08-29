@@ -75,19 +75,28 @@ def _deserialize_value(value: Any) -> Any:
 
         from loomable.content.parts import MediaPart, Modality
 
-        data = None
-        if value.get("data_b64"):
-            data = base64.b64decode(value["data_b64"])
         modality_raw = value.get("modality", "text")
         try:
             modality = Modality(modality_raw)
         except ValueError:
             modality = Modality.TEXT
+
+        uri = value.get("uri")
+        data_b64 = value.get("data_b64")
+        # Skipped / empty text parts serialize as data_b64="" (falsy). Treat
+        # that as b"" so checkpoint restore does not raise MediaPartError.
+        if uri:
+            data = None
+        elif data_b64 is None and uri is None:
+            data = b""
+        else:
+            data = base64.b64decode(data_b64 or "")
+
         return MediaPart(
             modality=modality,
             media_type=value.get("media_type") or "text/plain",
             data=data,
-            uri=value.get("uri"),
+            uri=uri if uri else None,
         )
     if isinstance(value, dict):
         return {k: _deserialize_value(v) for k, v in value.items()}

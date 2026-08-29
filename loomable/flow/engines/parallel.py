@@ -253,7 +253,11 @@ class ParallelEngine:
         # Resolve input: use upstream node output from state if available,
         # otherwise use initial flow input.
         node_input = ParallelEngine._resolve_input(
-            node_id, incoming_edges, state, initial_input
+            node_id,
+            incoming_edges,
+            state,
+            initial_input,
+            reads=getattr(node, "reads", None),
         )
 
         async def _run() -> RunResult:
@@ -273,13 +277,20 @@ class ParallelEngine:
         incoming_edges: dict[str, list[Edge]],
         state: SharedState,
         initial_input: Any,
+        *,
+        reads: str | None = None,
     ) -> Any:
         """Resolve the input for a node.
 
-        Prefer an incoming edge's ``payload_key`` (data contract). Otherwise
+        Prefer ``node.reads`` / edge ``payload_key`` (data contract). Otherwise
         look at upstream outputs in state (sorted by node_id for determinism).
         Fall back to the initial input.
         """
+        if reads:
+            valued = state.get(reads)
+            if valued is not None:
+                return valued
+
         edges = incoming_edges[node_id]
         if not edges:
             return initial_input
