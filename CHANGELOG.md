@@ -11,6 +11,11 @@
   - `Step(complexity="low"|"high")` — cost hint for model-tier routing
   - Inspectable `route_decision` / SharedState `_route_decision` from `RouterNode` and `Workflow.branch`
   - Hard-path fixes: parallel `stop` commits successful siblings before escalating; `Workflow.state` preserved after `StepFailed`; `max_retries` honored for all policies; cancel interrupts retries; nested `Parallel_Group` inherits scoped checkpointer; `CancelledError` not swallowed as skip/fallback
+- **LangGraph / Agno control-plane parity:**
+  - `Workflow.route(chooser, **choices)` — N-way Router (Agno Router / LangGraph multi-edge)
+  - `Command(goto=..., update=...)` — combine routing with state patches from steps/choosers
+  - `Workflow.get_state()` / `update_state()` / `list_states()` — checkpoint inspection, patch, time-travel list
+  - `Workflow(reducers={...})` — expose SharedState reducers for parallel joins
 
 ## 0.2.0b0 — public beta
 

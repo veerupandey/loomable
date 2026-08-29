@@ -88,6 +88,7 @@ class WorkflowCompiler:
         from loomable.flow.condition import Condition
         from loomable.flow.loop import Loop
         from loomable.flow.parallel_group import Parallel_Group
+        from loomable.flow.route import Route
         from loomable.flow.step import Step
 
         nodes: dict[str, Node | RouterNode] = {}
@@ -98,7 +99,7 @@ class WorkflowCompiler:
         # that represent its "entry" and "exit" points for edge connection.
         # For simple elements (Step, Loop, Parallel_Group, Workflow),
         # entry == exit == the single node_id.
-        # For Condition, entry is the router node, exit is the join node.
+        # For Condition / Route, entry is the router node, exit is the join node.
 
         # We collect (entry_id, exit_id) tuples for each step element.
         element_endpoints: list[tuple[str, str]] = []
@@ -125,9 +126,17 @@ class WorkflowCompiler:
                     # Scoped thread id avoids colliding with the parent flow.
                     base = session_id or "default"
                     inner._session_id = f"{base}::parallel::{node_id}"
+                if inner is not None and reducers:
+                    inner._reducers = dict(reducers)
                 # Treat as a single composite node in the outer flow.
                 nodes[node_id] = Node(node_id=node_id, runnable=element)
                 element_endpoints.append((node_id, node_id))
+
+            elif isinstance(element, Route):
+                router_id, join_id = _compile_route(
+                    element, i, nodes, edges
+                )
+                element_endpoints.append((router_id, join_id))
 
             elif isinstance(element, Condition):
                 # A Condition compiles to:
@@ -214,11 +223,12 @@ class WorkflowCompiler:
                 then_branch = _BranchRunnable(element.then_steps)
                 nodes[then_id] = Node(node_id=then_id, runnable=then_branch)
 
-                # Create edges from router to branches
+    # Create edges from router to branches
                 edges.append(Edge(
                     source=router_id,
                     target=then_id,
                     condition=lambda state: state.get("_router_selection") == then_id,
+                    payload_key="_route_input",
                 ))
 
                 if element.else_steps is not None:
@@ -228,6 +238,7 @@ class WorkflowCompiler:
                         source=router_id,
                         target=else_id,
                         condition=lambda state: state.get("_router_selection") == else_id,
+                        payload_key="_route_input",
                     ))
 
                 # Create a passthrough join node that simply passes input through.
@@ -293,6 +304,43 @@ class WorkflowCompiler:
 # ---------------------------------------------------------------------------
 # Internal helper classes
 # ---------------------------------------------------------------------------
+
+
+def _compile_route(
+    element: Any,
+    index: int,
+    nodes: dict[str, Any],
+    edges: list[Edge],
+) -> tuple[str, str]:
+    """Compile a Route into router + N branches + join. Returns (entry, exit)."""
+    from loomable.flow.helpers import _make_route_condition
+
+    router_id = f"_route_{index}_router"
+    join_id = f"_route_{index}_join"
+    choice_ids = list(element.choices.keys())
+
+    nodes[router_id] = RouterNode(
+        chooser=element.chooser,
+        choices=choice_ids,
+        handoff=bool(getattr(element, "handoff", False)),
+    )
+
+    for choice_id, branch in element.choices.items():
+        branch_id = f"_route_{index}_{choice_id}"
+        steps = branch if isinstance(branch, list) else [branch]
+        nodes[branch_id] = Node(node_id=branch_id, runnable=_BranchRunnable(steps))
+        edges.append(
+            Edge(
+                source=router_id,
+                target=branch_id,
+                condition=_make_route_condition(choice_id),
+                payload_key="_route_input",
+            )
+        )
+        edges.append(Edge(source=branch_id, target=join_id))
+
+    nodes[join_id] = Node(node_id=join_id, runnable=_PassthroughRunnable())
+    return router_id, join_id
 
 
 def _get_element_name(element: Any, index: int) -> str:

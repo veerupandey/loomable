@@ -196,6 +196,8 @@ class TestPublicSurface:
             "Step",
             "StepFailed",
             "FAILURE_ACTIONS",
+            "Command",
+            "Route",
             "Workflow",
             "Condition",
             "ComposableElement",

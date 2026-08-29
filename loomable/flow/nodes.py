@@ -364,6 +364,18 @@ class RouterNode:
         # 2. Extract the selection from the chooser's output
         selected = self._extract_selection(chooser_result)
 
+        # 2b. Apply Command.update patches before validating selection
+        from loomable.flow.command import Command
+
+        cmd = Command.from_metadata(chooser_result.metadata)
+        if cmd and cmd.update and context is not None and context.shared_state is not None:
+            for key, value in cmd.update.items():
+                context.shared_state.write(key, value)
+        if cmd and cmd.goto is not None and (
+            not chooser_result.metadata or "selection" not in chooser_result.metadata
+        ):
+            selected = cmd.goto
+
         # 3. Validate that selection(s) are in declared choices
         self._validate_selection(selected)
 
@@ -381,6 +393,9 @@ class RouterNode:
         if context is not None and context.shared_state is not None:
             context.shared_state.write("_router_selection", selected)
             context.shared_state.write("_route_decision", decision)
+            # Preserve the pre-router payload so gated branches receive the
+            # original user/upstream input (not the router summary text).
+            context.shared_state.write("_route_input", input)
 
         # 6. Build the RouterNode's RunResult
         if isinstance(selected, list):

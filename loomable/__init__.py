@@ -43,11 +43,13 @@ from loomable.case import (
     map_specialists,
 )
 from loomable.flow import (
+    Command,
     Condition,
     Flow,
     FlowPaused,
     Loop,
     Parallel_Group,
+    Route,
     Step,
     StepFailed,
     VerdictResult,
@@ -73,6 +75,8 @@ __all__ = [
     "WorkItem",
     "Step",
     "StepFailed",
+    "Command",
+    "Route",
     "Loop",
     "Condition",
     "Parallel_Group",

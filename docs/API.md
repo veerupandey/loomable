@@ -124,17 +124,24 @@ Declarative: `Workflow("pipe", steps=[Step("a", a), Step("b", b)])`.
 ### Graph-engineering knobs
 
 ```python
+from loomable import Command, Workflow
+
 wf = (
-    Workflow("job")
+    Workflow("job", session_id="t1", checkpointer=cp, reducers={"items": append})
     .parallel(
         Step("a", agent_a),
-        Step("b", agent_b, on_failure="skip"),   # local failure; siblings continue
+        Step("b", agent_b, on_failure="skip"),
     )
-    .step("merge", merger)
-    .step("draft", drafter, reads="evidence")    # edge data contract
+    .route(
+        lambda change: Command(goto="full", update={"severity": "high"}),
+        quick=quick_review,
+        full=full_audit,
+    )
+    .step("draft", drafter, reads="evidence")
     .verify(polisher, check=quality_ok, max_retries=2)
-    .step("classify", classifier, complexity="low")
 )
+state = await wf.get_state()
+await wf.update_state({"note": "human edit"})
 ```
 
 | Knob | Where | Effect |
@@ -143,8 +150,12 @@ wf = (
 | `max_retries=` | `Step` / `.step` | Extra primary attempts before `on_failure` applies (default `2` for `retry`, else `0`) |
 | `reads=` | `Step` / `.step` | Engine feeds `state[reads]` instead of previous-node ambient output |
 | `.verify` | `Workflow` | Verifier gate with hard repair budget (`max_retries + 1` attempts) |
+| `.route` | `Workflow` | N-way Router (Agno / LangGraph multi-edge); chooser may return `Command(goto=…)` |
+| `Command` | step return | `goto` + `update` state patch (LangGraph-style control) |
+| `get_state` / `update_state` / `list_states` | `Workflow` | Checkpoint control plane for resume / time-travel inspection |
+| `reducers=` | `Workflow` | Per-key SharedState merge (e.g. `append` for parallel joins) |
 | `complexity=` | `Step` / `.step` | `"low"` / `"high"` cost hint for model-tier optimization |
-| `_route_decision` | SharedState | Inspectable `{selected, choices, reason, handoff}` after routers / `.branch` |
+| `_route_decision` | SharedState | Inspectable `{selected, choices, reason, handoff}` after routers / `.branch` / `.route` |
 
 `on_failure="stop"` raises `StepFailed` after successful parallel siblings are committed (and checkpointed when a checkpointer is configured). `Workflow.state` still reflects completed work after a hard stop. Cooperative `cancel()` interrupts further retries.
 
