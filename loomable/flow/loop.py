@@ -188,6 +188,17 @@ class Loop:
 
         self._max_iterations = max_iterations
 
+        # Propagate edge data contracts from a Step body so the compiler can
+        # stamp ``payload_key`` on the edge into this Loop node.
+        self.reads = getattr(body, "reads", None) if body is not None else None
+        if self.reads is None and steps:
+            # First Step in a steps= list may declare reads=
+            for el in steps:
+                reads = getattr(el, "reads", None)
+                if reads:
+                    self.reads = reads
+                    break
+
         if verifier is None:
             self._verifier: Verifier = AlwaysOkVerifier()
         elif callable(verifier) and not isinstance(verifier, Verifier):

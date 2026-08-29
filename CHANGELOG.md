@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Graph engineering** primitives on Workflow / Step (see `examples/patterns/07_graph_engineering.py`):
+  - `Step(on_failure=...)` / `Workflow.step(..., on_failure=)` — local failure policies: `raise`, `retry`, `skip`, `fallback`, `stop` (`StepFailed`)
+  - `Step(reads=...)` / edge `payload_key` — edge data contracts so a step consumes a named SharedState key
+  - `Workflow.verify(body, check=..., max_retries=)` — generate → verify → repair with a hard budget
+  - `Step(complexity="low"|"high")` — cost hint for model-tier routing
+  - Inspectable `route_decision` / SharedState `_route_decision` from `RouterNode` and `Workflow.branch`
+
 ## 0.2.0b0 — public beta
 
 ### Added

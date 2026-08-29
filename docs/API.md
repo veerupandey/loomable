@@ -119,7 +119,31 @@ Declarative: `Workflow("pipe", steps=[Step("a", a), Step("b", b)])`.
 
 `Workflow(memory=True)` is a callable-step blackboard on `RunContext.memory` — **not** Agent chat memory. Agent steps share via SharedState output chaining.
 
-`Loop(body=agent, verifier=..., max_iterations=3)` is a Runnable on its own. Workflow uses `.loop(..., until=)`.
+`Loop(body=agent, verifier=..., max_iterations=3)` is a Runnable on its own. Workflow uses `.loop(..., until=)` or `.verify(body, check=..., max_retries=)` (bounded generate → check → repair).
+
+### Graph-engineering knobs
+
+```python
+wf = (
+    Workflow("job")
+    .parallel(
+        Step("a", agent_a),
+        Step("b", agent_b, on_failure="skip"),   # local failure; siblings continue
+    )
+    .step("merge", merger)
+    .step("draft", drafter, reads="evidence")    # edge data contract
+    .verify(polisher, check=quality_ok, max_retries=2)
+    .step("classify", classifier, complexity="low")
+)
+```
+
+| Knob | Where | Effect |
+|------|--------|--------|
+| `on_failure=` | `Step` / `.step` | `raise` / `retry` / `skip` / `fallback` / `stop` — failure stays local |
+| `reads=` | `Step` / `.step` | Engine feeds `state[reads]` instead of previous-node ambient output |
+| `.verify` | `Workflow` | Verifier gate with hard repair budget (`max_retries + 1` attempts) |
+| `complexity=` | `Step` / `.step` | `"low"` / `"high"` cost hint for model-tier optimization |
+| `_route_decision` | SharedState | Inspectable `{selected, choices, reason, handoff}` after routers / `.branch` |
 
 ---
 
