@@ -131,8 +131,28 @@ class ParallelEngine:
             # 4c. Run all concurrently via SubagentManager (fault-isolated)
             outcomes: list[SubagentOutcome] = await manager.run_all(tasks)
 
-            # Hard-stop policies (Step.on_failure="stop") must halt the graph
-            # even inside a parallel superstep — re-raise before barrier commit.
+            # 4d. Barrier first: durable sibling writes must land even when a
+            # hard-stop policy later aborts the graph.
+            self._barrier_commit(outcomes, state, sub_results)
+
+            # Track last successful result for the final output
+            for nid in sorted(ready):
+                if nid in sub_results and sub_results[nid].output is not None:
+                    meta = getattr(sub_results[nid], "metadata", None) or {}
+                    if "error" not in meta:
+                        last_result = sub_results[nid]
+
+            # Mark newly completed (successful) nodes and checkpoint
+            for outcome in outcomes:
+                if outcome.error is None:
+                    completed.add(outcome.task_id)
+            if checkpointer is not None:
+                await self._write_checkpoint(
+                    checkpointer, state, completed, session_id
+                )
+
+            # Hard-stop policies (Step.on_failure="stop") halt after siblings
+            # are committed — failure stays local until the barrier, then escalates.
             for outcome in outcomes:
                 err = outcome.error
                 if err is None:
@@ -141,27 +161,9 @@ class ParallelEngine:
 
                 if isinstance(err, StepFailed):
                     raise err
-                # SubagentManager may wrap; check __cause__ / message class name
                 cause = getattr(err, "__cause__", None)
                 if isinstance(cause, StepFailed):
                     raise cause
-
-            # 4d. Barrier: buffer writes and commit in node_id order (Req 7.2)
-            self._barrier_commit(outcomes, state, sub_results)
-
-            # Track last successful result for the final output
-            for nid in sorted(ready):
-                if nid in sub_results and sub_results[nid].output is not None:
-                    last_result = sub_results[nid]
-
-            # Mark newly completed nodes and write checkpoint (Req 13.1)
-            for outcome in outcomes:
-                if outcome.error is None:
-                    completed.add(outcome.task_id)
-            if checkpointer is not None:
-                await self._write_checkpoint(
-                    checkpointer, state, completed, session_id
-                )
 
         # 5. Assemble final RunResult
         if last_result is None:
