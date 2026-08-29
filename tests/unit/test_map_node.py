@@ -171,6 +171,10 @@ class TestMapNodeFanOut:
 
         assert result.metadata["map_results"] == []
         assert result.metadata["map_errors"] == []
+        assert result.metadata["map_total"] == 0
+        assert result.metadata["map_succeeded"] == 0
+        assert result.output.text() == ""
+        assert ctx.shared_state.get("map") == []
 
     @pytest.mark.asyncio
     async def test_missing_key_returns_empty_result(self):
@@ -182,6 +186,8 @@ class TestMapNodeFanOut:
         result = await node.arun("input", context=ctx)
 
         assert result.metadata["map_results"] == []
+        assert result.metadata["map_total"] == 0
+        assert state.get("map") == []
 
     @pytest.mark.asyncio
     async def test_no_context_returns_empty_result(self):
