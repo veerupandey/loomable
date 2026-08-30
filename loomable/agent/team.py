@@ -622,17 +622,25 @@ class Team:
                 yield RunChunk(delta=part, done=index == last)
             return
 
-        result = await self._soft_arun_with_fallback(
-            input,
-            images=images,
-            videos=videos,
-            audio=audio,
-            output_schema=output_schema,
-        )
-        parts = result.output.parts
-        last = len(parts) - 1
-        for index, part in enumerate(parts):
-            yield RunChunk(delta=part, done=index == last)
+        # Coordinate needs full arun for member fallback; other soft modes stream live.
+        if self._mode == "coordinate" and not self._hard:
+            result = await self._soft_arun_with_fallback(
+                input,
+                images=images,
+                videos=videos,
+                audio=audio,
+                output_schema=output_schema,
+            )
+            parts = result.output.parts
+            last = len(parts) - 1
+            for index, part in enumerate(parts):
+                yield RunChunk(delta=part, done=index == last)
+            return
+
+        async for chunk in self._agent.astream(input, output_schema=output_schema):
+            yield chunk
+        if self._mode == "tasks" and not self._hard:
+            self._verify_tasks_todos()
 
     async def astream_events(
         self,
