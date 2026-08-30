@@ -127,6 +127,7 @@
 
 ### Changed
 
+- Package layout: `NoteStore` lives in `loomable.memory` (compat re-export from `loomable.agent`); `Case` is `loomable.case` package; docs clarify product vs `kernel` runtime (no parallel `core`)
 - Package status: **Beta** (`0.2.0b0`)
 - CI installs `.[dev,toolkits]`; README badge pins `main`
 - Default zvec L3 store reuses an in-process collection handle (no exclusive-lock deadlock across `Agent()` builds)

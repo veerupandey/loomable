@@ -29,7 +29,7 @@ from loomable import (
     UserMemory,
     open_session_store,
 )
-from loomable.agent import NoteStore
+from loomable.memory import NoteStore
 from loomable.kernel.long_term import LongTermStore
 
 ROOT = Path(__file__).resolve().parent / ".compose_sessions"

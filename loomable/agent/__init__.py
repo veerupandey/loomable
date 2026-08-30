@@ -7,6 +7,7 @@ primitives without modifying ``loomable.kernel``:
 - ``ModelSpec`` declarative model configuration
 - ``AgentConfigError`` for invalid/missing builder configuration
 
+L3 ``NoteStore`` lives in :mod:`loomable.memory` (re-exported here for compatibility).
 Multi-agent orchestration is handled via ``Team`` / ``Workflow`` (and low-level ``Flow``).
 """
 
@@ -32,7 +33,7 @@ from .errors import (
 from .events import AgentEvents, Event, JSONTracer, NoOpEvents
 from .media import image, video
 from loomable.media import Image as Image, Audio, Video, File
-from .notes import Note, NoteStore, make_memory_tool
+from .notes import Note, NoteStore, make_memory_tool  # compat re-export; prefer loomable.memory
 from .reasoning import make_plan_tool, make_think_tool
 from .routing import ComplexityRouter, RunStrategy
 from .run import RunChunk, RunResult

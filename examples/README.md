@@ -8,7 +8,7 @@
 | Tools | `Agent` + `@tool` | `agents/02_with_tools.py` |
 | Structured JSON | `response_model` | `agents/03_structured_io.py` |
 | Conversation memory | `session_id` (+ optional `Memory.compose`) | `agents/04_with_memory.py`, `memory/01_session_memory.py` |
-| User / long-term memory | `Memory.compose` + `UserMemory` | `memory/02_user_memory.py` |
+| User / long-term memory | `Memory.compose` + `UserMemory` + `NoteStore` (`loomable.memory`) | `memory/02_user_memory.py` |
 | Shared Workflow blackboard (callable steps) | `Workflow(..., memory=True)` | `memory/03_workflow_shared_memory.py` |
 | Compose Postgres L1/L2 + zvec L3 | `Memory.compose` + Postgres / zvec | `memory/04_compose_postgres_zvec.py` |
 | Unified Memory.compose | `Memory.compose(conversation=..., user=..., knowledge=...)` | `memory/05_compose_memory.py` |
