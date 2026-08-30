@@ -81,7 +81,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from loomable.kernel.agent_loop import AgentLoop
     from loomable.providers.resilient import RetryPolicy
     from loomable.toolkits._base import Toolkit
-    from .notes import NoteStore
+    from loomable.memory import NoteStore
     from .routing import ComplexityRouter
 
 
@@ -3297,7 +3297,7 @@ class Agent:
                 tool_runtime = ToolRuntime(tool_registry)
 
         if self._memory_tool and self._note_store is not None:
-            from .notes import make_memory_tool
+            from loomable.memory import make_memory_tool
 
             mem_tool = make_memory_tool(self._note_store)
             tool_registry[mem_tool.name] = mem_tool
