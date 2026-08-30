@@ -213,6 +213,94 @@ class ZvecVectorBackend:
             out.append(row)
         return out
 
+    def _row_from_hit(self, hit: Any) -> dict[str, Any]:
+        raw = ""
+        try:
+            raw = str(hit.field(_META_FIELD) or "")
+        except Exception:
+            raw = ""
+        try:
+            meta = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            meta = {"raw": raw}
+        if not isinstance(meta, dict):
+            meta = {"value": meta}
+        meta = dict(meta)
+        orig = str(meta.pop(_ORIG_ID_KEY, getattr(hit, "id", "")))
+        meta.pop("score", None)
+        return {**meta, "id": orig}
+
+    async def get(self, id: str) -> dict[str, Any] | None:
+        if self._collection is None and not self._collection_exists():
+            return None
+        try:
+            col = self._ensure(self._dimensions)
+        except RuntimeError:
+            return None
+        if col is None:
+            return None
+        safe = _safe_doc_id(id)
+        getter = getattr(col, "get", None)
+        if callable(getter):
+            try:
+                docs = getter([safe])
+            except Exception:
+                docs = None
+            if docs:
+                hit = docs[0] if isinstance(docs, (list, tuple)) else docs
+                row = self._row_from_hit(hit)
+                if row.get("id") == str(id) or getattr(hit, "id", None) == safe:
+                    row["id"] = str(id)
+                    return row
+        for row in await self.scan(limit=10_000):
+            if row.get("id") == str(id):
+                return row
+        return None
+
+    async def scan(self, *, limit: int = 10_000) -> list[dict[str, Any]]:
+        if limit <= 0:
+            return []
+        if self._collection is None and not self._collection_exists():
+            return []
+        try:
+            col = self._ensure(self._dimensions)
+        except RuntimeError:
+            return []
+        if col is None:
+            return []
+        stats = col.stats
+        doc_count = int(getattr(stats, "doc_count", 0) or 0)
+        if doc_count == 0:
+            return []
+        topk = min(int(limit), doc_count)
+        # Prefer native enumerate when available.
+        lister = getattr(col, "list", None) or getattr(col, "get_all", None)
+        if callable(lister):
+            try:
+                docs = lister()
+                out: list[dict[str, Any]] = []
+                for hit in docs or []:
+                    out.append(self._row_from_hit(hit))
+                    if len(out) >= topk:
+                        break
+                return out
+            except Exception:
+                pass
+        # Fallback: similarity scan with a zero vector of known width.
+        dim = self._dimensions
+        if dim is None:
+            return []
+        zvec = self._require()
+        hits = col.query(
+            queries=zvec.Query(
+                field_name=_VECTOR_FIELD,
+                vector=[0.0] * int(dim),
+            ),
+            topk=topk,
+            output_fields=[_META_FIELD],
+        )
+        return [self._row_from_hit(hit) for hit in hits]
+
     async def delete(self, id: str) -> None:
         if self._collection is None and not self._collection_exists():
             return

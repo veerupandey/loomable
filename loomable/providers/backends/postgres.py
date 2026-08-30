@@ -411,3 +411,51 @@ class PgVectorBackend(_PoolMixin):
                 )
         except Exception as exc:  # noqa: BLE001
             raise MemoryBackendError(self._backend_id) from exc
+
+    async def get(self, id: str) -> dict[str, Any] | None:
+        try:
+            pool = await self._ensure_ready()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    f"""
+                    SELECT id, metadata FROM {self._fq_table}
+                    WHERE scope = $1 AND id = $2
+                    """,
+                    self._user_id,
+                    id,
+                )
+        except Exception as exc:  # noqa: BLE001
+            raise MemoryBackendError(self._backend_id) from exc
+        if row is None:
+            return None
+        meta = row["metadata"] or {}
+        if isinstance(meta, str):
+            meta = json.loads(meta)
+        meta = dict(meta)
+        meta.pop("score", None)
+        return {**meta, "id": str(row["id"])}
+
+    async def scan(self, *, limit: int = 10_000) -> list[dict[str, Any]]:
+        try:
+            pool = await self._ensure_ready()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    f"""
+                    SELECT id, metadata FROM {self._fq_table}
+                    WHERE scope = $1
+                    LIMIT $2
+                    """,
+                    self._user_id,
+                    max(0, int(limit)),
+                )
+        except Exception as exc:  # noqa: BLE001
+            raise MemoryBackendError(self._backend_id) from exc
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            meta = row["metadata"] or {}
+            if isinstance(meta, str):
+                meta = json.loads(meta)
+            meta = dict(meta)
+            meta.pop("score", None)
+            out.append({**meta, "id": str(row["id"])})
+        return out

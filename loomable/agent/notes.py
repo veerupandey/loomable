@@ -58,21 +58,14 @@ class NoteStore:
 
     async def read(self, note_id: str) -> Note | None:
         """Read a single note by id. Returns None if not found."""
-        # Query with a dummy vector won't help; we need to search by id.
-        # The LongTermStore's backend stores by id, so we query and filter.
-        # Use a zero vector with high k to find the note, or access backend directly.
-        # Since ZvecVectorBackend stores items keyed by id, we can check existence
-        # by querying. However, the cleanest approach is to attempt a query
-        # and filter results by id.
-        results = await self._store.backend.query([0.0], k=10000)
-        for result in results:
-            if result.get("id") == note_id or result.get("note_id") == note_id:
-                return self._result_to_note(result)
-        return None
+        result = await self._store.get(note_id)
+        if result is None:
+            return None
+        return self._result_to_note(result)
 
     async def list(self, tag: str | None = None) -> list[Note]:
         """List all notes, optionally filtered by tag."""
-        results = await self._store.backend.query([0.0], k=10000)
+        results = await self._store.scan()
         notes: list[Note] = []
         for result in results:
             note = self._result_to_note(result)

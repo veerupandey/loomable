@@ -138,6 +138,56 @@ class TestNoteStore:
         # Should not raise
         await note_store.delete("does-not-exist")
 
+    @pytest.mark.asyncio
+    async def test_read_list_use_get_scan_not_zero_vector_query(self, embedder: FakeEmbedder):
+        """read/list must not rely on backend.query([0.0]) (dim-strict backends)."""
+
+        class _DimStrictBackend:
+            def __init__(self) -> None:
+                self._rows: dict[str, dict] = {}
+                self.dims = 4
+
+            async def index(self, id: str, vector: list[float], metadata: dict) -> None:
+                if len(vector) != self.dims:
+                    raise ValueError("bad dims on index")
+                self._rows[str(id)] = {"vector": list(vector), "metadata": dict(metadata)}
+
+            async def query(self, vector: list[float], k: int) -> list[dict]:
+                if len(vector) != self.dims:
+                    raise ValueError(
+                        f"expected {self.dims} dims, got {len(vector)}"
+                    )
+                return []
+
+            async def delete(self, id: str) -> None:
+                self._rows.pop(str(id), None)
+
+            async def get(self, id: str) -> dict | None:
+                item = self._rows.get(str(id))
+                if item is None:
+                    return None
+                meta = dict(item["metadata"])
+                return {**meta, "id": str(id)}
+
+            async def scan(self, *, limit: int = 10_000) -> list[dict]:
+                out = []
+                for item_id, item in self._rows.items():
+                    if len(out) >= limit:
+                        break
+                    out.append({**dict(item["metadata"]), "id": item_id})
+                return out
+
+        class _FixedEmb:
+            async def embed(self, text: str) -> list[float]:
+                return [0.1, 0.2, 0.3, 0.4]
+
+        store = NoteStore(LongTermStore(backend=_DimStrictBackend(), backend_name="strict"), _FixedEmb())
+        await store.write("n1", "My name is Sam", ["user_fact"])
+        got = await store.read("n1")
+        assert got is not None and got.text == "My name is Sam"
+        listed = await store.list()
+        assert len(listed) == 1 and listed[0].note_id == "n1"
+
 
 # ---------------------------------------------------------------------------
 # make_memory_tool tests
