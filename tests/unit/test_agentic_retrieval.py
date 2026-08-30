@@ -195,3 +195,18 @@ async def test_heuristic_mode_router() -> None:
     r = HeuristicModeRouter()
     assert await r.choose_mode("explain OAuth2") == "chunks"
     assert await r.choose_mode("open auth.md") == "file"
+
+
+@pytest.mark.asyncio
+async def test_agentic_decomposition_rewriter() -> None:
+    from loomable.retrieval.rewrite import AgenticDecompositionRewriter, resolve_rewriter
+
+    llm = _FakeLLM("OAuth2 flow details\nToken expiration policy\nRefresh token rotation")
+    rw = AgenticDecompositionRewriter(llm, max_subqueries=3, include_original=True)
+    qs = await rw.rewrite("Compare OAuth2 flow vs basic authentication")
+    assert len(qs) >= 2
+    assert "OAuth2 flow details" in qs
+
+    resolved = resolve_rewriter("agentic", llm=llm)
+    assert isinstance(resolved, AgenticDecompositionRewriter)
+
