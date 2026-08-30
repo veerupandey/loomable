@@ -199,6 +199,8 @@ class TestPublicSurface:
             "FAILURE_ACTIONS",
             "Command",
             "Route",
+            "Send",
+            "send_args",
             "Workflow",
             "Condition",
             "ComposableElement",

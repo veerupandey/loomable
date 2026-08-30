@@ -19,6 +19,7 @@ _EXPECTED = {
     "StepFailed",
     "Command",
     "Route",
+    "Send",
     "Loop",
     "Condition",
     "Parallel_Group",

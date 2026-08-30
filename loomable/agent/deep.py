@@ -1025,8 +1025,8 @@ def create_deep_agent(
             case_only.append("max_plan_steps")
         if checkpointer is not None:
             case_only.append("checkpointer")
-        if board is not True:
-            case_only.append("board")
+        # ``board`` is Case-only; ignored here (not forwarded). Do not raise on
+        # ``board=False`` — tests and callers use it as a no-op for non-case agents.
         if case_only:
             from loomable.agent.errors import AgentConfigError
 
