@@ -57,7 +57,8 @@ def dsn() -> str:
 
 @pytest.mark.asyncio
 async def test_e2e_agent_postgres_l1_plus_zvec_l3(dsn: str) -> None:
-    from loomable.agent import Agent, NoteStore
+    from loomable.agent import Agent
+    from loomable.memory import NoteStore
     from loomable.kernel.long_term import LongTermStore
     from loomable.providers.vector_store import open_vector_store
     from loomable.memory import open_session_store
@@ -145,7 +146,8 @@ async def test_e2e_team_coordinator_postgres_memory(dsn: str) -> None:
 
 @pytest.mark.asyncio
 async def test_e2e_case_copies_memory_and_checkpointer(dsn: str) -> None:
-    from loomable.agent import Agent, NoteStore
+    from loomable.agent import Agent
+    from loomable.memory import NoteStore
     from loomable.case import Case
     from loomable.flow.loop import VerdictResult
     from loomable.kernel.long_term import LongTermStore
