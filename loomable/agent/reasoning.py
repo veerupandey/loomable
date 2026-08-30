@@ -44,12 +44,9 @@ def make_plan_tool(agent: "BuiltAgent") -> FunctionTool:
 
     The tool signature is ``plan(task: str, max_steps: int = 5) -> str``. It
     builds a plan→map→synthesize Flow using :func:`~loomable.flow.helpers.plan_and_execute`
-    internally (Req 17.2), replacing the removed ``AutoPlan`` class. The planner,
-    worker, and synthesizer are all backed by the agent's single-shot path so the
-    agent's session/tools/knowledge remain available.
-
-    This lets the model escalate a simple loop into a dynamic graph on demand
-    without requiring a separate graph engine.
+    internally (Req 17.2). Planning uses the kernel :class:`~loomable.kernel.planner.Planner`
+    when set on the agent; workers use the full tool loop when tools are registered
+    (parity with the complexity-router PLAN path).
     """
 
     async def plan(task: str, max_steps: int = 5) -> Any:
@@ -63,8 +60,16 @@ def make_plan_tool(agent: "BuiltAgent") -> FunctionTool:
         plan_steps: list[str] = []
 
         async def _planner(input: Any, **kwargs: Any) -> dict:
-            """Ask the model for a concise plan."""
+            """Produce plan steps — kernel Planner when set, else JSON prompt."""
             nonlocal plan_steps
+            if getattr(agent, "planner", None) is not None:
+                from loomable.kernel.planner import TaskContext
+
+                exec_plan = await agent.planner.plan(TaskContext(task=task))
+                steps = [str(s).strip() for s in exec_plan.steps if str(s).strip()]
+                plan_steps = steps[:max_steps] or [task]
+                return {"plan_steps": plan_steps}
+
             plan_prompt = (
                 f"You are a planner. Break the user's task into at most {max_steps} "
                 "concrete, independent, actionable steps. Return ONLY a JSON array of "
@@ -98,22 +103,35 @@ def make_plan_tool(agent: "BuiltAgent") -> FunctionTool:
             return {"plan_steps": plan_steps}
 
         async def _worker(input: Any, **kwargs: Any) -> str:
-            """Run a single plan step."""
+            """Run a single plan step with the agent's tool loop when tools exist."""
             step = input if isinstance(input, str) else str(input)
             prompt = (
                 f"Overall task:\n{task}\n\n"
                 f"Complete ONLY this step, concisely and concretely:\n{step}"
             )
-            result = await agent._run_single(
-                AgentInput.from_text(prompt), include_history=False
-            )
+            step_input = AgentInput.from_text(prompt)
+            # Prefer the tool loop so step workers keep session/tools/knowledge
+            # (parity with BuiltAgent._run_plan). Nested plan() is bounded by
+            # max_tool_iterations.
+            non_plan = [
+                n for n in agent.tool_runtime._tools if n != "plan"
+            ]
+            if non_plan:
+                result = await agent._run_tool_loop(
+                    step_input, include_history=False
+                )
+            else:
+                result = await agent._run_single(step_input, include_history=False)
             return result.output.text()
 
         async def _synthesizer(input: Any, **kwargs: Any) -> str:
             """Combine step results into a final answer."""
-            state_data = input if isinstance(input, dict) else {}
-            pieces = state_data.get("map", []) or []
-            combined = "\n".join(f"- {p}" for p in pieces) if pieces else str(input)
+            pieces: list[Any] = []
+            if isinstance(input, dict):
+                pieces = input.get("map", []) or []
+            if not pieces:
+                pieces = [str(input)]
+            combined = "\n".join(f"- {p}" for p in pieces)
             prompt = (
                 f"Original task:\n{task}\n\n"
                 f"Results from the planned steps:\n{combined}\n\n"
