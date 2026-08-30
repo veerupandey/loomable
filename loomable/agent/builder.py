@@ -1407,10 +1407,13 @@ class BuiltAgent:
             self.model_interface.default_provider
         )
         queue = self._astream_delta_queue
+        # Tool-advertised requests must use complete() so providers whose stream()
+        # omits tool_call events cannot bypass the tool loop (honesty guard).
         if (
             queue is not None
             and provider is not None
             and hasattr(provider, "stream")
+            and not request.tools
         ):
             accumulated = ""
             tool_calls: list[ToolCall] = []
@@ -1433,6 +1436,9 @@ class BuiltAgent:
             )
 
         response = await self.model_interface.invoke(request)
+        if queue is not None and response.content and not response.tool_calls:
+            for word in str(response.content).split():
+                await self._emit_astream_delta(word + " ")
         return response, None
 
     async def _run_single(
