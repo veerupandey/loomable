@@ -159,6 +159,7 @@ await wf.update_state({"note": "human edit"})
 | `.verify` | `Workflow` | Verifier gate with hard repair budget (`max_retries + 1` attempts) |
 | `.route` | `Workflow` | N-way Router (Agno / LangGraph multi-edge); chooser may return `Command(goto=…)` |
 | `Command` | step / chooser return | `goto` selects route arms; `update` patches SharedState (`resume` reserved / unwired) |
+| `Send` | chooser `Command.update` lists | Dynamic map payloads — use with `Workflow.map_over(..., over="tasks")` |
 | `get_state` / `update_state` / `list_states` / `fork_session` | `Workflow` | Checkpoint control plane for resume / time-travel |
 | `reducers=` | `Workflow` | Per-key SharedState merge (`append` / `extend` / `merge`) for parallel joins |
 | `complexity=` | `Step` / `.step` | `"low"` / `"high"` cost hint for model-tier optimization |
@@ -343,19 +344,21 @@ async for ev in case.astream_events(prompt):
 
 ```python
 from fastapi import FastAPI
-from loomable.serve import mount_agent, mount_case
+from loomable.serve import mount_agent, mount_case, mount_team, mount_workflow
 
 app = FastAPI()
 mount_agent(app, agent, prefix="/agent", api_key="secret")
+mount_team(app, team, prefix="/teams", api_key="secret")      # alias of mount_agent
 mount_case(app, case, prefix="/cases", api_key="secret")
-# POST /agent/run          JSON
-# POST /agent/run/events   SSE  (disconnect → cancel)
+mount_workflow(app, wf, prefix="/workflows", api_key="secret")
+# POST /agent/run          JSON  (resume= on body when supported)
+# POST /agent/run/events   SSE  (disconnect → cancel; RUN_PAUSED on Workflow HITL)
 # POST /agent/run/stream   NDJSON, Agent only (omitted for Case / mode=case)
-# POST /cases/run          JSON
-# POST /cases/run/events   SSE
+# GET/PATCH /workflows/state — Workflow get_state / update_state
+# POST /workflows/approve  — HITL approve (+ auto_run to resume)
 ```
 
-Auth when `api_key=` is set: `Authorization: Bearer …` or `X-API-Key`. No `mount_team` / `mount_workflow`. See [SECURITY.md](../SECURITY.md).
+Auth when `api_key=` is set: `Authorization: Bearer …` or `X-API-Key`. See [SECURITY.md](../SECURITY.md).
 
 ---
 

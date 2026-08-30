@@ -47,6 +47,7 @@ from .state import Reducer, SharedState, append, extend, merge, overwrite
 
 # Workflow ergonomics: high-level composable classes
 from .command import Command
+from .send import Send, send_args
 from .step import Step, StepFailed, FAILURE_ACTIONS
 from .workflow import Workflow
 from .condition import Condition, ComposableElement
@@ -106,6 +107,8 @@ __all__ = [
     "StepFailed",
     "FAILURE_ACTIONS",
     "Command",
+    "Send",
+    "send_args",
     "Route",
     "Workflow",
     "Condition",

@@ -566,7 +566,28 @@ class Flow:
                     text = result.output.text() or ""
                 bridge.publish(RUN_FINISHED, {"text": text[:2000]})
             except Exception as exc:  # noqa: BLE001
-                bridge.publish(RUN_ERROR, {"message": str(exc), "error_type": type(exc).__name__})
+                from loomable.flow.hitl import FlowPaused
+                from loomable.stream import RUN_PAUSED
+
+                if isinstance(exc, FlowPaused):
+                    bridge.publish(
+                        RUN_PAUSED,
+                        {
+                            "node_id": exc.node_id,
+                            "thread_id": exc.thread_id,
+                            "pending": {
+                                "tool_name": exc.pending.tool_name,
+                                "call_id": exc.pending.call_id,
+                                "args": dict(exc.pending.args or {}),
+                                "status": exc.pending.status,
+                            },
+                        },
+                    )
+                else:
+                    bridge.publish(
+                        RUN_ERROR,
+                        {"message": str(exc), "error_type": type(exc).__name__},
+                    )
             finally:
                 self._session_id = prev_session
                 await bus.close()

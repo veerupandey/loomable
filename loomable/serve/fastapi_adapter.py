@@ -77,10 +77,30 @@ class RunRequestModel(BaseModel):
 
     A JSON ``AgentInput`` (ordered ``messages``) plus an optional ``session_id``
     used to route the run so state persists across calls (Req 7.5).
+
+    For Workflow / Case, ``input_text`` may be used instead of ``messages``.
+    ``resume`` forwards to ``arun(resume=...)`` when the target supports it.
     """
 
     messages: list[MessageModel] = Field(default_factory=list)
     session_id: str | None = None
+    resume: bool | None = None
+    input_text: str | None = None
+
+
+class ApproveRequestModel(BaseModel):
+    """Workflow HITL approval body for ``POST .../approve``."""
+
+    node_id: str
+    status: str = "approved"
+    auto_run: bool = False
+
+
+class StatePatchModel(BaseModel):
+    """Patch body for ``PATCH .../state`` (Workflow ``update_state``)."""
+
+    values: dict[str, Any] = Field(default_factory=dict)
+    as_node: str | None = None
 
 
 class RunResultModel(BaseModel):
@@ -89,6 +109,9 @@ class RunResultModel(BaseModel):
     output: list[MediaPartModel]
     session_id: str
     usage: dict[str, int] = Field(default_factory=dict)
+    paused: bool = False
+    node_id: str | None = None
+    pending: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +199,35 @@ def _run_result_to_model(result: RunResult) -> RunResultModel:
         session_id=result.session_id,
         usage=dict(result.usage),
     )
+
+
+def _paused_to_model(exc: Any) -> RunResultModel:
+    """Serialize a :class:`~loomable.flow.hitl.FlowPaused` for HTTP clients."""
+    from loomable.content import AgentOutput, Text
+
+    pending = exc.pending
+    return RunResultModel(
+        output=_output_to_models(AgentOutput(parts=[Text(str(exc))])),
+        session_id=getattr(exc, "thread_id", "") or "",
+        usage={},
+        paused=True,
+        node_id=getattr(exc, "node_id", None),
+        pending={
+            "tool_name": pending.tool_name,
+            "call_id": pending.call_id,
+            "args": dict(pending.args or {}),
+            "status": pending.status,
+        },
+    )
+
+
+def _resolve_run_input(body: RunRequestModel) -> AgentInput | str:
+    """Build run input from messages or plain ``input_text``."""
+    if body.input_text is not None:
+        return body.input_text
+    if body.messages:
+        return _request_to_agent_input(body)
+    return AgentInput.from_text("")
 
 
 def _chunk_to_dict(chunk: RunChunk) -> dict[str, Any]:
@@ -285,6 +337,17 @@ def _register_agent_routes(
                 logging.getLogger("loomable.serve").debug(
                     "_session_id assign failed: %s", exc
                 )
+        # Workflow checkpoint thread
+        wf = agent if type(agent).__name__ == "Workflow" else getattr(agent, "_workflow", None)
+        if wf is not None and hasattr(wf, "bind_session"):
+            try:
+                wf.bind_session(sid)
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger("loomable.serve").debug(
+                    "workflow bind_session failed: %s", exc
+                )
+        elif wf is not None and hasattr(wf, "_session_id"):
+            wf._session_id = sid
         # Case (direct or cached under Agent mode=case) must bind checkpoint thread.
         case = agent if type(agent).__name__ == "Case" else getattr(agent, "_case", None)
         if case is not None and hasattr(case, "bind_session"):
@@ -297,32 +360,40 @@ def _register_agent_routes(
                 if wf is not None:
                     wf._session_id = sid
 
-    async def _invoke_arun(agent_input: AgentInput, body: RunRequestModel) -> RunResult:
+    async def _invoke_arun(agent_input: AgentInput | str, body: RunRequestModel) -> RunResult:
         _apply_session(body)
+        kwargs: dict[str, Any] = {}
+        if body.resume is not None:
+            kwargs["resume"] = body.resume
         # Case / Workflow-style runnables prefer plain text
-        if type(agent).__name__ == "Case" or getattr(agent, "_mode", None) == "case":
+        if type(agent).__name__ in ("Case", "Workflow") or getattr(agent, "_mode", None) == "case":
             from loomable.agent.builder import _input_text
 
-            return await agent.arun(_input_text(agent_input))
-        return await agent.arun(agent_input)
+            text = agent_input if isinstance(agent_input, str) else _input_text(agent_input)
+            return await agent.arun(text, **kwargs)
+        if isinstance(agent_input, str):
+            return await agent.arun(agent_input, **kwargs)
+        return await agent.arun(agent_input, **kwargs)
 
-    async def _invoke_astream_events(agent_input: AgentInput, body: RunRequestModel):
+    async def _invoke_astream_events(agent_input: AgentInput | str, body: RunRequestModel):
         _apply_session(body)
         kwargs: dict[str, Any] = {}
         if body.session_id:
             kwargs["session_id"] = body.session_id
-        if type(agent).__name__ == "Case" or getattr(agent, "_mode", None) == "case":
+        if body.resume is not None:
+            kwargs["resume"] = body.resume
+        if type(agent).__name__ in ("Case", "Workflow") or getattr(agent, "_mode", None) == "case":
             from loomable.agent.builder import _input_text
 
-            text = _input_text(agent_input)
-            if "session_id" in kwargs:
-                async for event in agent.astream_events(text, session_id=kwargs["session_id"]):
-                    yield event
-            else:
-                async for event in agent.astream_events(text):
-                    yield event
+            text = agent_input if isinstance(agent_input, str) else _input_text(agent_input)
+            async for event in agent.astream_events(text, **kwargs):
+                yield event
             return
-        async for event in agent.astream_events(agent_input):
+        if isinstance(agent_input, str):
+            async for event in agent.astream_events(agent_input, **kwargs):
+                yield event
+            return
+        async for event in agent.astream_events(agent_input, **kwargs):
             yield event
 
     @app.get(f"{p}/health")
@@ -338,13 +409,22 @@ def _register_agent_routes(
         if denied is not None:
             return denied
         try:
-            agent_input = _request_to_agent_input(body)
+            agent_input = _resolve_run_input(body)
         except ValueError as exc:
             return JSONResponse(status_code=422, content={"detail": str(exc)})
         try:
             result = await _invoke_arun(agent_input, body)
         except UnsupportedModalityError as exc:
             return JSONResponse(status_code=400, content={"detail": str(exc)})
+        except Exception as exc:  # noqa: BLE001
+            from loomable.flow.hitl import FlowPaused
+
+            if isinstance(exc, FlowPaused):
+                return JSONResponse(
+                    status_code=202,
+                    content=_paused_to_model(exc).model_dump(),
+                )
+            raise
         return JSONResponse(
             status_code=200,
             content=_run_result_to_model(result).model_dump(),
@@ -361,14 +441,17 @@ def _register_agent_routes(
             if denied is not None:
                 return denied
             try:
-                agent_input = _request_to_agent_input(body)
+                agent_input = _resolve_run_input(body)
             except ValueError as exc:
                 return JSONResponse(status_code=422, content={"detail": str(exc)})
             _apply_session(body)
 
             async def event_stream():
                 try:
-                    async for chunk in agent.astream(agent_input):
+                    run_input = agent_input
+                    if not isinstance(run_input, str):
+                        run_input = _request_to_agent_input(body)
+                    async for chunk in agent.astream(run_input):
                         if await request.is_disconnected():
                             _cancel_agent()
                             break
@@ -395,7 +478,7 @@ def _register_agent_routes(
         if denied is not None:
             return denied
         try:
-            agent_input = _request_to_agent_input(body)
+            agent_input = _resolve_run_input(body)
         except ValueError as exc:
             return JSONResponse(status_code=422, content={"detail": str(exc)})
 
@@ -406,7 +489,8 @@ def _register_agent_routes(
             )
 
         async def sse_stream():
-            from loomable.stream import RUN_ERROR, StreamEvent
+            from loomable.flow.hitl import FlowPaused
+            from loomable.stream import RUN_ERROR, RUN_PAUSED, StreamEvent
 
             try:
                 async for event in _invoke_astream_events(agent_input, body):
@@ -414,6 +498,23 @@ def _register_agent_routes(
                         _cancel_agent()
                         break
                     yield sse_encode(event)
+            except FlowPaused as exc:
+                yield sse_encode(
+                    StreamEvent(
+                        type=RUN_PAUSED,
+                        run_id=body.session_id or "paused",
+                        data={
+                            "node_id": exc.node_id,
+                            "thread_id": exc.thread_id,
+                            "pending": {
+                                "tool_name": exc.pending.tool_name,
+                                "call_id": exc.pending.call_id,
+                                "args": dict(exc.pending.args or {}),
+                                "status": exc.pending.status,
+                            },
+                        },
+                    )
+                )
             except UnsupportedModalityError as exc:
                 yield sse_encode(
                     StreamEvent(
@@ -471,6 +572,109 @@ def mount_agent(
     elif hasattr(agent, "_get_built") and not hasattr(agent, "astream_events"):
         target = agent._get_built()
     _register_agent_routes(app, target, prefix=prefix, api_key=api_key)
+    return app
+
+
+def mount_team(
+    app: FastAPI,
+    team: Any,
+    *,
+    prefix: str = "/teams",
+    api_key: str | None = None,
+) -> FastAPI:
+    """Mount Team routes (Agno-style) — delegates to :func:`mount_agent`."""
+    return mount_agent(app, team, prefix=prefix, api_key=api_key)
+
+
+def mount_workflow(
+    app: FastAPI,
+    workflow: Any,
+    *,
+    prefix: str = "/workflows",
+    api_key: str | None = None,
+) -> FastAPI:
+    """Mount Workflow run/events routes plus LangGraph-style control plane.
+
+    Routes:
+    - ``{prefix}/health``, ``/run``, ``/run/events`` (same as agent)
+    - ``GET {prefix}/state`` — ``Workflow.get_state()``
+    - ``PATCH {prefix}/state`` — ``Workflow.update_state()``
+    - ``POST {prefix}/approve`` — HITL approve + optional auto resume
+    """
+    _register_agent_routes(app, workflow, prefix=prefix, api_key=api_key)
+    p = prefix.rstrip("/")
+    expected_key = (api_key or "").strip() or None
+
+    def _auth_or_401(request: Request) -> JSONResponse | None:
+        if expected_key is None:
+            return None
+        provided = _extract_request_api_key(request)
+        if provided is None or provided != expected_key:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "unauthorized"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return None
+
+    @app.get(f"{p}/state")
+    async def workflow_state(request: Request) -> JSONResponse:
+        denied = _auth_or_401(request)
+        if denied is not None:
+            return denied
+        if not hasattr(workflow, "get_state"):
+            return JSONResponse(status_code=501, content={"detail": "not a Workflow"})
+        state = await workflow.get_state()
+        return JSONResponse(status_code=200, content=state)
+
+    @app.patch(f"{p}/state")
+    async def workflow_patch_state(
+        request: Request, body: StatePatchModel
+    ) -> JSONResponse:
+        denied = _auth_or_401(request)
+        if denied is not None:
+            return denied
+        if not hasattr(workflow, "update_state"):
+            return JSONResponse(status_code=501, content={"detail": "not a Workflow"})
+        try:
+            state = await workflow.update_state(
+                body.values, as_node=body.as_node
+            )
+        except RuntimeError as exc:
+            return JSONResponse(status_code=400, content={"detail": str(exc)})
+        return JSONResponse(status_code=200, content=state)
+
+    @app.post(f"{p}/approve")
+    async def workflow_approve(
+        request: Request, body: ApproveRequestModel
+    ) -> JSONResponse:
+        denied = _auth_or_401(request)
+        if denied is not None:
+            return denied
+        if not hasattr(workflow, "approve"):
+            return JSONResponse(status_code=501, content={"detail": "not a Workflow"})
+        try:
+            await workflow.approve(body.node_id, status=body.status)
+        except RuntimeError as exc:
+            return JSONResponse(status_code=400, content={"detail": str(exc)})
+        if not body.auto_run:
+            return JSONResponse(status_code=200, content={"approved": body.node_id})
+        try:
+            result = await workflow.arun(None, resume=True)
+        except Exception as exc:  # noqa: BLE001
+            from loomable.flow.hitl import FlowPaused
+
+            if isinstance(exc, FlowPaused):
+                return JSONResponse(
+                    status_code=202,
+                    content=_paused_to_model(exc).model_dump(),
+                )
+            return JSONResponse(status_code=500, content={"detail": str(exc)})
+        return JSONResponse(
+            status_code=200,
+            content=_run_result_to_model(result).model_dump(),
+        )
+
     return app
 
 

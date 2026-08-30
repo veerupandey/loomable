@@ -481,6 +481,7 @@ class Workflow:
         *,
         planner: Any | None = None,
         synthesizer: Any | None = None,
+        over: str = "plan_steps",
         name: str | None = None,
     ) -> "Workflow":
         """Plan → fan-out map → synthesize (complex dynamic decomposition)."""
@@ -491,11 +492,50 @@ class Workflow:
             planner=planner or worker,
             workers=worker,
             synthesizer=synthesizer or worker,
+            over=over,
             session_id=self._session_id,
             deps=self._deps,
             memory=self._memory,
         )
         step_name = name or "plan_and_execute"
+        self._steps.append(Step(step_name, flow))
+        self._invalidate()
+        return self
+
+    def map_over(
+        self,
+        worker: Any,
+        *,
+        over: str,
+        concurrency: int | None = None,
+        name: str | None = None,
+    ) -> "Workflow":
+        """Fan out ``worker`` over ``SharedState[over]`` (LangGraph Send / map parity).
+
+        Populate ``over`` with plain values or :class:`~loomable.flow.send.Send`
+        instances (``Send.node`` is metadata; ``Send.arg`` is worker input).
+        """
+        from loomable.flow.flow import Flow
+        from loomable.flow.helpers import _ensure_runnable
+        from loomable.flow.nodes import MapNode, Node
+        from loomable.flow.step import Step
+
+        body = _ensure_runnable(worker)
+        map_node = MapNode(body, over=over, concurrency=concurrency)
+        flow = Flow(
+            {
+                "map": Node(node_id="map", runnable=map_node),
+            },
+            edges=[],
+            engine="sequential",
+            session_id=self._session_id,
+            deps=self._deps,
+            memory=self._memory,
+            checkpointer=self._checkpointer,
+            events=self._events,
+            reducers=self._reducers,
+        )
+        step_name = name or f"map_over_{over}"
         self._steps.append(Step(step_name, flow))
         self._invalidate()
         return self
@@ -649,6 +689,26 @@ class Workflow:
         if flow is not None and hasattr(flow, "cancel"):
             hit = flow.cancel() or hit
         return hit
+
+    def bind_session(
+        self,
+        session_id: str | None,
+        *,
+        resume: bool | None = None,
+    ) -> None:
+        """Bind checkpoint thread id (HTTP / multi-turn workflows).
+
+        Invalidates the compiled graph when the session changes so checkpoints
+        align with the new thread.
+        """
+        if session_id is None:
+            return
+        if session_id != self._session_id:
+            self._compiled_flow = None
+        self._session_id = session_id
+        if resume is False and self._checkpointer is not None:
+            # Caller will start fresh on next arun(resume=False).
+            return
 
     async def astream_events(
         self,
