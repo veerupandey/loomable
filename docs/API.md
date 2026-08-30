@@ -159,7 +159,7 @@ await wf.update_state({"note": "human edit"})
 | `.verify` | `Workflow` | Verifier gate with hard repair budget (`max_retries + 1` attempts) |
 | `.route` | `Workflow` | N-way Router (Agno / LangGraph multi-edge); chooser may return `Command(goto=…)` |
 | `Command` | step / chooser return | `goto` selects route arms; `update` patches SharedState (`resume` reserved / unwired) |
-| `Send` | chooser `Command.update` lists | Dynamic map payloads — use with `Workflow.map_over(..., over="tasks")` |
+| `Send` | chooser `Command.update` lists | Dynamic map payloads — `Send.node` is metadata only; use `Workflow.map_over(..., over="tasks")` |
 | `get_state` / `update_state` / `list_states` / `fork_session` | `Workflow` | Checkpoint control plane for resume / time-travel |
 | `reducers=` | `Workflow` | Per-key SharedState merge (`append` / `extend` / `merge`) for parallel joins |
 | `complexity=` | `Step` / `.step` | `"low"` / `"high"` cost hint for model-tier optimization |
@@ -336,7 +336,7 @@ async for ev in case.astream_events(prompt):
 
 | Family | Events |
 |--------|--------|
-| Lifecycle | `RUN_STARTED`, `RUN_FINISHED`, `RUN_ERROR` |
+| Lifecycle | `RUN_STARTED`, `RUN_FINISHED`, `RUN_ERROR`, `RUN_PAUSED` (Workflow HITL — not an error) |
 | Text | `TEXT_MESSAGE_START`, `TEXT_MESSAGE_CONTENT`, `TEXT_MESSAGE_END` |
 | Tools | `TOOL_CALL_START`, `TOOL_CALL_ARGS`, `TOOL_CALL_END`, `TOOL_CALL_RESULT` |
 | Graph | `NODE_STARTED`, `NODE_FINISHED` |
@@ -355,10 +355,8 @@ mount_workflow(app, wf, prefix="/workflows", api_key="secret")
 # POST /agent/run/events   SSE  (disconnect → cancel; RUN_PAUSED on Workflow HITL)
 # POST /agent/run/stream   NDJSON, Agent only (omitted for Case / mode=case)
 # GET/PATCH /workflows/state — Workflow get_state / update_state
-# POST /workflows/approve  — HITL approve (+ auto_run to resume)
+# POST /workflows/approve  — HITL approve (+ auto_run to resume; optional session_id on body)
 ```
-
-Auth when `api_key=` is set: `Authorization: Bearer …` or `X-API-Key`. See [SECURITY.md](../SECURITY.md).
 
 ---
 

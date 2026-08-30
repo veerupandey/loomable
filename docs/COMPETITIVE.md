@@ -26,8 +26,8 @@ Legend: **Y** first-class · **P** partial / pattern · **N** absent or deprecat
 | Structured output | Y | Y | Y | Y `response_model` / `output_schema` |
 | Deep agent harness | P | P | Y Harness | **W** `create_deep_agent` profiles |
 | Goal board / accept rounds | P | P | Y Magentic | **W** `Case` / `mode="case"` |
-| Serve / AgentOS surface | **Y** AgentOS | P Platform | Y Foundry | P `mount_agent` / `mount_case` |
-| Dynamic Send map-reduce | P | **Y** Send | P | P `.map` / `task_batch` (fixed fan-out) |
+| Serve / AgentOS surface | **Y** AgentOS | P Platform | Y Foundry | **P** mount_agent/team/case/workflow + state/approve |
+| Dynamic Send map-reduce | P | **Y** Send | P | **P** `Send` + `map_over` (same worker; multi-node Send routing DIY) |
 
 ## What Loomable already beats or matches
 
@@ -35,15 +35,15 @@ Legend: **Y** first-class · **P** partial / pattern · **N** absent or deprecat
 |------|---------|
 | **Agno Team modes** | Matched: coordinate, route, broadcast (+ hard deterministic), sequential, **tasks**, nested teams |
 | **Agno agent DX** | Matched: tools, memory compose, structured output, streaming, multimodal |
-| **LangGraph control plane** | Strong: Workflow route/Command/reducers/verify/checkpoints/fork; still behind mid-node `interrupt()` and `Send` |
+| **LangGraph control plane** | Strong: Workflow route/Command/reducers/verify/checkpoints/fork/`Send`/`map_over`; still behind mid-node `interrupt()` |
 | **SK legacy planners** | Do not chase (removed upstream); Loomable uses FC + todos + PLAN + Case instead |
 | **MAF Magentic / Harness** | Loomable Case + deep agent covers the same product need with a different API |
 
 ## Remaining gaps (honest)
 
-1. **LangGraph-grade HITL** — mid-tool-loop `interrupt()` + `Command(resume=)` across process restart
-2. **LangGraph `Send`** — dynamic N-way fan-out of unknown subtasks (beyond `.map` / `task_batch`)
-3. **AgentOS / Foundry serve** — `mount_team` / `mount_workflow`, background resumable runs, auth/schedules
+1. **LangGraph-grade HITL** — mid-tool-loop `interrupt()` + `Command(resume=)` across process restart; Agent durable tool pause
+2. **Multi-target Send routing** — fan each `Send.node` to distinct compiled arms (today: same worker via `map_over`)
+3. **AgentOS / Foundry serve depth** — background jobs, schedules, RBAC (HTTP mounts are in place)
 4. **Magentic progress ledger** — optional manager that replans on stall with human plan review (Case is close; not identical)
 
 ## Delegation map (avoid confusion)
@@ -60,6 +60,7 @@ Legend: **Y** first-class · **P** partial / pattern · **N** absent or deprecat
 
 - `tests/unit/test_competitive_agent_audit.py` — tasks mode, nested Team, planner wiring, plan-tool tools, PLAN `sub_results`
 - `tests/unit/test_agent_gap_fixes.py` — planner / astream / Team.astream / sandbox
-- `tests/unit/test_agent_features_audit.py` — delegation depth, verifier, HITL deny
+- `tests/unit/test_serve_and_send.py` — mount_workflow, Send, map_over, RUN_PAUSED
+- Hostile-audit fixes: `test_planner_fixes`, `test_plan_tool_fixes`, `test_team_budget_session`, `test_map_over_checkpoint`, `test_command_goto_input`, `test_case_mode_guards`
 
 Do **not** claim “we beat all three at everything.” Claim: **best unified Agent + Team + Workflow + Case + deep harness**, with Agno Team parity, LangGraph-class Workflow knobs, and Case/deep as the Magentic/Harness alternative — while remaining honest about HITL durability and Send.
