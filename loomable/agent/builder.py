@@ -2379,8 +2379,16 @@ class BuiltAgent:
                 if written:
                     merged = list(dict.fromkeys([*written, *self._cached_user_facts]))
                     self._cached_user_facts = merged[:20]
-            except Exception:  # noqa: BLE001 — never break the run for memory hygiene
-                pass
+            except Exception as exc:  # noqa: BLE001 — never break the run for memory hygiene
+                self.events.emit(Event(
+                    kind="memory_error",
+                    t=time.monotonic(),
+                    attributes={
+                        "op": "auto_extract",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:500],
+                    },
+                ))
 
     async def _refresh_user_memory_context(self, query: str) -> None:
         """Recall user notes into ``_cached_user_facts`` for the next prompt prefix."""
@@ -2392,8 +2400,16 @@ class BuiltAgent:
                 self._cached_user_facts = list(
                     dict.fromkeys([*(h.text for h in hits), *self._cached_user_facts])
                 )[:20]
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            self.events.emit(Event(
+                kind="memory_error",
+                t=time.monotonic(),
+                attributes={
+                    "op": "user_recall",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:500],
+                },
+            ))
 
     async def astream(
         self,
