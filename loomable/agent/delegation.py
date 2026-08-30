@@ -141,11 +141,11 @@ def make_delegation_tools(
                 )
             prev_depth = getattr(_subagent, "_delegation_depth", 0)
             prev_chain_max = getattr(_subagent, "_delegation_max_depth", None)
-            # Propagate absolute depth + chain budget so nested subagents
-            # cannot bypass the parent's max_depth (was always rebuilt at 0).
-            _subagent._delegation_depth = depth + 1
-            _subagent._delegation_max_depth = max_depth
-            _subagent._built = None
+            target_depth = depth + 1
+            if target_depth != prev_depth:
+                _subagent._delegation_depth = target_depth
+                _subagent._delegation_max_depth = max_depth
+                _subagent._built = None
             try:
                 result = await _subagent.arun(task)
                 call_count["n"] += 1
@@ -153,14 +153,14 @@ def make_delegation_tools(
             except Exception as exc:  # noqa: BLE001 - isolate subagent failures
                 return f"Subagent '{_role}' failed: {exc}"
             finally:
-                _subagent._delegation_depth = prev_depth
-                if prev_chain_max is None:
-                    if hasattr(_subagent, "_delegation_max_depth"):
-                        delattr(_subagent, "_delegation_max_depth")
-                else:
-                    _subagent._delegation_max_depth = prev_chain_max
-                # Drop the depth-scoped build so the next caller rebuilds cleanly
-                _subagent._built = None
+                if target_depth != prev_depth:
+                    _subagent._delegation_depth = prev_depth
+                    if prev_chain_max is None:
+                        if hasattr(_subagent, "_delegation_max_depth"):
+                            delattr(_subagent, "_delegation_max_depth")
+                    else:
+                        _subagent._delegation_max_depth = prev_chain_max
+                    _subagent._built = None
 
         _delegate.__name__ = tool_name
         _delegate.__doc__ = f"Delegate a task to {role}. Returns their text response."

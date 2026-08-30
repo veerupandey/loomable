@@ -149,6 +149,7 @@ class Team:
         max_depth: int = 4,
         max_iterations: int | None = None,
         hard: bool | None = None,
+        strict: bool = False,
         # Same memory kwargs as Agent (L1/L2 + L3) — applied to the coordinator.
         resume: bool = False,
         use_memory: bool = True,
@@ -192,12 +193,18 @@ class Team:
                 f"{'/'.join(soft_modes)} (soft LLM orchestration)."
             )
         self._hard = (mode in ("broadcast", "sequential")) if hard is None else bool(hard)
+        self._strict = strict
 
         extra_tools: list[Any] = []
+        self._todo_tools: Any | None = None
         if mode == "tasks":
             from loomable.toolkits.todo_tools import TodoTools
 
-            extra_tools.append(TodoTools())
+            todo_workspace = (
+                f".team_todos/{session_id}" if session_id else ".team_todos/default"
+            )
+            self._todo_tools = TodoTools(workspace=todo_workspace)
+            extra_tools.append(self._todo_tools)
 
         agent_kwargs: dict[str, Any] = {
             "model": model,
@@ -241,7 +248,7 @@ class Team:
         if memory is not None:
             agent_kwargs["memory"] = memory
         self._agent = Agent(**{k: v for k, v in agent_kwargs.items() if v is not None})
-        # Stash budgets for build-time wiring (delegation tools rebuilt in arun soft path)
+        # Stash budgets for build-time wiring (delegation tools registered at build).
         self._agent._max_delegations = max_delegations  # type: ignore[attr-defined]
         self._agent._max_depth = max_depth  # type: ignore[attr-defined]
         from .memory_opts import apply_knowledge_base
@@ -259,6 +266,13 @@ class Team:
             self._agent._require_tools = [
                 name for _, name in delegation_tool_names(self._members)
             ]
+        # Soft route: require at least the first delegate tool (parity with coordinate).
+        if mode == "route" and not self._hard and not self._agent._require_tools:
+            from .delegation import delegation_tool_names
+
+            names = [name for _, name in delegation_tool_names(self._members)]
+            if names:
+                self._agent._require_tools = [names[0]]
         # Soft tasks: nudge write_todos + at least one delegation.
         if mode == "tasks" and not self._agent._require_tools:
             from .delegation import delegation_tool_names
@@ -348,17 +362,25 @@ class Team:
                 )
                 return label, result.output.text()
             except Exception as exc:  # noqa: BLE001
+                if self._strict:
+                    raise
                 return label, f"ERROR: {exc}"
 
         pairs = await asyncio.gather(
             *[_one(m, i) for i, m in enumerate(self._members)]
         )
+        member_errors = any(
+            text.startswith("ERROR:") for _, text in pairs
+        )
         lines = [f"## {label}\n{text}" for label, text in pairs]
         merged = "\n\n".join(lines)
+        meta: dict[str, Any] = {"team_mode": "broadcast", "hard": True}
+        if member_errors:
+            meta["member_errors"] = True
         return RunResult(
             output=AgentOutput(parts=[Text(merged)]),
             session_id=self._session_id or "",
-            metadata={"team_mode": "broadcast", "hard": True},
+            metadata=meta,
         )
 
     async def _run_sequential(
@@ -375,6 +397,7 @@ class Team:
 
         current = task
         trail: list[str] = []
+        member_errors = False
         for i, member in enumerate(self._members):
             label = _member_label(member, i)
             prompt = current if i == 0 else (
@@ -391,17 +414,67 @@ class Team:
                 )
                 current = result.output.text()
             except Exception as exc:  # noqa: BLE001
+                if self._strict:
+                    raise
+                member_errors = True
                 current = f"ERROR from {label}: {exc}"
             trail.append(f"[{label}] {current[:500]}")
+        meta: dict[str, Any] = {
+            "team_mode": "sequential",
+            "hard": True,
+            "trail": trail,
+        }
+        if member_errors:
+            meta["member_errors"] = True
         return RunResult(
             output=AgentOutput(parts=[Text(current)]),
             session_id=self._session_id or "",
-            metadata={
-                "team_mode": "sequential",
-                "hard": True,
-                "trail": trail,
-            },
+            metadata=meta,
         )
+
+    def _verify_tasks_todos(self) -> None:
+        """Raise when tasks-mode todos remain incomplete."""
+        if self._todo_tools is None:
+            return
+        items = self._todo_tools.store.list()
+        if not items:
+            return
+        incomplete = [
+            item["content"]
+            for item in items
+            if item.get("status") not in ("completed", "cancelled")
+        ]
+        if incomplete:
+            from loomable.agent.errors import RequireToolsError
+
+            raise RequireToolsError(
+                [f"todo_incomplete:{content}" for content in incomplete]
+            )
+
+    async def _soft_arun_with_fallback(
+        self,
+        input: "AgentInput | str",  # noqa: A002
+        *,
+        images: "list[str | Any] | None" = None,
+        videos: "list[str | Any] | None" = None,
+        audio: "list[str | Any] | None" = None,
+        output_schema: type | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> "RunResult":
+        """Soft-mode run with optional coordinate fallback and tasks todo gate."""
+        result = await self._agent.arun(
+            input,
+            images=images,
+            videos=videos,
+            audio=audio,
+            output_schema=output_schema,
+            context=context,
+        )
+        if self._mode == "coordinate" and not self._hard:
+            result = await self._coordinate_fallback(_input_as_text(input), result)
+        if self._mode == "tasks" and not self._hard:
+            self._verify_tasks_todos()
+        return result
 
     async def arun(
         self,
@@ -433,40 +506,14 @@ class Team:
                 output_schema=output_schema,
             )
 
-        # Soft path: rebuild delegation tools with budgets if needed
-        if self._max_delegations is not None or self._max_depth != 4:
-            from .delegation import make_delegation_tools
-
-            built = self._agent.build()
-            # Replace delegation tools with budgeted versions
-            budgeted = make_delegation_tools(
-                self._members,
-                max_delegations=self._max_delegations,
-                max_depth=self._max_depth,
-                depth=0,
-            )
-            for t in budgeted:
-                built.tool_runtime._tools[t.name] = t
-            result = await built.arun(
-                input,
-                images=images,
-                videos=videos,
-                audio=audio,
-                output_schema=output_schema,
-                context=context,
-            )
-        else:
-            result = await self._agent.arun(
-                input,
-                images=images,
-                videos=videos,
-                audio=audio,
-                output_schema=output_schema,
-                context=context,
-            )
-        if self._mode == "coordinate" and not self._hard:
-            result = await self._coordinate_fallback(_input_as_text(input), result)
-        return result
+        return await self._soft_arun_with_fallback(
+            input,
+            images=images,
+            videos=videos,
+            audio=audio,
+            output_schema=output_schema,
+            context=context,
+        )
 
     async def _coordinate_fallback(self, task: str, result: "RunResult") -> "RunResult":
         """Run members the coordinator never delegated to (WR-020)."""
@@ -575,8 +622,17 @@ class Team:
                 yield RunChunk(delta=part, done=index == last)
             return
 
-        async for chunk in self._agent.astream(input, output_schema=output_schema):
-            yield chunk
+        result = await self._soft_arun_with_fallback(
+            input,
+            images=images,
+            videos=videos,
+            audio=audio,
+            output_schema=output_schema,
+        )
+        parts = result.output.parts
+        last = len(parts) - 1
+        for index, part in enumerate(parts):
+            yield RunChunk(delta=part, done=index == last)
 
     async def astream_events(
         self,
@@ -680,6 +736,8 @@ class Team:
                         data={},
                     )
                 yield finished
+            if self._mode == "tasks" and not self._hard:
+                self._verify_tasks_todos()
             return
 
         import uuid
