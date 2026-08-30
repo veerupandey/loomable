@@ -1307,6 +1307,8 @@ class BuiltAgent:
             return {"plan_steps": steps[:5]}
 
         plan_tool_activity: list[Any] = []
+        plan_sub_results: dict[str, Any] = {}
+        plan_step_index = {"n": 0}
 
         async def _worker(input: Any, **kwargs: Any) -> str:
             """Run a single plan step with the agent's full tool loop when tools exist."""
@@ -1326,6 +1328,9 @@ class BuiltAgent:
                 )
             if result.tool_activity:
                 plan_tool_activity.extend(result.tool_activity)
+            idx = plan_step_index["n"]
+            plan_step_index["n"] = idx + 1
+            plan_sub_results[f"step_{idx}"] = result
             return result.output.text()
 
         async def _synthesizer(input: Any, *, context: Any = None, **kwargs: Any) -> str:
@@ -1379,6 +1384,7 @@ class BuiltAgent:
                 session_id=self.session.session_id,
                 usage=flow_result.usage,
                 tool_activity=plan_tool_activity,
+                sub_results=plan_sub_results or None,
                 structured=structured,
             )
         )
@@ -3052,6 +3058,7 @@ class Agent:
         tool_runtime: ToolRuntime | None = None,
         harness: GuardrailHarness | None = None,
         planner: Planner | None = None,
+        planning_model: str | None = None,
         session_store: Any | None = None,
         memory_backend: Any | None = None,
         # Harness features:
@@ -3288,6 +3295,7 @@ class Agent:
         self._tool_runtime = tool_runtime
         self._harness = harness
         self._planner = planner
+        self._planning_model = planning_model
         self._session_store = session_store
         self._memory_backend = memory_backend
 
@@ -3378,7 +3386,9 @@ class Agent:
         # --- Build kernel config ---
         config = AgentConfig(
             model={"provider": provider_id},
-            planning_model=None,
+            planning_model=(
+                {"provider": self._planning_model} if self._planning_model else None
+            ),
             tiers={},
             tier_policy=None,
             fallback_tiers={},
@@ -3400,7 +3410,9 @@ class Agent:
         tool_registry.update(mcp_tools)
         tool_runtime = self._tool_runtime or ToolRuntime(tool_registry)
         harness = self._harness or GuardrailHarness([])
-        planner = self._planner or Planner(model_interface)
+        planner = self._planner or Planner(
+            model_interface, planning_model_id=self._planning_model
+        )
         session_store = self._resolve_session_store()
 
         # Summarizer is used for compaction (memory management) in the high-level

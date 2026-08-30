@@ -40,7 +40,7 @@ result = await agent.arun("When was Python created?")
 print(result.output.text())
 ```
 
-`run()` is a sync wrapper. With tools, the tool loop runs automatically; without tools, a single model call. `complexity_router=` is opt-in (`SINGLE` / `TOOL_LOOP` / `PLAN`). `PLAN` uses `_run_plan` (`plan_and_execute`); when `planner=` is set, planning goes through the kernel `Planner`, and each step runs the tool loop when tools are registered.
+`run()` is a sync wrapper. With tools, the tool loop runs automatically; without tools, a single model call. `complexity_router=` is opt-in (`SINGLE` / `TOOL_LOOP` / `PLAN`). `PLAN` uses `_run_plan` (`plan_and_execute`); when `planner=` is set, planning goes through the kernel `Planner`, and each step runs the tool loop when tools are registered. `planning_model=` sets the kernel planner's dedicated model/tier id. `plan_tool=True` exposes an on-demand plan tool with the same worker tool-loop behavior.
 
 ```python
 result.output.text()
@@ -74,7 +74,7 @@ from loomable import Agent, Team
 team = Team(
     members=[researcher, writer, critic],
     model="openai:gpt-4o-mini",
-    mode="coordinate",  # coordinate | route | broadcast | sequential
+    mode="coordinate",  # coordinate | route | broadcast | sequential | tasks
 )
 result = await team.arun("Review our API design")
 ```
@@ -85,8 +85,9 @@ result = await team.arun("Review our API design")
 | `route` | soft | LLM picks one member |
 | `broadcast` | hard | Same input to all, merge labeled results |
 | `sequential` | hard | Chain members in order |
+| `tasks` | soft | Shared TodoTools checklist + delegate until done (`max_iterations=`) — Agno `TeamMode.tasks` parity |
 
-`hard=True` is only valid with `broadcast` / `sequential`. Soft `coordinate` auto-requires `delegate_to_*` and runs skipped members (`metadata["team_coordinate_fallback"]`). `Team.astream` mirrors `Agent.astream` for soft modes; hard modes chunk the merged `arun` result.
+`hard=True` is only valid with `broadcast` / `sequential`. Soft `coordinate` auto-requires `delegate_to_*` and runs skipped members (`metadata["team_coordinate_fallback"]`). `Team.astream` mirrors `Agent.astream` for soft modes; hard modes chunk the merged `arun` result. Members may be nested `Team` instances (wrapped via `Team.as_agent()`).
 
 Or pass `subagents=[...]` on a parent `Agent` — each becomes `delegate_to_<role>`. Nested subagents are allowed; `max_depth` (default 4) is an absolute nest budget from the top parent (child rebuilds at `depth+1`). `max_delegations` caps successful `delegate_to_*` calls in one parent run.
 

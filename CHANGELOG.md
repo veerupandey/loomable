@@ -50,14 +50,21 @@
 ### Added (agent harness parity)
 
 - `PLAN` complexity path uses kernel `planner=` when set on `BuiltAgent` / `Agent`
+- `Agent(planning_model=)` wires the kernel planner's dedicated model/tier id
 - Plan workers run the full tool loop (tools, hooks, knowledge) per step
+- `plan_tool=True` workers use the tool loop (parity with PLAN path); kernel planner when set
+- PLAN path fills `RunResult.sub_results` (`step_0`, …)
 - `astream` streams final text deltas during the tool loop; tool-advertised model
   turns use `complete()` so broken `stream()` stubs cannot bypass tool dispatch
 - `Team.astream` — soft modes delegate to the coordinator; hard modes chunk `arun` output
+- `Team(mode="tasks")` — shared TodoTools checklist + delegate loop (`max_iterations=`)
+  for Agno `TeamMode.tasks` parity
+- Nested `Team` members via `Team.as_agent()` / automatic coercion
 - `create_deep_agent(profile="sandbox")` — general profile with `code_exec` / `shell` and
   exec tools in the discovery core (`run_python`, `run_shell`)
 - Hard `Team` modes (`broadcast` / `sequential`) forward `images` / `videos` / `audio` /
-  `output_schema` to member runs
+  `output_schema` to member runs (including streaming helpers)
+- Competitive audit: `docs/COMPETITIVE.md` + `tests/unit/test_competitive_agent_audit.py`
 
 ### Fixed (agent harness parity)
 
