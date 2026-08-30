@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Sequence
 
 from loomable.kernel.contracts import Retriever
@@ -28,19 +29,32 @@ __all__ = ["AgenticRetriever", "CompositeRetriever", "build_agentic_retriever"]
 
 
 def _merge_hits(groups: Sequence[Sequence[dict[str, Any]]], *, k: int) -> list[dict[str, Any]]:
-    """RRF-merge hit lists from multiple query rewrites / corpora."""
-    scores: dict[str, float] = {}
+    """RRF-merge hit lists from multiple query rewrites / corpora.
+
+    Preserves the original retrieval similarity score as ``raw_score`` and stores
+    the reciprocal-rank-fusion value separately as ``rrf_score``. ``score`` is set
+    to the fusion score so downstream rankers keep their existing ordering
+    semantics, but the real similarity signal is no longer destroyed.
+    """
+    rrf_scores: dict[str, float] = {}
     payloads: dict[str, dict[str, Any]] = {}
     for hits in groups:
         for rank, hit in enumerate(hits):
-            key = str(hit.get("id") or hit.get("content"))
-            scores[key] = scores.get(key, 0.0) + 1.0 / (60 + rank)
+            key = str(hit.get("id") or hit.get("content") or "").strip()
+            if not key:
+                # Anonymous hit (no id and no content) — give it a stable unique
+                # key instead of collapsing every such hit onto the literal "None".
+                key = f"__anon_{rank}_{abs(hash(repr(hit.get('content', ''))))}"
+            rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (60 + rank)
             payloads.setdefault(key, hit)
-    ordered = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    ordered = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
     out: list[dict[str, Any]] = []
-    for key, score in ordered[: max(1, int(k))]:
+    for key, rrf in ordered[: max(1, int(k))]:
         row = dict(payloads[key])
-        row["score"] = score
+        # Keep the original similarity score for observability / debugging.
+        row.setdefault("raw_score", row.get("score"))
+        row["rrf_score"] = rrf
+        row["score"] = rrf
         out.append(row)
     return out
 
@@ -154,8 +168,7 @@ class AgenticRetriever(Retriever):
             queries = [query]
         mode = await self.mode_router.choose_mode(query)
 
-        groups: list[list[dict[str, Any]]] = []
-        for q in queries:
+        async def _retrieve_one(q: str) -> list[dict[str, Any]]:
             if mode == "file":
                 hits = await self._retrieve_file(q, fetch)
             else:
@@ -163,7 +176,10 @@ class AgenticRetriever(Retriever):
             for h in hits:
                 h.setdefault("retrieval_mode", mode)
                 h.setdefault("corpus", self.corpus.name)
-            groups.append(hits)
+            return hits
+
+        # Parallel fan-out retrieval across all sub-queries
+        groups = await asyncio.gather(*[_retrieve_one(q) for q in queries])
 
         merged = _merge_hits(groups, k=fetch) if len(groups) > 1 else (groups[0][:fetch] if groups else [])
         if filters:
@@ -239,16 +255,17 @@ class CompositeRetriever(Retriever):
         if not chosen:
             chosen = list(self._children.keys())[:1]
         per = max(k, (k + len(chosen) - 1) // max(1, len(chosen)))
-        groups: list[list[dict[str, Any]]] = []
-        for name in chosen:
+
+        async def _retrieve_corpus(name: str) -> list[dict[str, Any]]:
             child = self._children.get(name)
             if child is None:
-                continue
+                return []
             try:
-                hits = await child.retrieve(query, per, filters=filters)
+                return await child.retrieve(query, per, filters=filters)
             except TypeError:
-                hits = await child.retrieve(query, per)
-            groups.append(hits)
+                return await child.retrieve(query, per)
+
+        groups = await asyncio.gather(*[_retrieve_corpus(name) for name in chosen])
         return _merge_hits(groups, k=k)
 
 
