@@ -36,6 +36,7 @@ class HierarchicalEngine:
         checkpointer: Any | None = None,
         session_id: str | None = None,
         pending_decisions: dict[str, str] | None = None,
+        nested: bool = False,
     ) -> RunResult:
         """Drive the flow using hierarchical delegation.
 
