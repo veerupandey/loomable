@@ -428,9 +428,40 @@ class ScopedNoteStore:
         await self._inner.delete(self._scoped_id(note_id))
 
     async def recall(self, query: str, k: int = 3) -> list[Any]:
-        hits = await self._inner.recall(query, k=max(k * 4, k))
-        owned = [n for n in hits if self._owns(n)]
-        return owned[:k]
+        """Return up to ``k`` owned notes ranked by similarity to ``query``.
+
+        Lists owned notes (via :meth:`list` / backend ``scan``) then cosine-ranks
+        by re-embedding note text. Correct under multi-tenant density where a
+        global top-``k`` vector query would miss owned rows. Intended for
+        UserMemory-scale note sets (dozens to low hundreds), not huge corpora.
+        """
+        import math
+
+        owned = await self.list()
+        if not owned or k <= 0:
+            return []
+        embedder = getattr(self._inner, "_embedder", None)
+        if embedder is None:
+            return owned[:k]
+        q_vec = await embedder.embed(query or "user preferences identity")
+
+        def _cosine(a: list[float], b: list[float]) -> float:
+            if len(a) != len(b):
+                return 0.0
+            dot = sum(x * y for x, y in zip(a, b))
+            mag_a = math.sqrt(sum(x * x for x in a))
+            mag_b = math.sqrt(sum(y * y for y in b))
+            if mag_a == 0.0 or mag_b == 0.0:
+                return 0.0
+            return dot / (mag_a * mag_b)
+
+        scored: list[tuple[float, Any]] = []
+        for note in owned:
+            text = getattr(note, "text", "") or ""
+            n_vec = await embedder.embed(text)
+            scored.append((_cosine(q_vec, n_vec), note))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [note for _, note in scored[:k]]
 
     def _owns(self, note: Any) -> bool:
         nid = getattr(note, "note_id", "") or ""

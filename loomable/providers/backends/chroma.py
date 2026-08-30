@@ -168,5 +168,55 @@ class ChromaVectorBackend:
         except Exception as exc:
             raise MemoryBackendError(self._backend_id) from exc
 
+    async def get(self, id: str) -> dict[str, Any] | None:
+        try:
+            raw = self._col.get(
+                ids=[str(id)],
+                include=["metadatas", "documents"],
+            )
+        except Exception as exc:
+            raise MemoryBackendError(self._backend_id) from exc
+        ids = raw.get("ids") or []
+        if not ids:
+            return None
+        metas = raw.get("metadatas") or [None]
+        docs = raw.get("documents") or [None]
+        meta = _inflate_meta(metas[0])
+        meta.pop("score", None)
+        doc = docs[0] if docs else None
+        if doc and not meta.get("content") and not meta.get("text"):
+            meta["content"] = doc
+        return {**meta, "id": str(ids[0])}
+
+    async def scan(self, *, limit: int = 10_000) -> list[dict[str, Any]]:
+        if limit <= 0:
+            return []
+        try:
+            raw = self._col.get(
+                include=["metadatas", "documents"],
+                limit=max(1, int(limit)),
+            )
+        except TypeError:
+            # Older chroma clients may not accept limit= on get.
+            try:
+                raw = self._col.get(include=["metadatas", "documents"])
+            except Exception as exc:
+                raise MemoryBackendError(self._backend_id) from exc
+        except Exception as exc:
+            raise MemoryBackendError(self._backend_id) from exc
+        ids = raw.get("ids") or []
+        metas = raw.get("metadatas") or []
+        docs = raw.get("documents") or []
+        out: list[dict[str, Any]] = []
+        for item_id, meta, doc in zip(ids, metas, docs):
+            if len(out) >= max(0, int(limit)):
+                break
+            row = _inflate_meta(meta)
+            row.pop("score", None)
+            if doc and not row.get("content") and not row.get("text"):
+                row["content"] = doc
+            out.append({**row, "id": str(item_id)})
+        return out
+
     def close(self) -> None:
         return None

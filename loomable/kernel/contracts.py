@@ -82,6 +82,14 @@ class VectorBackend(Protocol):
         by non-increasing similarity."""
         ...
 
+    async def get(self, id: str) -> dict[str, Any] | None:
+        """Return one row by id as ``{**metadata, "id": id}``, or ``None``."""
+        ...
+
+    async def scan(self, *, limit: int = 10_000) -> list[dict[str, Any]]:
+        """Enumerate up to ``limit`` rows as ``{**metadata, "id": id}``."""
+        ...
+
     async def delete(self, id: str) -> None:
         """Remove an indexed vector by id."""
         ...

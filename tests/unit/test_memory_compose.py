@@ -38,6 +38,23 @@ def _model() -> ModelSpec:
     return ModelSpec(provider="scripted", provider_impl=_Echo())
 
 
+@pytest.mark.asyncio
+async def test_scoped_recall_under_crowded_multitenant() -> None:
+    """Owned notes must surface even when global top-k*4 would exclude them."""
+    base = NoteStore(long_term=open_vector_store(engine="memory"), embedder=_Emb())
+    alice = ScopedNoteStore(base, scope=MemoryScope.of(user_id="alice"))
+    bob = ScopedNoteStore(base, scope=MemoryScope.of(user_id="bob"))
+    # Flood Alice's namespace with many "injury" notes so vector top-k is Alice-dominated.
+    for i in range(40):
+        await alice.write(f"injury-{i}", f"Alice injury note number {i} soft tissue")
+    await bob.write("injury", "Bob exclusive rear bumper claim detail")
+
+    hits = await bob.recall("injury soft tissue bumper", k=3)
+    assert hits, "Bob's scoped recall must return owned notes"
+    assert all("Bob" in n.text for n in hits)
+    assert all("Alice" not in n.text for n in hits)
+
+
 def test_extract_user_facts() -> None:
     facts = extract_user_facts("Hi! My name is Alex. I prefer dark mode.")
     assert any("Alex" in f for f in facts)
