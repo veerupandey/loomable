@@ -51,14 +51,9 @@ def make_failing_task(task_id: str, exc: Exception | None = None) -> DelegatedTa
 
 
 class TestSubagentOutcome:
-    def test_requires_exactly_one_of_result_or_error(self):
-        """Constructing with neither result nor error raises ValueError."""
-        with pytest.raises(ValueError, match="exactly one"):
-            SubagentOutcome(task_id="t1")
-
     def test_rejects_both_result_and_error(self):
         """Constructing with both result and error raises ValueError."""
-        with pytest.raises(ValueError, match="exactly one"):
+        with pytest.raises(ValueError, match="both"):
             SubagentOutcome(
                 task_id="t1",
                 result="data",
@@ -69,12 +64,20 @@ class TestSubagentOutcome:
         outcome = SubagentOutcome(task_id="t1", result="hello")
         assert outcome.result == "hello"
         assert outcome.error is None
+        assert outcome.ok
+
+    def test_accepts_none_result_as_success(self):
+        outcome = SubagentOutcome(task_id="t1", result=None)
+        assert outcome.result is None
+        assert outcome.error is None
+        assert outcome.ok
 
     def test_accepts_error_only(self):
         err = SubagentError(subagent_id="t1")
         outcome = SubagentOutcome(task_id="t1", error=err)
         assert outcome.error is err
         assert outcome.result is None
+        assert not outcome.ok
 
 
 # ---------------------------------------------------------------------------

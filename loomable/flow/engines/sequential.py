@@ -58,6 +58,7 @@ class SequentialEngine:
         checkpointer: Any | None = None,
         session_id: str | None = None,
         pending_decisions: dict[str, str] | None = None,
+        nested: bool = False,
     ) -> "RunResult":
         """Drive the flow sequentially through topological order.
 
@@ -129,7 +130,7 @@ class SequentialEngine:
                     )
                     thread_id = session_id or "default"
                     # Checkpoint before raising (Req 16.2)
-                    if checkpointer is not None:
+                    if checkpointer is not None and not nested:
                         await self._write_hitl_checkpoint(
                             checkpointer, state, completed, thread_id, pending
                         )
@@ -137,7 +138,7 @@ class SequentialEngine:
                 elif decision == "rejected":
                     # Skip the node on rejection (Req 16.3)
                     completed.add(node_id)
-                    if checkpointer is not None:
+                    if checkpointer is not None and not nested:
                         await self._write_checkpoint(
                             checkpointer, state, completed, session_id
                         )
@@ -150,7 +151,12 @@ class SequentialEngine:
             # - Otherwise (first node or no upstream results), use the
             #   initial flow input.
             node_input = self._resolve_input(
-                node_id, incoming_edges, state, input, order
+                node_id,
+                incoming_edges,
+                state,
+                input,
+                order,
+                reads=getattr(node, "reads", None),
             )
 
             # Emit node_start event (Req 13.3)
@@ -183,7 +189,7 @@ class SequentialEngine:
 
             # Mark as completed and write checkpoint (Req 13.1)
             completed.add(node_id)
-            if checkpointer is not None:
+            if checkpointer is not None and not nested:
                 await self._write_checkpoint(
                     checkpointer, state, completed, session_id
                 )
@@ -219,6 +225,7 @@ class SequentialEngine:
             from loomable.agent.context import StopReason
 
             final.metadata["stop_reason"] = StopReason.CANCELLED
+        final.metadata["completed_node_ids"] = sorted(completed)
         return final
 
     # ------------------------------------------------------------------
@@ -317,18 +324,34 @@ class SequentialEngine:
         state: SharedState,
         initial_input: Any,
         order: list[str],
+        *,
+        reads: str | None = None,
     ) -> Any:
         """Resolve the input for a node.
 
         Strategy:
-        - Look at this node's incoming edges. If any upstream node has
-          produced output (stored in state), use the output from the
-          most recent predecessor (by topological order).
+        - If the node declares ``reads``, use ``state[reads]`` when present
+          (data contract — including nested-flow roots with no incoming edge).
+        - Else if an incoming edge declares ``payload_key``, use that key.
+        - Otherwise look at upstream nodes with results in state; use the
+          output from the most recent predecessor (by topological order).
         - If no predecessor has output (first node), use the initial input.
         """
+        if reads:
+            valued = state.get(reads)
+            if valued is not None:
+                return valued
+
         edges = incoming_edges[node_id]
         if not edges:
             return initial_input
+
+        # Prefer explicit edge payload contracts
+        for edge in edges:
+            if edge.payload_key:
+                value = state.get(edge.payload_key)
+                if value is not None:
+                    return value
 
         # Find the latest predecessor (by topo order) that has a result
         predecessors = [e.source for e in edges]

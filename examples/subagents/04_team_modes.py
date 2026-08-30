@@ -1,10 +1,15 @@
-"""Team Convenience Class — Explicit orchestration modes.
+"""Team convenience class — explicit orchestration modes.
 
-USE WHEN: You want named orchestration patterns without writing
-custom parent agent instructions.
+USE WHEN: You want named Team modes without writing custom parent
+agent instructions.
 
-Team modes: coordinate (all + synthesize), route (pick best),
-broadcast (all same input), sequential (chain in order).
+Team modes: ``coordinate`` (all + synthesize), ``route`` (LLM picks one),
+``broadcast`` (all same input), ``sequential`` (chain in order).
+
+``mode="route"`` is an **LLM specialist picker**, not Workflow control flow.
+For Workflow forks see ``Workflow.branch`` (``advanced/02_workflow_branch.py``)
+or ``Workflow.route`` (``patterns/08_route_command.py``). Focused route-only
+demo: ``patterns/04_router.py``.
 """
 
 import asyncio

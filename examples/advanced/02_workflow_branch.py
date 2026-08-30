@@ -1,7 +1,14 @@
-"""Custom routing via high-level Workflow.branch — Agents only.
+"""Binary Workflow branch — ``Workflow.branch(when=…, then=…, else_=…)``.
 
-Prefer this over hand-built Node/Edge graphs. Each Agent receives the
-previous Agent's output automatically.
+USE WHEN: After a step (often a classifier Agent), you need a **yes/no** fork
+inside a Workflow. Each Agent receives the previous output automatically.
+
+Do **not** use this for:
+
+- LLM picks a specialist Team member → ``Team(mode="route")``
+  (``patterns/04_router.py``)
+- Three or more named arms / ``Command(goto=…)`` → ``Workflow.route``
+  (``patterns/08_route_command.py``)
 """
 
 from __future__ import annotations
@@ -48,7 +55,7 @@ async def main() -> None:
         return "technical" in text.lower()
 
     wf = (
-        Workflow("intent-route")
+        Workflow("intent-branch")
         .step("classify", classifier)
         .branch(when=is_technical, then=technical, else_=creative)
     )

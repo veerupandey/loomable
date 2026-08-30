@@ -32,12 +32,12 @@ __all__ = [
 
 import asyncio
 import json
-import re
 import uuid
 from dataclasses import asdict, dataclass
 from typing import Any, AsyncIterator, Callable, Literal, Sequence
 
 from loomable.agent.context import RunContext
+from loomable.plan_parse import parse_plan_steps
 from loomable.agent.run import RunResult
 from loomable.content import AgentOutput, Text
 from loomable.flow.loop import CallableVerifier, Loop, Verifier
@@ -231,41 +231,6 @@ def board_tools(
         return json.dumps(item.to_dict())
 
     return [work_list, work_add, work_update, work_complete]
-
-
-def parse_plan_steps(text: str, *, max_steps: int = 5) -> list[str]:
-    """Parse a planner response into a clean list of step strings."""
-    cleaned = (text or "").strip()
-    if cleaned.startswith("```"):
-        lines = cleaned.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        cleaned = "\n".join(lines).strip()
-        if cleaned.lower().startswith("json"):
-            cleaned = cleaned[4:].strip()
-
-    try:
-        data = json.loads(cleaned)
-        if isinstance(data, dict) and "plan_steps" in data:
-            data = data["plan_steps"]
-        if isinstance(data, list):
-            steps = [str(s).strip() for s in data if str(s).strip()]
-            return steps[:max_steps] or [cleaned or "Complete the task"]
-    except (json.JSONDecodeError, TypeError, ValueError):
-        pass
-
-    steps: list[str] = []
-    for line in cleaned.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        line = re.sub(r"^[-*•]\s*", "", line)
-        line = re.sub(r"^\d+[.)]\s*", "", line)
-        if line:
-            steps.append(line)
-    return steps[:max_steps] or [cleaned or "Complete the task"]
 
 
 async def map_specialists(
@@ -876,7 +841,19 @@ class Case:
     @classmethod
     def from_agent(cls, agent: Any) -> Case:
         """Build a Case from ``Agent(mode='case', ...)`` — copies Agent memory too."""
+        from loomable.agent.errors import AgentConfigError
         from loomable.agent.memory_opts import memory_kwargs_from_agent
+
+        unsupported: list[str] = []
+        if getattr(agent, "_subagents", None):
+            unsupported.append("subagents")
+        if getattr(agent, "_complexity_router", None) is not None:
+            unsupported.append("complexity_router")
+        if unsupported:
+            raise AgentConfigError(
+                f"Case.from_agent cannot copy Agent fields not supported in Case mode: "
+                f"{', '.join(unsupported)}."
+            )
 
         dispatch = getattr(agent, "_dispatch", None) or "reuse"
         max_rounds = getattr(agent, "_max_rounds", None)
@@ -902,6 +879,13 @@ class Case:
             or None,
             "approver": getattr(agent, "_approver", None),
         }
+        if getattr(agent, "_discovery", False):
+            runtime["discovery"] = True
+            runtime["discovery_core_tools"] = getattr(agent, "_discovery_core_tools", None)
+            runtime["defer_local_tools"] = getattr(agent, "_defer_mcp", None)
+            runtime["lazy_mcp"] = getattr(agent, "_lazy_mcp", None)
+            runtime["activation_allowlist"] = getattr(agent, "_activation_allowlist", None)
+            runtime["activation_denylist"] = getattr(agent, "_activation_denylist", None)
         return cls(
             model=getattr(agent, "_model", None),
             goal=str(getattr(agent, "_goal", "") or ""),

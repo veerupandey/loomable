@@ -15,6 +15,7 @@ __all__ = [
     "SharedState",
     "overwrite",
     "append",
+    "extend",
     "merge",
 ]
 
@@ -74,19 +75,28 @@ def _deserialize_value(value: Any) -> Any:
 
         from loomable.content.parts import MediaPart, Modality
 
-        data = None
-        if value.get("data_b64"):
-            data = base64.b64decode(value["data_b64"])
         modality_raw = value.get("modality", "text")
         try:
             modality = Modality(modality_raw)
         except ValueError:
             modality = Modality.TEXT
+
+        uri = value.get("uri")
+        data_b64 = value.get("data_b64")
+        # Skipped / empty text parts serialize as data_b64="" (falsy). Treat
+        # that as b"" so checkpoint restore does not raise MediaPartError.
+        if uri:
+            data = None
+        elif data_b64 is None and uri is None:
+            data = b""
+        else:
+            data = base64.b64decode(data_b64 or "")
+
         return MediaPart(
             modality=modality,
             media_type=value.get("media_type") or "text/plain",
             data=data,
-            uri=value.get("uri"),
+            uri=uri if uri else None,
         )
     if isinstance(value, dict):
         return {k: _deserialize_value(v) for k, v in value.items()}
@@ -106,9 +116,24 @@ def overwrite(existing: Any, incoming: Any) -> Any:
 
 
 def append(existing: Any, incoming: Any) -> Any:
-    """Append reducer: accumulates values into a list."""
+    """Append reducer: wraps each write as one list element.
+
+    ``write("log", "a"); write("log", "b")`` → ``["a", "b"]``.
+    If you intend to concatenate a list payload, use :func:`extend`.
+    """
     base = existing if isinstance(existing, list) else ([] if existing is None else [existing])
     return base + [incoming]
+
+
+def extend(existing: Any, incoming: Any) -> Any:
+    """Extend reducer: concatenates list payloads (fan-in / map-reduce).
+
+    ``write("items", ["a"]); write("items", ["b", "c"])`` → ``["a", "b", "c"]``.
+    Non-list values are treated as a single-element list.
+    """
+    base = existing if isinstance(existing, list) else ([] if existing is None else [existing])
+    extra = incoming if isinstance(incoming, list) else [incoming]
+    return base + extra
 
 
 def merge(existing: Any, incoming: Any) -> Any:

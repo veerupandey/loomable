@@ -6,7 +6,13 @@ Thin request/response translators:
 - ``MCPServerAdapter`` (Model Context Protocol / agent-as-tool)
 """
 
-from .fastapi_adapter import FastAPIAdapter, mount_agent, mount_case
+from .fastapi_adapter import (
+    FastAPIAdapter,
+    mount_agent,
+    mount_case,
+    mount_team,
+    mount_workflow,
+)
 from .mcp_adapter import MCPServerAdapter
 
 __all__ = [
@@ -14,4 +20,6 @@ __all__ = [
     "MCPServerAdapter",
     "mount_agent",
     "mount_case",
+    "mount_team",
+    "mount_workflow",
 ]

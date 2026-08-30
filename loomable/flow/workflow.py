@@ -49,13 +49,14 @@ def _as_steps(value: Any) -> list[Any]:
 
 
 def _wrap_runnable(value: Any, *, default_name: str | None = None) -> Any:
-    """Accept Step / Workflow / Loop / Condition / Parallel_Group / Agent / callable."""
+    """Accept Step / Workflow / Loop / Condition / Route / Parallel_Group / Agent / callable."""
     from loomable.flow.condition import Condition
     from loomable.flow.loop import Loop
     from loomable.flow.parallel_group import Parallel_Group
+    from loomable.flow.route import Route
     from loomable.flow.step import Step
 
-    if isinstance(value, (Step, Condition, Parallel_Group, Loop, Workflow)):
+    if isinstance(value, (Step, Condition, Parallel_Group, Loop, Workflow, Route)):
         return value
     if isinstance(value, dict):
         # {"name": runnable, ...} → Parallel_Group of Steps
@@ -91,10 +92,11 @@ def _collect_confirm_names(steps: list[Any]) -> list[str]:
 
 
 def _unsupported_confirm_sites(steps: list[Any]) -> list[str]:
-    """HITL sites that compile but never pause (branch / loop / parallel)."""
+    """HITL sites that compile but never pause (branch / loop / parallel / route)."""
     from loomable.flow.condition import Condition
     from loomable.flow.loop import Loop
     from loomable.flow.parallel_group import Parallel_Group
+    from loomable.flow.route import Route
     from loomable.flow.step import Step
 
     sites: list[str] = []
@@ -109,6 +111,16 @@ def _unsupported_confirm_sites(steps: list[Any]) -> list[str]:
             names = _collect_confirm_names(nested)
             if names:
                 sites.append(f"branch ({', '.join(names)})")
+        elif isinstance(element, Route):
+            nested = []
+            for branch in element.choices.values():
+                if isinstance(branch, list):
+                    nested.extend(branch)
+                else:
+                    nested.append(branch)
+            names = _collect_confirm_names(nested)
+            if names:
+                sites.append(f"route ({', '.join(names)})")
         elif isinstance(element, Loop):
             body = getattr(element, "_body", None)
             names = _collect_confirm_names([body] if body is not None else [])
@@ -166,6 +178,7 @@ class Workflow:
         embedder: Any = None,
         require_tools: list[str] | None = None,
         strict_require_tools: bool = False,
+        reducers: dict[str, Any] | None = None,
     ) -> None:
         self._name = name
         self._steps: list[Any] = list(steps) if steps is not None else []
@@ -178,8 +191,10 @@ class Workflow:
         self._embedder = embedder
         self._require_tools = list(require_tools) if require_tools else []
         self._strict_require_tools = bool(strict_require_tools)
+        self._reducers = dict(reducers) if reducers else None
         self._compiled_flow: Flow | None = None
         self._last_state: SharedState | None = None
+        self._clear_checkpoint_pending = False
         self._step_counter = 0
         self._active_ctx: RunContext | None = None
 
@@ -236,6 +251,11 @@ class Workflow:
         confirm: bool | None = None,
         require_tools: list[str] | None = None,
         strict_require_tools: bool | None = None,
+        on_failure: str = "raise",
+        max_retries: int | None = None,
+        fallback: Any | None = None,
+        reads: str | None = None,
+        complexity: str | None = None,
     ) -> "Workflow":
         """Append a named step. ``.step("gather", agent)`` or ``.step(Step(...))``.
 
@@ -243,6 +263,12 @@ class Workflow:
         workflow before the step until ``approve(name)`` + ``arun(resume=True)``.
         ``require_tools`` / ``strict_require_tools`` apply when ``agent`` is an
         :class:`~loomable.agent.builder.Agent`.
+
+        Graph-engineering knobs:
+
+        - ``on_failure`` — ``raise`` / ``retry`` / ``skip`` / ``fallback`` / ``stop``
+        - ``reads`` — SharedState key this step consumes (edge data contract)
+        - ``complexity`` — ``"low"`` / ``"high"`` cost hint for model tiers
         """
         from loomable.flow.step import Step
 
@@ -253,6 +279,17 @@ class Workflow:
             element = _wrap_runnable(name)
             if require_confirmation and isinstance(element, Step):
                 element.require_confirmation = True
+            if isinstance(element, Step):
+                if on_failure != "raise":
+                    element.on_failure = on_failure  # type: ignore[assignment]
+                if max_retries is not None:
+                    element.max_retries = max_retries
+                if fallback is not None:
+                    element._fallback = Step._as_runnable(fallback, label="fallback")
+                if reads is not None:
+                    element.reads = reads
+                if complexity is not None:
+                    element.complexity = complexity  # type: ignore[assignment]
         else:
             if not isinstance(name, str) or not name:
                 raise ValueError("step name must be a non-empty string")
@@ -262,6 +299,11 @@ class Workflow:
                 description=description,
                 deps=deps,
                 require_confirmation=require_confirmation,
+                on_failure=on_failure,  # type: ignore[arg-type]
+                max_retries=max_retries,
+                fallback=fallback,
+                reads=reads,
+                complexity=complexity,  # type: ignore[arg-type]
             )
         inner = getattr(element, "_agent", None)
         if require_tools is not None or strict_require_tools is True:
@@ -337,6 +379,45 @@ class Workflow:
         self._invalidate()
         return self
 
+    def route(
+        self,
+        chooser: Any,
+        choices: dict[str, Any] | None = None,
+        *,
+        handoff: bool = False,
+        **named: Any,
+    ) -> "Workflow":
+        """N-way route (Agno Router / LangGraph multi-edge).
+
+        ``chooser`` returns a choice name, list of names, or a
+        :class:`~loomable.flow.command.Command` with ``goto=``::
+
+            wf.route(
+                classify,
+                quick=quick_agent,
+                full=full_audit,
+                human=human_review,
+            )
+        """
+        from loomable.flow.route import Route
+
+        merged: dict[str, Any] = {}
+        if choices:
+            merged.update(choices)
+        merged.update(named)
+        if not merged:
+            raise ValueError("route() requires at least one choice")
+        # Normalize each choice into list of wrapped steps for the compiler
+        normalized: dict[str, Any] = {}
+        for key, value in merged.items():
+            if isinstance(value, list):
+                normalized[key] = [_wrap_runnable(v) for v in value]
+            else:
+                normalized[key] = _wrap_runnable(value, default_name=key)
+        self._steps.append(Route(chooser, normalized, handoff=handoff))
+        self._invalidate()
+        return self
+
     def loop(
         self,
         body: Any,
@@ -364,12 +445,44 @@ class Workflow:
         self._invalidate()
         return self
 
+    def verify(
+        self,
+        body: Any,
+        *,
+        check: Any,
+        max_retries: int = 2,
+        name: str | None = None,
+    ) -> "Workflow":
+        """Verify ``body`` output before it moves downstream (bounded repair cycle).
+
+        Graph shape::
+
+            WORK -> VERIFY -> PASS -> next
+                       |
+                       -> FAIL -> feedback -> WORK  (up to max_retries)
+
+        This is the graph-engineering form of ``.loop(..., until=)``: a
+        dedicated verifier gate with a hard iteration budget
+        (``max_retries + 1`` total attempts).
+        """
+        if check is None:
+            raise ValueError("verify() requires check= (Verifier or callable)")
+        if max_retries < 0:
+            raise ValueError("max_retries must be >= 0")
+        return self.loop(
+            body,
+            until=check,
+            max_iterations=max_retries + 1,
+            name=name,
+        )
+
     def map(
         self,
         worker: Any,
         *,
         planner: Any | None = None,
         synthesizer: Any | None = None,
+        over: str = "plan_steps",
         name: str | None = None,
     ) -> "Workflow":
         """Plan → fan-out map → synthesize (complex dynamic decomposition)."""
@@ -380,11 +493,49 @@ class Workflow:
             planner=planner or worker,
             workers=worker,
             synthesizer=synthesizer or worker,
+            over=over,
             session_id=self._session_id,
             deps=self._deps,
             memory=self._memory,
         )
         step_name = name or "plan_and_execute"
+        self._steps.append(Step(step_name, flow))
+        self._invalidate()
+        return self
+
+    def map_over(
+        self,
+        worker: Any,
+        *,
+        over: str,
+        concurrency: int | None = None,
+        name: str | None = None,
+    ) -> "Workflow":
+        """Fan out ``worker`` over ``SharedState[over]`` (LangGraph Send / map parity).
+
+        Populate ``over`` with plain values or :class:`~loomable.flow.send.Send`
+        instances (``Send.node`` is metadata; ``Send.arg`` is worker input).
+        """
+        from loomable.flow.flow import Flow
+        from loomable.flow.helpers import _ensure_runnable
+        from loomable.flow.nodes import MapNode, Node
+        from loomable.flow.step import Step
+
+        body = _ensure_runnable(worker)
+        map_node = MapNode(body, over=over, concurrency=concurrency)
+        flow = Flow(
+            {
+                "map": Node(node_id="map", runnable=map_node),
+            },
+            edges=[],
+            engine="sequential",
+            session_id=self._session_id,
+            deps=self._deps,
+            memory=self._memory,
+            events=self._events,
+            reducers=self._reducers,
+        )
+        step_name = name or f"map_over_{over}"
         self._steps.append(Step(step_name, flow))
         self._invalidate()
         return self
@@ -471,6 +622,7 @@ class Workflow:
                 session_id=self._session_id,
                 checkpointer=self._checkpointer,
                 events=self._events,
+                reducers=self._reducers,
             )
         return self._compiled_flow
 
@@ -510,18 +662,23 @@ class Workflow:
         automatically. Pass ``resume=True`` to require a checkpoint, or
         ``resume=False`` to start fresh.
         """
+        if self._clear_checkpoint_pending and self._checkpointer is not None:
+            await self.clear_checkpoint()
+            self._clear_checkpoint_pending = False
         flow = self._ensure_compiled()
         ctx = context or RunContext()
         self._active_ctx = ctx
         try:
             result = await flow.arun(input, context=ctx, resume=resume)
         finally:
+            # Preserve SharedState even when a node raises (e.g. StepFailed),
+            # so callers can inspect completed work after a hard stop.
+            if ctx.shared_state is not None:
+                self._last_state = ctx.shared_state
+            elif self._last_state is None:
+                self._last_state = SharedState()
             if self._active_ctx is ctx:
                 self._active_ctx = None
-        if ctx.shared_state is not None:
-            self._last_state = ctx.shared_state
-        else:
-            self._last_state = SharedState()
         return result
 
     def cancel(self) -> bool:
@@ -535,6 +692,25 @@ class Workflow:
         if flow is not None and hasattr(flow, "cancel"):
             hit = flow.cancel() or hit
         return hit
+
+    def bind_session(
+        self,
+        session_id: str | None,
+        *,
+        resume: bool | None = None,
+    ) -> None:
+        """Bind checkpoint thread id (HTTP / multi-turn workflows).
+
+        Invalidates the compiled graph when the session changes so checkpoints
+        align with the new thread.
+        """
+        if session_id is None:
+            return
+        if session_id != self._session_id:
+            self._compiled_flow = None
+        self._session_id = session_id
+        if resume is False and self._checkpointer is not None:
+            self._clear_checkpoint_pending = True
 
     async def astream_events(
         self,
@@ -559,13 +735,12 @@ class Workflow:
             ):
                 yield event
         finally:
+            if ctx.shared_state is not None:
+                self._last_state = ctx.shared_state
+            elif self._last_state is None:
+                self._last_state = SharedState()
             if self._active_ctx is ctx:
                 self._active_ctx = None
-
-        if ctx.shared_state is not None:
-            self._last_state = ctx.shared_state
-        elif self._last_state is None:
-            self._last_state = SharedState()
 
     async def approve(
         self,
@@ -573,7 +748,14 @@ class Workflow:
         *,
         status: str = "approved",
     ) -> None:
-        """Approve or reject a HITL-paused node, then call ``arun(resume=True)``."""
+        """Approve or reject a HITL-paused node, then call ``arun(resume=True)``.
+
+        ``status`` must be ``"approved"`` or ``"rejected"``.
+        """
+        if status not in ("approved", "rejected"):
+            raise ValueError(
+                f"approve status must be 'approved' or 'rejected', got {status!r}"
+            )
         if self._checkpointer is None or self._session_id is None:
             raise RuntimeError("approve() requires checkpointer and session_id")
         cp = await self._checkpointer.get(self._session_id)
@@ -604,6 +786,178 @@ class Workflow:
                     complete=True,
                 )
             )
+
+    async def get_state(self) -> dict[str, Any]:
+        """Return the current workflow state (LangGraph-style control plane).
+
+        Prefers an incomplete checkpoint when ``checkpointer`` + ``session_id``
+        are set; otherwise returns the in-memory state from the last run.
+        """
+        cp = None
+        if self._checkpointer is not None and self._session_id is not None:
+            cp = await self._checkpointer.get(self._session_id)
+
+        if cp is not None:
+            session = cp.session_state or {}
+            return {
+                "values": dict(session.get("shared_state") or {}),
+                "completed": list(session.get("completed_node_ids") or []),
+                "pending": [
+                    {
+                        "tool_name": p.tool_name,
+                        "call_id": p.call_id,
+                        "args": dict(p.args),
+                        "status": p.status,
+                    }
+                    for p in (cp.pending or [])
+                ],
+                "complete": bool(cp.complete),
+                "step": cp.step,
+                "thread_id": cp.thread_id,
+                "next": None if cp.complete else self._infer_next(session),
+            }
+
+        values: dict[str, Any] = {}
+        if self._last_state is not None:
+            values = self._last_state.snapshot()
+        return {
+            "values": values,
+            "completed": [],
+            "pending": [],
+            "complete": bool(values),
+            "step": 0,
+            "thread_id": self._session_id,
+            "next": None,
+        }
+
+    async def update_state(
+        self,
+        values: dict[str, Any],
+        *,
+        as_node: str | None = None,
+    ) -> dict[str, Any]:
+        """Patch SharedState on the current checkpoint (LangGraph update_state).
+
+        Requires ``checkpointer`` + ``session_id``. Writes an incomplete
+        checkpoint so the next ``arun(resume=True)`` picks up the patch.
+        When ``as_node`` is set, that node id is also marked completed.
+        """
+        if self._checkpointer is None or self._session_id is None:
+            raise RuntimeError(
+                "update_state() requires Workflow(..., checkpointer=..., session_id=...)"
+            )
+        from loomable.persist.checkpoint import Checkpoint
+
+        existing = await self._checkpointer.get(self._session_id)
+        session: dict[str, Any] = {}
+        step = 0
+        pending: list[Any] = []
+        if existing is not None:
+            session = dict(existing.session_state or {})
+            step = existing.step
+            pending = list(existing.pending or [])
+            for pa in pending:
+                if pa.status == "pending" and (
+                    pa.tool_name == as_node or pa.args.get("node_id") == as_node
+                ):
+                    raise RuntimeError(
+                        f"update_state(as_node={as_node!r}) blocked: node has pending HITL"
+                    )
+
+        shared = dict(session.get("shared_state") or {})
+        shared.update(values)
+        session["shared_state"] = shared
+
+        completed = list(session.get("completed_node_ids") or [])
+        if as_node and as_node not in completed:
+            completed.append(as_node)
+            session["completed_node_ids"] = completed
+
+        cp = Checkpoint(
+            thread_id=self._session_id,
+            step=step,
+            session_state=session,
+            complete=False,
+            pending=pending,
+        )
+        await self._checkpointer.put(cp)
+
+        # Mirror into in-memory state for immediate get_state / inspection
+        if self._last_state is None:
+            self._last_state = SharedState(reducers=self._reducers)
+        for key, value in values.items():
+            self._last_state.write(key, value)
+
+        return await self.get_state()
+
+    async def list_states(self) -> list[dict[str, Any]]:
+        """List checkpoint history for this workflow's session (time-travel)."""
+        if self._checkpointer is None or self._session_id is None:
+            if self._last_state is not None:
+                return [await self.get_state()]
+            return []
+        if not hasattr(self._checkpointer, "list"):
+            current = await self.get_state()
+            return [current] if current.get("values") or current.get("pending") else []
+        checkpoints = await self._checkpointer.list(self._session_id)
+        out: list[dict[str, Any]] = []
+        for cp in checkpoints:
+            session = cp.session_state or {}
+            out.append(
+                {
+                    "values": dict(session.get("shared_state") or {}),
+                    "completed": list(session.get("completed_node_ids") or []),
+                    "pending": [
+                        {
+                            "tool_name": p.tool_name,
+                            "call_id": p.call_id,
+                            "args": dict(p.args),
+                            "status": p.status,
+                        }
+                        for p in (cp.pending or [])
+                    ],
+                    "complete": bool(cp.complete),
+                    "step": cp.step,
+                    "thread_id": cp.thread_id,
+                    "timestamp": getattr(cp, "timestamp", None),
+                }
+            )
+        return out
+
+    async def fork_session(self, new_session_id: str) -> dict[str, Any]:
+        """Fork the current session checkpoint into a new session id (time-travel).
+
+        Requires a checkpointer that implements ``fork``. Returns the forked
+        state's ``get_state()`` view under the new session.
+        """
+        if self._checkpointer is None or self._session_id is None:
+            raise RuntimeError(
+                "fork_session() requires Workflow(..., checkpointer=..., session_id=...)"
+            )
+        if not hasattr(self._checkpointer, "fork"):
+            raise RuntimeError(
+                f"{type(self._checkpointer).__name__} does not support fork()"
+            )
+        forked = await self._checkpointer.fork(self._session_id, new_session_id)
+        if forked is None:
+            raise RuntimeError(
+                f"No checkpoint to fork for session_id={self._session_id!r}"
+            )
+        # Point this workflow at the forked thread for subsequent resume/get_state
+        self._session_id = new_session_id
+        if self._compiled_flow is not None:
+            self._compiled_flow._session_id = new_session_id
+        return await self.get_state()
+
+    def _infer_next(self, session: dict[str, Any]) -> list[str] | None:
+        """Best-effort next node ids from incomplete checkpoint."""
+        completed = set(session.get("completed_node_ids") or [])
+        try:
+            flow = self._ensure_compiled()
+        except Exception:  # noqa: BLE001
+            return None
+        remaining = [nid for nid in flow.nodes if nid not in completed]
+        return remaining[:1] if remaining else []
 
     def run(self, input: Any = None) -> RunResult:  # noqa: A002
         """Synchronous convenience wrapper around ``arun``."""

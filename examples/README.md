@@ -18,7 +18,9 @@
 | Deep code (live) | `profile="code"` / `repo=` | `deep_agent/02_code.py` |
 | Sandbox + optional browser MCP | `code_exec` / `shell` | `deep_agent/03_sandbox.py` |
 | MCP servers | `Agent(mcp_servers=[...])` | `advanced/01_mcp_servers.py` |
-| Conditional branches | `Workflow.branch` | `advanced/02_workflow_branch.py` |
+| Binary Workflow fork (`when` / `then` / `else_`) | `Workflow.branch` | `advanced/02_workflow_branch.py` |
+| N-way Workflow arms + `Command(goto=…)` | `Workflow.route` | `patterns/08_route_command.py` |
+| LLM picks one Team specialist | `Team(mode="route")` | `patterns/04_router.py` |
 | Checkpoint persist | `Workflow` + `JsonFileCheckpointer` | `advanced/03_checkpointing.py` |
 | Checkpoint kill / resume | `Workflow` + incomplete checkpoint + `resume=True` | `escalation_war_room/05_checkpoint_resume.py` |
 | Multimodal I/O | `Image` / tool media | `advanced/04_multimodal.py` |
@@ -28,11 +30,13 @@
 | Complex multi-format RAG | `Agent(knowledge_base={docs, code})` + Workflow | `advanced/08_complex_agentic_rag.py` |
 | Custom retriever builders (experimental) | `build_retriever` / `Agent(retrievers=)` | `advanced/05_build_retriever.py`, `06_agentic_retriever.py`, `07_ship_any_retriever.py` |
 | Production hardening | resilience + hooks | `agents/06_production.py` |
-| Specialists | `Team` / subagents | `subagents/` |
-| Quality gate | Agent verifier / `Workflow.loop` | `patterns/01_retry_loop.py` |
+| L1/L2/L3 + PDF + web + subagent fan-out | `build_research_agent()` | `agents/09_research_memory_agent.py` |
+| Specialists / Team modes | `Team` / subagents | `subagents/` (`04_team_modes.py`) |
+| Agent verifier or open `Workflow.loop` | `verifier=` / `.loop` | `patterns/01_retry_loop.py` |
+| Bounded generate→check→repair in a pipeline | `Workflow.verify` | `patterns/07_graph_engineering.py` |
 | Multi-step process | `Workflow.step` | `patterns/02_pipeline.py` |
-| Parallel branches | `Workflow.parallel` | `patterns/03_fan_out.py` |
-| Intent router | `Team(mode="route")` | `patterns/04_router.py` |
+| Parallel Agents (happy path) | `Workflow.parallel` | `patterns/03_fan_out.py` |
+| Parallel + `on_failure` / `reads=` / `.verify` | `Step` + graph knobs | `patterns/07_graph_engineering.py` |
 | Plan → map → synth | `Workflow.map` | `patterns/05_plan_execute.py` |
 | Nested composition | nested `Workflow` / parallel | `patterns/06_nested_composition.py` |
 | Goal + WorkItems board | `Case` | `escalation_war_room/10_case.py` |
@@ -50,7 +54,7 @@ examples/
 ├── agents/                 # Agent API progression (incl. knowledge_base)
 ├── deep_agent/             # live create_deep_agent (research, code, sandbox)
 ├── subagents/              # Team / delegation
-├── patterns/               # Workflow / Team patterns (step, parallel, route, map)
+├── patterns/               # Workflow / Team patterns (step, parallel, map, route, verify)
 ├── memory/                 # session → compose → scopes
 ├── advanced/               # MCP, Workflow branch, checkpoints, multimodal, retrieval
 ├── simple_use_cases/       # toolkit-driven Q&A
@@ -71,14 +75,26 @@ python examples/advanced/05_build_retriever.py     # live LLM + retrievers=
 python examples/deep_agent/01_research.py           # live research brief
 ```
 
+## Routing — pick one API
+
+| Need | API | Example |
+|------|-----|---------|
+| Yes/no fork after a classify step | `Workflow.branch` | `advanced/02_workflow_branch.py` |
+| Named arms (quick/full/human) + optional `Command` | `Workflow.route` | `patterns/08_route_command.py` |
+| LLM chooses one Team member for the whole query | `Team(mode="route")` | `patterns/04_router.py` |
+
+`Team(mode="route")` is **not** Workflow control flow. `Workflow.branch` is binary;
+use `Workflow.route` when you have three or more arms or need `Command(goto=, update=)`.
+
 ## Design principles
 
 1. **One concept per file**
 2. **Run it, see one clear output**
-3. **Docstring says when to use the pattern**
+3. **Docstring says when to use the pattern** (and what *not* to confuse it with)
 4. **Progressive** — unique numeric prefixes; `01` is simplest in each folder
 5. **Live models** — examples call a real provider via `examples/_provider.py`
    (`GEMINI_API_KEY` / OpenAI / Azure). Copy `.env.example` → `.env`.
+   Offline-safe demos: `patterns/07_graph_engineering.py`, `patterns/08_route_command.py`.
 6. **Agents understand prior output** — put `Agent`s on `Workflow.step` / `Team`.
    Do **not** add glue functions that parse `AgentOutput` between steps; the
    framework already passes the previous output as the next input.

@@ -1,10 +1,14 @@
-"""Router — intent-based routing via Team(mode="route").
+"""LLM specialist picker — ``Team(mode="route")``.
 
-USE WHEN: Different inputs should go to different specialist Agents.
-The coordinator picks the single best member and delegates once.
+USE WHEN: An LLM should pick **one** specialist Agent for the whole request
+(code vs math vs general, etc.). The team coordinator decides and delegates once.
 
-For deterministic keyword branching, see ``advanced/02_workflow_branch.py``
-(``Workflow.branch``).
+Do **not** use this for Workflow control flow. Pick one of:
+
+- Binary predicate after a classify step → ``Workflow.branch``
+  (``advanced/02_workflow_branch.py``)
+- N-way deterministic / ``Command(goto=…)`` routing → ``Workflow.route``
+  (``patterns/08_route_command.py``)
 """
 
 import asyncio

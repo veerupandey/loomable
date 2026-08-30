@@ -45,11 +45,16 @@ class Edge:
         An optional predicate over SharedState. When present, the Flow
         traverses this edge only when the predicate evaluates truthy
         against the current SharedState (Req 6.5).
+    payload_key:
+        Optional SharedState key whose value is the input for ``target``.
+        When set, the edge carries a real data contract: the engine feeds
+        ``state[payload_key]`` instead of the source node's ambient output.
     """
 
     source: str
     target: str
     condition: Callable[["SharedState"], bool] | None = None
+    payload_key: str | None = None
 
 
 class Node:
@@ -67,6 +72,10 @@ class Node:
     manager:
         When True, signals to the EngineSelector that this node acts
         as a manager in a Hierarchical engine layout (Req 9.4).
+    reads:
+        Optional SharedState key this node consumes (edge data contract).
+        Engines prefer ``state[reads]`` over ambient previous-node output,
+        including when this node is a nested-flow root with no incoming edge.
     """
 
     def __init__(
@@ -76,11 +85,13 @@ class Node:
         *,
         require_confirmation: bool = False,
         manager: bool = False,
+        reads: str | None = None,
     ) -> None:
         self.node_id = node_id
         self.runnable = runnable
         self.require_confirmation = require_confirmation
         self.manager = manager
+        self.reads = reads
 
     def __repr__(self) -> str:
         flags = []
@@ -148,27 +159,46 @@ class MapNode:
         from loomable.content import AgentOutput, MediaPart, Modality
 
         # 1. Read the list of items from shared state
-        items: list[Any] = []
-        if context is not None and context.shared_state is not None:
-            raw = context.shared_state.get(self.over)
-            if isinstance(raw, list):
-                items = raw
+        if context is None or context.shared_state is None:
+            raise FlowConfigError(
+                f"MapNode over={self.over!r}: requires RunContext.shared_state"
+            )
+        raw_value = context.shared_state.get(self.over)
+        if raw_value is None:
+            raise FlowConfigError(
+                f"MapNode over={self.over!r}: key missing from SharedState"
+            )
+        if not isinstance(raw_value, list):
+            raise FlowConfigError(
+                f"MapNode over={self.over!r}: expected list, got {type(raw_value).__name__}"
+            )
+        from loomable.flow.send import send_args
+
+        items = send_args(raw_value)
 
         if not items:
-            # No items to process — return empty result
+            # Empty list is a valid explicit no-op.
+            context.shared_state.write("map", [])
             output = AgentOutput(
                 parts=[
                     MediaPart(
                         modality=Modality.TEXT,
                         media_type="text/plain",
-                        data=b"MapNode: no items to process",
+                        data=b"",
                     )
                 ]
             )
             return RunResult(
                 output=output,
                 session_id="",
-                metadata={"map_results": [], "map_errors": []},
+                metadata={
+                    "map_results": [],
+                    "map_errors": [],
+                    "map_total": 0,
+                    "map_succeeded": 0,
+                    "map_failed": 0,
+                    "state_updates": {"map": []},
+                },
             )
 
         # 2. Build delegated tasks with concurrency control
@@ -359,20 +389,48 @@ class RouterNode:
         # 2. Extract the selection from the chooser's output
         selected = self._extract_selection(chooser_result)
 
+        # 2b. Apply Command.update patches before validating selection
+        from loomable.flow.command import Command
+
+        cmd = Command.from_metadata(chooser_result.metadata)
+        if cmd and cmd.update and context is not None and context.shared_state is not None:
+            for key, value in cmd.update.items():
+                context.shared_state.write(key, value)
+        if cmd and cmd.goto is not None and (
+            not chooser_result.metadata or "selection" not in chooser_result.metadata
+        ):
+            selected = cmd.goto
+
         # 3. Validate that selection(s) are in declared choices
         self._validate_selection(selected)
 
-        # 4. Write the selection to SharedState so edge conditions can gate on it
+        # 4. Build an inspectable route decision (classifier may be soft;
+        #    allowed routes remain the declared choices).
+        reason = self._extract_reason(chooser_result)
+        decision: dict[str, Any] = {
+            "selected": selected,
+            "choices": list(self.choices),
+            "reason": reason,
+            "handoff": bool(self.handoff),
+        }
+
+        # 5. Write selection + decision to SharedState for edge gating / audit
         if context is not None and context.shared_state is not None:
             context.shared_state.write("_router_selection", selected)
+            context.shared_state.write("_route_decision", decision)
+            # Preserve the pre-router payload so gated branches receive the
+            # original user/upstream input (not the router summary text).
+            context.shared_state.write("_route_input", input)
 
-        # 5. Build the RouterNode's RunResult
+        # 6. Build the RouterNode's RunResult
         if isinstance(selected, list):
             selection_str = ", ".join(selected)
         else:
             selection_str = selected
 
         summary = f"RouterNode: selected [{selection_str}]"
+        if reason:
+            summary = f"{summary} ({reason})"
         output = AgentOutput(
             parts=[
                 MediaPart(
@@ -385,6 +443,7 @@ class RouterNode:
 
         metadata: dict[str, Any] = {
             "router_selected": selected,
+            "route_decision": decision,
         }
         if self.handoff:
             metadata["router_handoff"] = True
@@ -417,6 +476,16 @@ class RouterNode:
         if len(parts) == 1:
             return parts[0]
         return parts
+
+    @staticmethod
+    def _extract_reason(chooser_result: "RunResult") -> str:
+        """Extract an optional human-readable reason for the route choice."""
+        meta = chooser_result.metadata or {}
+        for key in ("reason", "route_reason", "selection_reason"):
+            value = meta.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
 
     def _output_text(self, result: "RunResult") -> str:
         """Extract plain text from a RunResult's output."""

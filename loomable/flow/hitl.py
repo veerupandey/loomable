@@ -22,10 +22,10 @@ from loomable.persist.checkpoint import PendingAction
 class FlowPaused(LoomableError):
     """Raised when a Flow pauses before a node requiring confirmation (Req 16.1).
 
-    The caller catches this, inspects ``pending`` to present an approval UI,
-    then resumes the flow with the decision (approve or reject). On resume the
-    checkpointer restores state and the engine either executes or skips the
-    node without re-running completed nodes.
+    The caller catches this, inspects ``pending`` / ``node_id`` to present an
+    approval UI, then resumes the flow with the decision (approve or reject).
+    On resume the checkpointer restores state and the engine either executes
+    or skips the node without re-running completed nodes.
 
     Attributes
     ----------
@@ -33,6 +33,9 @@ class FlowPaused(LoomableError):
         The durable ``PendingAction`` describing the node awaiting approval.
     thread_id:
         The checkpoint thread/session identifier so the flow can be resumed.
+    node_id:
+        Convenience alias for the paused Workflow step / node name
+        (``pending.tool_name``).
     """
 
     def __init__(self, pending: PendingAction, thread_id: str) -> None:
@@ -42,3 +45,8 @@ class FlowPaused(LoomableError):
             f"Flow paused before node {pending.tool_name!r} "
             f"(thread_id={thread_id!r}) — awaiting confirmation."
         )
+
+    @property
+    def node_id(self) -> str:
+        """Paused step / node name (same as ``pending.tool_name``)."""
+        return self.pending.tool_name

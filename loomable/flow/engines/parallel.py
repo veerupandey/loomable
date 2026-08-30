@@ -64,6 +64,7 @@ class ParallelEngine:
         completed_node_ids: set[str] | None = None,
         checkpointer: Any | None = None,
         session_id: str | None = None,
+        nested: bool = False,
     ) -> RunResult:
         """Drive the flow through BSP supersteps.
 
@@ -94,6 +95,15 @@ class ParallelEngine:
 
         # Track completed nodes (union of pre-existing + newly completed)
         completed: set[str] = set(completed_node_ids) if completed_node_ids else set()
+
+        import logging
+
+        _logger = logging.getLogger(__name__)
+        if any(getattr(n, "require_confirmation", False) for n in nodes.values()):
+            _logger.warning(
+                "ParallelEngine: require_confirmation nodes are not HITL-gated "
+                "in parallel runs; use the sequential engine for durable HITL."
+            )
 
         # 4. Execute supersteps
         sub_results: dict[str, RunResult] = {}
@@ -131,15 +141,18 @@ class ParallelEngine:
             # 4c. Run all concurrently via SubagentManager (fault-isolated)
             outcomes: list[SubagentOutcome] = await manager.run_all(tasks)
 
-            # 4d. Barrier: buffer writes and commit in node_id order (Req 7.2)
+            # 4d. Barrier first: durable sibling writes must land even when a
+            # hard-stop policy later aborts the graph.
             self._barrier_commit(outcomes, state, sub_results)
 
             # Track last successful result for the final output
             for nid in sorted(ready):
                 if nid in sub_results and sub_results[nid].output is not None:
-                    last_result = sub_results[nid]
+                    meta = getattr(sub_results[nid], "metadata", None) or {}
+                    if "error" not in meta:
+                        last_result = sub_results[nid]
 
-            # Mark newly completed nodes and write checkpoint (Req 13.1)
+            # Mark newly completed (successful) nodes and checkpoint
             for outcome in outcomes:
                 if outcome.error is None:
                     completed.add(outcome.task_id)
@@ -147,6 +160,20 @@ class ParallelEngine:
                 await self._write_checkpoint(
                     checkpointer, state, completed, session_id
                 )
+
+            # Hard-stop policies (Step.on_failure="stop") halt after siblings
+            # are committed — failure stays local until the barrier, then escalates.
+            for outcome in outcomes:
+                err = outcome.error
+                if err is None:
+                    continue
+                from loomable.flow.step import StepFailed
+
+                if isinstance(err, StepFailed):
+                    raise err
+                cause = getattr(err, "__cause__", None)
+                if isinstance(cause, StepFailed):
+                    raise cause
 
         # 5. Assemble final RunResult
         if last_result is None:
@@ -178,6 +205,10 @@ class ParallelEngine:
             from loomable.agent.context import StopReason
 
             final.metadata["stop_reason"] = StopReason.CANCELLED
+        final.metadata["completed_node_ids"] = sorted(completed)
+        # Barrier already applied per-node state_updates into SharedState.
+        # Drop them so a parent SequentialEngine does not apply them again.
+        final.metadata.pop("state_updates", None)
         return final
 
     # ------------------------------------------------------------------
@@ -232,7 +263,11 @@ class ParallelEngine:
         # Resolve input: use upstream node output from state if available,
         # otherwise use initial flow input.
         node_input = ParallelEngine._resolve_input(
-            node_id, incoming_edges, state, initial_input
+            node_id,
+            incoming_edges,
+            state,
+            initial_input,
+            reads=getattr(node, "reads", None),
         )
 
         async def _run() -> RunResult:
@@ -252,16 +287,29 @@ class ParallelEngine:
         incoming_edges: dict[str, list[Edge]],
         state: SharedState,
         initial_input: Any,
+        *,
+        reads: str | None = None,
     ) -> Any:
         """Resolve the input for a node.
 
-        Looks at incoming edges. If any upstream node has produced output
-        in state, uses the first one found (sorted by node_id for determinism).
-        Otherwise uses the initial input.
+        Prefer ``node.reads`` / edge ``payload_key`` (data contract). Otherwise
+        look at upstream outputs in state (sorted by node_id for determinism).
+        Fall back to the initial input.
         """
+        if reads:
+            valued = state.get(reads)
+            if valued is not None:
+                return valued
+
         edges = incoming_edges[node_id]
         if not edges:
             return initial_input
+
+        for edge in edges:
+            if edge.payload_key:
+                value = state.get(edge.payload_key)
+                if value is not None:
+                    return value
 
         # Check predecessors sorted by node_id for determinism
         predecessors = sorted(set(e.source for e in edges))

@@ -43,13 +43,16 @@ from .observability import (
 )
 from .optimizer import Optimizer, OptimizationRule
 from .runnable import FunctionRunnable, Runnable
-from .state import Reducer, SharedState, append, merge, overwrite
+from .state import Reducer, SharedState, append, extend, merge, overwrite
 
 # Workflow ergonomics: high-level composable classes
-from .step import Step
+from .command import Command
+from .send import Send, send_args
+from .step import Step, StepFailed, FAILURE_ACTIONS
 from .workflow import Workflow
 from .condition import Condition, ComposableElement
 from .parallel_group import Parallel_Group
+from .route import Route
 from .flow_class import FlowClass, start, listen, router
 
 __all__ = [
@@ -76,6 +79,7 @@ __all__ = [
     "SharedState",
     "overwrite",
     "append",
+    "extend",
     "merge",
     # Engines
     "ExecutionEngine",
@@ -100,6 +104,12 @@ __all__ = [
     "plan_and_execute",
     # High-level Workflow API (preferred)
     "Step",
+    "StepFailed",
+    "FAILURE_ACTIONS",
+    "Command",
+    "Send",
+    "send_args",
+    "Route",
     "Workflow",
     "Condition",
     "ComposableElement",

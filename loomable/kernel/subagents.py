@@ -38,14 +38,16 @@ class DelegatedTask:
 
 @dataclass
 class SubagentOutcome:
-    """The outcome of a delegated task — carries exactly one of result or error.
+    """The outcome of a delegated task — success result or error (not both).
 
     Attributes:
         task_id: The identifier of the originating DelegatedTask.
-        result: The subagent's result if it succeeded, None otherwise.
+        result: The subagent's result if it succeeded (may be ``None``).
         error: A SubagentError if the subagent failed, None otherwise.
 
-    Invariant: exactly one of result/error is set (not None).
+    Invariant: ``error`` and a non-failure ``result`` are mutually exclusive.
+    A successful subagent may legitimately return ``None``; that is stored as
+    ``result=None`` with ``error=None``.
     """
 
     task_id: str
@@ -53,13 +55,16 @@ class SubagentOutcome:
     error: SubagentError | None = None
 
     def __post_init__(self) -> None:
-        has_result = self.result is not None
-        has_error = self.error is not None
-        if has_result == has_error:
+        if self.error is not None and self.result is not None:
             raise ValueError(
-                "SubagentOutcome must carry exactly one of 'result' or 'error', "
-                f"got result={has_result}, error={has_error}"
+                "SubagentOutcome cannot carry both 'result' and 'error', "
+                f"got result={self.result!r}, error={self.error!r}"
             )
+
+    @property
+    def ok(self) -> bool:
+        """True when the subagent finished without error (result may be None)."""
+        return self.error is None
 
 
 class SubagentManager:

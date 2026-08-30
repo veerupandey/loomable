@@ -171,26 +171,32 @@ class TestMapNodeFanOut:
 
         assert result.metadata["map_results"] == []
         assert result.metadata["map_errors"] == []
+        assert result.metadata["map_total"] == 0
+        assert result.metadata["map_succeeded"] == 0
+        assert result.output.text() == ""
+        assert ctx.shared_state.get("map") == []
 
     @pytest.mark.asyncio
-    async def test_missing_key_returns_empty_result(self):
-        """MapNode with a missing state key returns an empty result."""
+    async def test_missing_key_raises(self):
+        """MapNode with a missing state key raises FlowConfigError."""
+        from loomable.flow.nodes import FlowConfigError
+
         node = MapNode(EchoRunnable(), over="nonexistent_key")
         state = SharedState()
         ctx = RunContext(shared_state=state)
 
-        result = await node.arun("input", context=ctx)
-
-        assert result.metadata["map_results"] == []
+        with pytest.raises(FlowConfigError, match="nonexistent_key"):
+            await node.arun("input", context=ctx)
 
     @pytest.mark.asyncio
-    async def test_no_context_returns_empty_result(self):
-        """MapNode with no context returns an empty result."""
+    async def test_no_context_raises(self):
+        """MapNode without shared state raises FlowConfigError."""
+        from loomable.flow.nodes import FlowConfigError
+
         node = MapNode(EchoRunnable(), over="items")
 
-        result = await node.arun("input", context=None)
-
-        assert result.metadata["map_results"] == []
+        with pytest.raises(FlowConfigError, match="shared_state"):
+            await node.arun("input", context=None)
 
     @pytest.mark.asyncio
     async def test_result_is_run_result(self):
