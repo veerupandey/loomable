@@ -247,8 +247,12 @@ class Team:
             agent_kwargs["resume"] = True
         if memory is not None:
             agent_kwargs["memory"] = memory
+        if max_delegations is not None:
+            agent_kwargs["max_delegations"] = max_delegations
+        if max_depth != 4:
+            agent_kwargs["max_depth"] = max_depth
         self._agent = Agent(**{k: v for k, v in agent_kwargs.items() if v is not None})
-        # Stash budgets for build-time wiring (delegation tools registered at build).
+        # Stash budgets for build-time wiring (also set via Agent kwargs above).
         self._agent._max_delegations = max_delegations  # type: ignore[attr-defined]
         self._agent._max_depth = max_depth  # type: ignore[attr-defined]
         from .memory_opts import apply_knowledge_base

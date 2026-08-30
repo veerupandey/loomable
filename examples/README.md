@@ -30,6 +30,7 @@
 | Complex multi-format RAG | `Agent(knowledge_base={docs, code})` + Workflow | `advanced/08_complex_agentic_rag.py` |
 | Custom retriever builders (experimental) | `build_retriever` / `Agent(retrievers=)` | `advanced/05_build_retriever.py`, `06_agentic_retriever.py`, `07_ship_any_retriever.py` |
 | Production hardening | resilience + hooks | `agents/06_production.py` |
+| L1/L2/L3 + PDF + web + subagent fan-out | `build_research_agent()` | `agents/09_research_memory_agent.py` |
 | Specialists / Team modes | `Team` / subagents | `subagents/` (`04_team_modes.py`) |
 | Agent verifier or open `Workflow.loop` | `verifier=` / `.loop` | `patterns/01_retry_loop.py` |
 | Bounded generate→check→repair in a pipeline | `Workflow.verify` | `patterns/07_graph_engineering.py` |
