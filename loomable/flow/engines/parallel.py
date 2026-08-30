@@ -64,6 +64,7 @@ class ParallelEngine:
         completed_node_ids: set[str] | None = None,
         checkpointer: Any | None = None,
         session_id: str | None = None,
+        nested: bool = False,
     ) -> RunResult:
         """Drive the flow through BSP supersteps.
 
@@ -94,6 +95,15 @@ class ParallelEngine:
 
         # Track completed nodes (union of pre-existing + newly completed)
         completed: set[str] = set(completed_node_ids) if completed_node_ids else set()
+
+        import logging
+
+        _logger = logging.getLogger(__name__)
+        if any(getattr(n, "require_confirmation", False) for n in nodes.values()):
+            _logger.warning(
+                "ParallelEngine: require_confirmation nodes are not HITL-gated "
+                "in parallel runs; use the sequential engine for durable HITL."
+            )
 
         # 4. Execute supersteps
         sub_results: dict[str, RunResult] = {}

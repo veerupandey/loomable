@@ -159,19 +159,26 @@ class MapNode:
         from loomable.content import AgentOutput, MediaPart, Modality
 
         # 1. Read the list of items from shared state
-        items: list[Any] = []
-        if context is not None and context.shared_state is not None:
-            raw = context.shared_state.get(self.over)
-            if isinstance(raw, list):
-                from loomable.flow.send import send_args
+        if context is None or context.shared_state is None:
+            raise FlowConfigError(
+                f"MapNode over={self.over!r}: requires RunContext.shared_state"
+            )
+        raw_value = context.shared_state.get(self.over)
+        if raw_value is None:
+            raise FlowConfigError(
+                f"MapNode over={self.over!r}: key missing from SharedState"
+            )
+        if not isinstance(raw_value, list):
+            raise FlowConfigError(
+                f"MapNode over={self.over!r}: expected list, got {type(raw_value).__name__}"
+            )
+        from loomable.flow.send import send_args
 
-                items = send_args(raw)
+        items = send_args(raw_value)
 
         if not items:
-            # No items — still publish an empty list under "map" so synthesizers
-            # and Case glue see a list, not the MapNode's AgentOutput summary.
-            if context is not None and context.shared_state is not None:
-                context.shared_state.write("map", [])
+            # Empty list is a valid explicit no-op.
+            context.shared_state.write("map", [])
             output = AgentOutput(
                 parts=[
                     MediaPart(

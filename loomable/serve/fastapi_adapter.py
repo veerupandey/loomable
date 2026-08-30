@@ -94,6 +94,7 @@ class ApproveRequestModel(BaseModel):
     node_id: str
     status: str = "approved"
     auto_run: bool = False
+    session_id: str | None = None
 
 
 class StatePatchModel(BaseModel):
@@ -192,11 +193,14 @@ def _output_to_models(output: AgentOutput) -> list[MediaPartModel]:
     return [_media_part_to_model(part) for part in output.parts]
 
 
-def _run_result_to_model(result: RunResult) -> RunResultModel:
+def _run_result_to_model(result: RunResult, *, session_id: str | None = None) -> RunResultModel:
     """Serialize a :class:`RunResult` into its response model."""
+    sid = session_id or result.session_id or ""
+    if not sid and result.metadata:
+        sid = str(result.metadata.get("session_id") or "")
     return RunResultModel(
         output=_output_to_models(result.output),
-        session_id=result.session_id,
+        session_id=sid,
         usage=dict(result.usage),
     )
 
@@ -425,9 +429,10 @@ def _register_agent_routes(
                     content=_paused_to_model(exc).model_dump(),
                 )
             raise
+        wf_sid = getattr(agent, "_session_id", None) or body.session_id
         return JSONResponse(
             status_code=200,
-            content=_run_result_to_model(result).model_dump(),
+            content=_run_result_to_model(result, session_id=wf_sid).model_dump(),
         )
 
     # NDJSON token chunks require a usable ``astream`` (Agent / BuiltAgent without
@@ -653,6 +658,10 @@ def mount_workflow(
             return denied
         if not hasattr(workflow, "approve"):
             return JSONResponse(status_code=501, content={"detail": "not a Workflow"})
+        if body.session_id:
+            bind = getattr(workflow, "bind_session", None)
+            if callable(bind):
+                bind(body.session_id)
         try:
             await workflow.approve(body.node_id, status=body.status)
         except RuntimeError as exc:
@@ -672,7 +681,9 @@ def mount_workflow(
             return JSONResponse(status_code=500, content={"detail": str(exc)})
         return JSONResponse(
             status_code=200,
-            content=_run_result_to_model(result).model_dump(),
+            content=_run_result_to_model(
+                result, session_id=getattr(workflow, "_session_id", None) or body.session_id
+            ).model_dump(),
         )
 
     return app
