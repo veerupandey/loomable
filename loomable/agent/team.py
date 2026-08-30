@@ -239,14 +239,28 @@ class Team:
         """The team member agents."""
         return list(self._members)
 
-    async def _run_broadcast(self, task: str) -> "RunResult":
+    async def _run_broadcast(
+        self,
+        task: str,
+        *,
+        images: "list[str | Any] | None" = None,
+        videos: "list[str | Any] | None" = None,
+        audio: "list[str | Any] | None" = None,
+        output_schema: type | None = None,
+    ) -> "RunResult":
         from loomable.agent.run import RunResult
         from loomable.content import AgentOutput, Text
 
         async def _one(member: Agent, index: int) -> tuple[str, str]:
             label = _member_label(member, index)
             try:
-                result = await member.arun(task)
+                result = await member.arun(
+                    task,
+                    images=images,
+                    videos=videos,
+                    audio=audio,
+                    output_schema=output_schema,
+                )
                 return label, result.output.text()
             except Exception as exc:  # noqa: BLE001
                 return label, f"ERROR: {exc}"
@@ -262,7 +276,15 @@ class Team:
             metadata={"team_mode": "broadcast", "hard": True},
         )
 
-    async def _run_sequential(self, task: str) -> "RunResult":
+    async def _run_sequential(
+        self,
+        task: str,
+        *,
+        images: "list[str | Any] | None" = None,
+        videos: "list[str | Any] | None" = None,
+        audio: "list[str | Any] | None" = None,
+        output_schema: type | None = None,
+    ) -> "RunResult":
         from loomable.agent.run import RunResult
         from loomable.content import AgentOutput, Text
 
@@ -275,7 +297,13 @@ class Team:
                 f"Continue the pipeline for the original task:\n{task}"
             )
             try:
-                result = await member.arun(prompt)
+                result = await member.arun(
+                    prompt,
+                    images=images if i == 0 else None,
+                    videos=videos if i == 0 else None,
+                    audio=audio if i == 0 else None,
+                    output_schema=output_schema if i == len(self._members) - 1 else None,
+                )
                 current = result.output.text()
             except Exception as exc:  # noqa: BLE001
                 current = f"ERROR from {label}: {exc}"
@@ -303,10 +331,22 @@ class Team:
         """Run the team and return a :class:`~loomable.agent.run.RunResult`."""
         if self._hard and self._mode == "broadcast":
             text = _input_as_text(input)
-            return await self._run_broadcast(text)
+            return await self._run_broadcast(
+                text,
+                images=images,
+                videos=videos,
+                audio=audio,
+                output_schema=output_schema,
+            )
         if self._hard and self._mode == "sequential":
             text = _input_as_text(input)
-            return await self._run_sequential(text)
+            return await self._run_sequential(
+                text,
+                images=images,
+                videos=videos,
+                audio=audio,
+                output_schema=output_schema,
+            )
 
         # Soft path: rebuild delegation tools with budgets if needed
         if self._max_delegations is not None or self._max_depth != 4:
@@ -419,6 +459,31 @@ class Team:
                 context=context,
             )
         )
+
+    async def astream(
+        self,
+        input: "AgentInput | str",  # noqa: A002
+        *,
+        output_schema: type | None = None,
+    ):
+        """Stream NDJSON chunks from the coordinator agent (soft or hard modes).
+
+        Hard ``broadcast`` / ``sequential`` fall back to ``arun`` then chunk
+        (deterministic fan-out has no token stream).
+        """
+        from loomable.agent.run import RunChunk
+        from loomable.content import Text
+
+        if self._hard and self._mode in ("broadcast", "sequential"):
+            result = await self.arun(input, output_schema=output_schema)
+            parts = result.output.parts
+            last = len(parts) - 1
+            for index, part in enumerate(parts):
+                yield RunChunk(delta=part, done=index == last)
+            return
+
+        async for chunk in self._agent.astream(input, output_schema=output_schema):
+            yield chunk
 
     async def astream_events(
         self,
