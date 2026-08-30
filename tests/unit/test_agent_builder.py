@@ -55,7 +55,7 @@ class TestBuilderDefaults:
         assert isinstance(built.capabilities, ModelCapabilities)
         # Subsystems retained for later tasks are also constructed.
         assert isinstance(built.harness, GuardrailHarness)
-        assert isinstance(built.planner, Planner)
+        assert built.planner is None
         assert isinstance(built.session_store, SessionStore)
 
     def test_bare_provider_registered_under_default(self):
