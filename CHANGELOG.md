@@ -51,7 +51,8 @@
 
 - `PLAN` complexity path uses kernel `planner=` when set on `BuiltAgent` / `Agent`
 - Plan workers run the full tool loop (tools, hooks, knowledge) per step
-- `astream` streams provider deltas during the tool loop when the provider supports `stream()`
+- `astream` streams final text deltas during the tool loop; tool-advertised model
+  turns use `complete()` so broken `stream()` stubs cannot bypass tool dispatch
 - `Team.astream` — soft modes delegate to the coordinator; hard modes chunk `arun` output
 - `create_deep_agent(profile="sandbox")` — general profile with `code_exec` / `shell` and
   exec tools in the discovery core (`run_python`, `run_shell`)
