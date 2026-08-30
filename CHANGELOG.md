@@ -75,7 +75,27 @@
 - `mount_team` / `mount_workflow` — Team + Workflow HTTP (state / approve / resume on body)
 - `POST /run` returns `202` + pending payload on Workflow `FlowPaused`
 
-### Fixed (agent harness parity)
+### Fixed (hostile audit)
+
+- **Planner opt-in:** `Agent.build()` no longer auto-installs kernel `Planner`; JSON plan path is live when `planner=` is unset
+- **Shared plan parse:** `loomable.plan_parse.parse_plan_steps` (JSON array → bullets) used by kernel `Planner`, `_run_plan`, and `plan_tool`
+- **`planning_model=` alias:** registered on `ModelInterface` without duplicating in `tiers=`
+- **`plan_tool`:** synthesizer reads `context.shared_state["map"]`; workers exclude `plan` from tool schemas; `idempotent=False`
+- **Team budgets:** removed per-`arun` Agent rebuild (session stable); soft `astream` / coordinate fallback via `_soft_arun_with_fallback`
+- **Case mode:** rejects unsupported per-call kwargs; `Case.from_agent` rejects `subagents` / `complexity_router`; copies `discovery` into runtime
+- **Nested checkpoints:** `map_over` omits inner checkpointer; nested `Flow` / `SequentialEngine` skip final `complete=True`
+- **`Command.goto`:** empty text output (no `str(goto)` poisoning step input)
+- **`MapNode`:** missing / non-list keys raise `FlowConfigError`; empty list remains valid no-op
+- **Workflow HITL:** `approve` validates status; `update_state(as_node=…)` blocked on pending HITL; `bind_session(resume=False)` clears checkpoint
+- **Serve:** `ApproveRequestModel.session_id`; workflow `/run` responses include workflow `session_id`
+- **Team:** `route` requires first delegate; hard modes set `metadata["member_errors"]`; `strict=True` re-raises; tasks todo verifier
+- **`create_deep_agent(profile="sandbox")`:** permissive approver for sandbox exec tools only
+- **Parallel HITL:** runtime warning when `require_confirmation` used with parallel engine
+
+### Added (hostile audit tests)
+
+- `tests/unit/test_planner_fixes.py`, `test_plan_tool_fixes.py`, `test_team_budget_session.py`
+- `tests/unit/test_map_over_checkpoint.py`, `test_command_goto_input.py`, `test_case_mode_guards.py`
 
 - `_run_plan` aggregates `tool_activity` from plan-step tool loops into the final `RunResult`
 

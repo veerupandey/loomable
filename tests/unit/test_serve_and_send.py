@@ -60,6 +60,14 @@ async def test_workflow_bind_session_invalidates_compile():
 
 
 @pytest.mark.asyncio
+async def test_approve_request_accepts_session_id():
+    from loomable.serve.fastapi_adapter import ApproveRequestModel
+
+    body = ApproveRequestModel(node_id="risky", session_id="thread-1")
+    assert body.session_id == "thread-1"
+
+
+@pytest.mark.asyncio
 async def test_flow_astream_events_emits_run_paused():
     from loomable.agent.context import RunContext
     from loomable.content import AgentInput
