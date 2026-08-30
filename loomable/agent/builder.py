@@ -1261,9 +1261,7 @@ class BuiltAgent:
         task_text = _input_text(agent_input)
 
         async def _planner(input: Any, **kwargs: Any) -> dict:
-            """Produce plan steps — kernel :class:`~loomable.kernel.planner.Planner` when set."""
-            import json as _json
-
+            """Produce plan steps — kernel Planner when set, else JSON prompt."""
             if self.planner is not None:
                 from loomable.kernel.planner import TaskContext
 
@@ -1272,6 +1270,8 @@ class BuiltAgent:
                 if not steps:
                     steps = [task_text]
                 return {"plan_steps": steps}
+
+            from loomable.plan_parse import parse_plan_steps
 
             plan_prompt = (
                 "You are a planner. Break the user's task into at most 5 concrete, "
@@ -1283,28 +1283,8 @@ class BuiltAgent:
             result = await self._run_single(
                 AgentInput.from_text(plan_prompt), include_history=False, ctx=ctx
             )
-            # Parse the plan response into a list of steps.
-            text = result.output.text().strip()
-            # Strip code fences if present.
-            if text.startswith("```"):
-                text = text.split("\n", 1)[-1] if "\n" in text else text
-                if text.endswith("```"):
-                    text = text[:-3]
-                text = text.strip()
-                if text.startswith("json"):
-                    text = text[len("json"):].strip()
-            try:
-                steps = _json.loads(text)
-                if not isinstance(steps, list):
-                    steps = [text]
-            except (ValueError, _json.JSONDecodeError):
-                # Fallback: split on newlines and strip bullets
-                steps = [
-                    line.strip().lstrip("-*•0123456789.) ")
-                    for line in text.splitlines()
-                    if line.strip() and not line.strip().startswith("#")
-                ]
-            return {"plan_steps": steps[:5]}
+            steps = parse_plan_steps(result.output.text(), max_steps=5)
+            return {"plan_steps": steps}
 
         plan_tool_activity: list[Any] = []
         plan_sub_results: dict[str, Any] = {}
@@ -1320,7 +1300,10 @@ class BuiltAgent:
             step_input = AgentInput.from_text(prompt)
             if self.tool_runtime._tools:
                 result = await self._run_tool_loop(
-                    step_input, include_history=False, ctx=ctx
+                    step_input,
+                    include_history=False,
+                    ctx=ctx,
+                    exclude_tools=frozenset({"plan"}),
                 )
             else:
                 result = await self._run_single(
@@ -1581,6 +1564,7 @@ class BuiltAgent:
         output_schema: type | None = None,
         include_history: bool = True,
         ctx: RunContext | None = None,
+        exclude_tools: frozenset[str] | None = None,
     ) -> RunResult:
         """Execute the model→dispatch→feed-back loop when tools are present (Req 3).
 
@@ -1610,7 +1594,9 @@ class BuiltAgent:
 
         def _collect_tool_schemas() -> list[dict]:
             schemas: list[dict] = []
-            for tool_obj in self.tool_runtime._tools.values():
+            for name, tool_obj in self.tool_runtime._tools.items():
+                if exclude_tools and name in exclude_tools:
+                    continue
                 if isinstance(tool_obj, (FunctionTool, MCPTool)):
                     schemas.append(tool_obj.schema())
                 else:
@@ -3340,6 +3326,10 @@ class Agent:
                 raise AgentConfigError(
                     "max_rounds= only applies with Agent(mode='case')."
                 )
+        if self._mode != "case" and not board:
+            raise AgentConfigError(
+                "board= only applies with Agent(mode='case'). Omit board= or set mode='case'."
+            )
         self._dispatch = dispatch
         self._accept = accept
         self._board = board
@@ -3410,9 +3400,7 @@ class Agent:
         tool_registry.update(mcp_tools)
         tool_runtime = self._tool_runtime or ToolRuntime(tool_registry)
         harness = self._harness or GuardrailHarness([])
-        planner = self._planner or Planner(
-            model_interface, planning_model_id=self._planning_model
-        )
+        planner = self._planner
         session_store = self._resolve_session_store()
 
         # Summarizer is used for compaction (memory management) in the high-level
@@ -3708,6 +3696,22 @@ class Agent:
         """
         # Case mode: plan → dispatch → synthesize → accept.
         if self._mode == "case":
+            unsupported = []
+            if images is not None:
+                unsupported.append("images")
+            if videos is not None:
+                unsupported.append("videos")
+            if audio is not None:
+                unsupported.append("audio")
+            if output_schema is not None:
+                unsupported.append("output_schema")
+            if context is not None:
+                unsupported.append("context")
+            if unsupported:
+                raise AgentConfigError(
+                    f"Agent(mode='case') does not accept per-call "
+                    f"{', '.join(unsupported)}. Use plain text input via arun()."
+                )
             case = self._get_case()
             text = self._coerce_run_text(input)
             result = await case.arun(text)
@@ -3925,6 +3929,10 @@ class Agent:
                     if hasattr(tier_value, "complete"):
                         providers[tier_name] = tier_value
             interface = ModelInterface(providers=providers, default_provider=provider_id)
+            if self._planning_model and self._planning_model not in providers:
+                default_impl = providers.get(provider_id)
+                if default_impl is not None:
+                    providers[self._planning_model] = default_impl
             return interface, provider_id, self._model.capabilities
 
         # Bare ModelProvider: register under the default provider id.
@@ -3939,6 +3947,10 @@ class Agent:
             providers=providers,
             default_provider=provider_id,
         )
+        if self._planning_model and self._planning_model not in providers:
+            default_impl = providers.get(provider_id)
+            if default_impl is not None:
+                providers[self._planning_model] = default_impl
         return interface, provider_id, None
 
     def _resolve_capabilities(

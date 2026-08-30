@@ -58,6 +58,7 @@ class SequentialEngine:
         checkpointer: Any | None = None,
         session_id: str | None = None,
         pending_decisions: dict[str, str] | None = None,
+        nested: bool = False,
     ) -> "RunResult":
         """Drive the flow sequentially through topological order.
 
@@ -129,7 +130,7 @@ class SequentialEngine:
                     )
                     thread_id = session_id or "default"
                     # Checkpoint before raising (Req 16.2)
-                    if checkpointer is not None:
+                    if checkpointer is not None and not nested:
                         await self._write_hitl_checkpoint(
                             checkpointer, state, completed, thread_id, pending
                         )
@@ -137,7 +138,7 @@ class SequentialEngine:
                 elif decision == "rejected":
                     # Skip the node on rejection (Req 16.3)
                     completed.add(node_id)
-                    if checkpointer is not None:
+                    if checkpointer is not None and not nested:
                         await self._write_checkpoint(
                             checkpointer, state, completed, session_id
                         )
@@ -188,7 +189,7 @@ class SequentialEngine:
 
             # Mark as completed and write checkpoint (Req 13.1)
             completed.add(node_id)
-            if checkpointer is not None:
+            if checkpointer is not None and not nested:
                 await self._write_checkpoint(
                     checkpointer, state, completed, session_id
                 )

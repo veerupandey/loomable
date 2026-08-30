@@ -452,6 +452,8 @@ class Flow:
             engine_kwargs["session_id"] = self._session_id
         if pending_decisions is not None:
             engine_kwargs["pending_decisions"] = pending_decisions
+        if nested:
+            engine_kwargs["nested"] = True
 
         try:
             self._active_ctx = ctx
@@ -482,8 +484,8 @@ class Flow:
 
         # 7. Write a final (complete) checkpoint if checkpointer is configured
         #    Skip when cancelled so resume can continue from the last node.
-        #    Record only nodes that actually ran — not gated-away route branches.
-        if self._checkpointer is not None and not ctx.cancelled:
+        #    Nested inner flows must not mark the parent thread complete.
+        if self._checkpointer is not None and not ctx.cancelled and not nested:
             from loomable.persist.checkpoint import Checkpoint
 
             ran = result.metadata.get("completed_node_ids")
