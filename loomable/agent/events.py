@@ -36,9 +36,9 @@ class Event:
 
     Parameters
     ----------
-    kind:
+        kind:
         One of ``run_start``, ``model_call``, ``tool_call``, ``compaction``,
-        ``tier_substitution``, ``loop_stop``, ``run_end``.
+        ``tier_substitution``, ``loop_stop``, ``run_end``, ``memory_error``.
     t:
         Monotonic timestamp (from ``time.monotonic()``).
     duration_ms:
