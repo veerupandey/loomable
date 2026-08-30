@@ -1,4 +1,4 @@
-"""Unit tests for loomable.agent.notes - NoteStore and memory tool."""
+"""Unit tests for loomable.memory.notes — NoteStore and memory tool."""
 
 from __future__ import annotations
 

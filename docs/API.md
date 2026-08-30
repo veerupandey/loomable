@@ -396,6 +396,13 @@ from loomable.flow.helpers import sequential  # advanced only
 
 ---
 
+## Moved / renamed
+
+| Old | Use |
+|-----|-----|
+| `from loomable.agent import NoteStore` | `from loomable.memory import NoteStore` (compat re-export still works) |
+| `loomable/case.py` | `loomable.case` package (imports unchanged) |
+
 ## Removed names (no shims)
 
 | Old | Use |

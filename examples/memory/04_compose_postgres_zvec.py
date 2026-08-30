@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _provider import make_embedder, require_provider  # noqa: E402
 
 from loomable import Agent, ConversationMemory, Memory, UserMemory, open_session_store
-from loomable.memory import NoteStore
+from loomable.memory import MemoryScope, NoteStore, ScopedNoteStore
 from loomable.kernel.long_term import LongTermStore
 from loomable.providers.vector_store import open_vector_store
 
@@ -56,6 +56,8 @@ async def main() -> None:
         )
         print("L3: in-memory fallback (pip install loomable[zvec] for default)")
 
+    # Seed through the same scope the Agent will use (user_id=alice).
+    scoped_notes = ScopedNoteStore(notes, scope=MemoryScope.of(user_id="alice"))
     memory = Memory.compose(
         conversation=ConversationMemory(store=conversation, window=8),
         user=UserMemory(note_store=notes, memory_tool=True),
@@ -71,12 +73,12 @@ async def main() -> None:
     )
     print("turn1:", (await agent.arun("I prefer dark mode and Python.")).output.text())
 
-    await notes.write(
+    await scoped_notes.write(
         "prefs",
         "User prefers dark mode and Python.",
         tags=["preferences"],
     )
-    recalled = await notes.recall("preferences", k=1)
+    recalled = await scoped_notes.recall("preferences", k=1)
     print("L3 recall:", [n.text for n in recalled])
 
     agent2 = Agent(
