@@ -714,6 +714,13 @@ def create_deep_agent(
         shell = True
         if discovery_core in (None, "research"):
             discovery_core = "sandbox"
+        if agent_kwargs.get("approver") is None:
+
+            def _sandbox_exec_approver(call: Any) -> bool:
+                name = getattr(call, "name", None) or getattr(call, "tool_name", "")
+                return name in ("run_python", "run_python_file", "run_shell")
+
+            agent_kwargs["approver"] = _sandbox_exec_approver
 
     root = Path(workspace)
     root.mkdir(parents=True, exist_ok=True)
@@ -1018,6 +1025,8 @@ def create_deep_agent(
             case_only.append("max_plan_steps")
         if checkpointer is not None:
             case_only.append("checkpointer")
+        if board is not True:
+            case_only.append("board")
         if case_only:
             from loomable.agent.errors import AgentConfigError
 

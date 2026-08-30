@@ -118,7 +118,11 @@ class CallableVerifier:
         result = self._fn(output, context)
         if isinstance(result, VerdictResult):
             return result
-        return VerdictResult(ok=bool(result))
+        if isinstance(result, str) and result:
+            return VerdictResult(ok=False, detail=result)
+        if result:
+            return VerdictResult(ok=True)
+        return VerdictResult(ok=False, detail="Acceptance check failed")
 
 
 # ---------------------------------------------------------------------------

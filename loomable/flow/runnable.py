@@ -79,12 +79,14 @@ class FunctionRunnable:
 
         if isinstance(raw, Command):
             goto = raw.goto
-            if isinstance(goto, list):
-                text = ", ".join(str(g) for g in goto)
-            elif goto is not None:
-                text = str(goto)
-            else:
-                text = ""
+            # When Command only routes (goto) without meaningful content, do not
+            # poison the next step's input with str(goto).
+            text = ""
+            metadata = raw.to_metadata()
+            if goto is not None:
+                metadata["selection"] = goto
+            if raw.update:
+                metadata["state_updates"] = dict(raw.update)
             output = AgentOutput(
                 parts=[
                     MediaPart(
@@ -94,11 +96,6 @@ class FunctionRunnable:
                     )
                 ]
             )
-            metadata = raw.to_metadata()
-            if goto is not None:
-                metadata["selection"] = goto
-            if raw.update:
-                metadata["state_updates"] = dict(raw.update)
             return RunResult(output=output, session_id="", metadata=metadata)
 
         # Dict returns are treated as SharedState updates (plan_steps, etc.)
