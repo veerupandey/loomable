@@ -105,9 +105,9 @@ class CallableVerifier:
         loop = Loop(body, verifier=lambda output, ctx: "done" in output.text)
 
     The callable receives the :class:`AgentOutput` and :class:`RunContext` and
-    must return a truthy/falsy value. On falsy, a ``VerdictResult(ok=False)``
-    is returned with an empty detail string (the callable has no way to
-    provide detail).
+    may return a truthy/falsy value, a detail string (treated as failure), or a
+    :class:`VerdictResult`. On falsy bool, detail defaults to
+    ``"Acceptance check failed"`` so repair loops have usable feedback.
     """
 
     def __init__(self, fn: Callable[[AgentOutput, RunContext], bool]) -> None:
