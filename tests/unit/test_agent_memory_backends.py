@@ -123,7 +123,7 @@ def test_session_store_default_still_sqlite() -> None:
 @pytest.mark.asyncio
 async def test_compose_conversation_store_with_zvec_notes() -> None:
     """L1/L2 session store and L3 NoteStore(zvec) are independent axes."""
-    from loomable.agent import NoteStore
+    from loomable.memory import NoteStore
     from loomable.kernel.long_term import LongTermStore
     from loomable.providers.vector_store import open_vector_store
 
