@@ -299,11 +299,11 @@ class Memory:
             return None
         store = self.user.note_store
         if store is None and self.user.long_term is not None and self.user.embedder is not None:
-            from loomable.agent.notes import NoteStore
+            from loomable.memory.notes import NoteStore
 
             store = NoteStore(long_term=self.user.long_term, embedder=self.user.embedder)
         elif store is None and self.user.embedder is not None:
-            from loomable.agent.notes import NoteStore
+            from loomable.memory.notes import NoteStore
             from loomable.kernel.long_term import LongTermStore
 
             store = NoteStore(long_term=LongTermStore(), embedder=self.user.embedder)

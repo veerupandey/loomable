@@ -16,6 +16,16 @@ Prefer `Workflow` / `Team`. Low-level `Flow` / `loomable.flow.helpers` are an es
 
 Beta limits: local workspace FS, cooperative cancel (not hard-kill of provider HTTP), serve auth is a shared API key (not RBAC).
 
+### Package tiers (no separate `core`)
+
+| Tier | Packages | Who imports |
+|------|----------|-------------|
+| **Facade** | `loomable` | Everyone — progressive disclosure |
+| **Product** | `agent`, `memory`, `flow`, `case`, `toolkits`, `serve`, … | App / example code |
+| **Runtime** | `kernel`, `providers`, `persist` | Advanced / internals |
+
+`kernel` **is** the runtime core — do not add a parallel `loomable.core`. Prefer `loomable.memory` for L1/L2/L3 product APIs (`Memory.compose`, `NoteStore`); use `loomable.kernel` only when you need stores/contracts directly.
+
 ---
 
 ## Agent
@@ -220,7 +230,7 @@ Planning (`TodoTools`), local workspace FS, `task` / `task_batch` specialists, s
 
 ```python
 from loomable import Agent, Memory, ConversationMemory, UserMemory, open_session_store, open_vector_store
-from loomable.agent import NoteStore
+from loomable.memory import NoteStore
 from loomable.providers import OpenAIEmbedder
 
 notes = NoteStore(long_term=open_vector_store(engine="memory"), embedder=OpenAIEmbedder())
@@ -432,6 +442,13 @@ from loomable.flow.helpers import sequential  # advanced only
 ```
 
 ---
+
+## Moved / renamed
+
+| Old | Use |
+|-----|-----|
+| `from loomable.agent import NoteStore` | `from loomable.memory import NoteStore` (compat re-export still works) |
+| `loomable/case.py` | `loomable.case` package (imports unchanged) |
 
 ## Removed names (no shims)
 

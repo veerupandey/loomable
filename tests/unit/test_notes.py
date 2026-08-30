@@ -1,4 +1,4 @@
-"""Unit tests for loomable.agent.notes - NoteStore and memory tool."""
+"""Unit tests for loomable.memory.notes — NoteStore and memory tool."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from loomable.agent.notes import Note, NoteStore, make_memory_tool
+from loomable.memory import Note, NoteStore, make_memory_tool
 from loomable.kernel.long_term import LongTermStore
 from loomable.providers.vector_store import open_vector_store
 
@@ -187,6 +187,15 @@ class TestNoteStore:
         assert got is not None and got.text == "My name is Sam"
         listed = await store.list()
         assert len(listed) == 1 and listed[0].note_id == "n1"
+
+    @pytest.mark.asyncio
+    async def test_agent_notes_shim_still_exports(self):
+        from loomable.agent import NoteStore as AgentNoteStore
+        from loomable.agent.notes import NoteStore as ShimNoteStore
+        from loomable.memory import NoteStore as MemNoteStore
+
+        assert AgentNoteStore is MemNoteStore
+        assert ShimNoteStore is MemNoteStore
 
 
 # ---------------------------------------------------------------------------
