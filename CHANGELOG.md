@@ -47,6 +47,21 @@
   with the parent's chain budget (was always rebuilt at depth 0)
 - `SubagentOutcome` allows successful `result=None` (Flow/Map workers that return None)
 
+### Added (agent harness parity)
+
+- `PLAN` complexity path uses kernel `planner=` when set on `BuiltAgent` / `Agent`
+- Plan workers run the full tool loop (tools, hooks, knowledge) per step
+- `astream` streams provider deltas during the tool loop when the provider supports `stream()`
+- `Team.astream` — soft modes delegate to the coordinator; hard modes chunk `arun` output
+- `create_deep_agent(profile="sandbox")` — general profile with `code_exec` / `shell` and
+  exec tools in the discovery core (`run_python`, `run_shell`)
+- Hard `Team` modes (`broadcast` / `sequential`) forward `images` / `videos` / `audio` /
+  `output_schema` to member runs
+
+### Fixed (agent harness parity)
+
+- `_run_plan` aggregates `tool_activity` from plan-step tool loops into the final `RunResult`
+
 ## 0.2.0b0 — public beta
 
 ### Added
