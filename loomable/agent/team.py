@@ -318,6 +318,7 @@ class Team:
                 self._members,
                 max_delegations=self._max_delegations,
                 max_depth=self._max_depth,
+                depth=0,
             )
             for t in budgeted:
                 built.tool_runtime._tools[t.name] = t

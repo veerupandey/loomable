@@ -41,6 +41,12 @@
 - SharedState checkpoint restore: empty skipped-step `MediaPart` (`data_b64=""`) no
   longer raises `MediaPartError` on HITL resume
 
+### Fixed (agent / subagents audit)
+
+- Nested `max_depth` now propagates: `delegate_to_*` rebuilds the child at `depth+1`
+  with the parent's chain budget (was always rebuilt at depth 0)
+- `SubagentOutcome` allows successful `result=None` (Flow/Map workers that return None)
+
 ## 0.2.0b0 — public beta
 
 ### Added

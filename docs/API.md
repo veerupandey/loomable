@@ -40,7 +40,7 @@ result = await agent.arun("When was Python created?")
 print(result.output.text())
 ```
 
-`run()` is a sync wrapper. With tools, the tool loop runs automatically; without tools, a single model call. `complexity_router=` is opt-in.
+`run()` is a sync wrapper. With tools, the tool loop runs automatically; without tools, a single model call. `complexity_router=` is opt-in (`SINGLE` / `TOOL_LOOP` / `PLAN`). `PLAN` uses the BuiltAgent `_run_plan` path (`plan_and_execute`); a custom kernel `planner=` is stored on `BuiltAgent` but is **not** driven by the high-level harness (kernel `AgentLoop` only).
 
 ```python
 result.output.text()
@@ -53,6 +53,8 @@ result.trace            # debug=True or events=JSONTracer()
 ```
 
 Persona fields (`role`, `goal`, `instructions`, `description`) assemble into the system prompt. `role` is reused in delegation labels.
+
+**HITL tools:** `require_confirmation=["deploy"]` gates tools; without a custom `approver`, the default is **deny** (headless-safe). Deep `code_exec` / `shell` auto-join that list.
 
 **Require tools:** `require_tools=["write_file:output/x.md"]` nudges until those side effects happen. `strict_require_tools=True` raises `RequireToolsError`. Same knobs inherit onto Agent steps via `Workflow(require_tools=...)` or `.step(..., require_tools=...)`.
 
@@ -86,7 +88,9 @@ result = await team.arun("Review our API design")
 
 `hard=True` is only valid with `broadcast` / `sequential`. Soft `coordinate` auto-requires `delegate_to_*` and runs skipped members (`metadata["team_coordinate_fallback"]`).
 
-Or pass `subagents=[...]` on a parent `Agent` — each becomes `delegate_to_<role>`. Nested subagents are allowed.
+Or pass `subagents=[...]` on a parent `Agent` — each becomes `delegate_to_<role>`. Nested subagents are allowed; `max_depth` (default 4) is an absolute nest budget from the top parent (child rebuilds at `depth+1`). `max_delegations` caps successful `delegate_to_*` calls in one parent run.
+
+Note: Agent `subagents=` (LLM delegation tools) is separate from kernel `SubagentManager` (used by Workflow parallel/map engines).
 
 ---
 
@@ -206,7 +210,7 @@ agent = create_deep_agent(model, profile="code", repo="./my-app")
 
 `arun()` builds the agent. Call `agent.build()` only when you need the `BuiltAgent` (inspect tools, attach listeners).
 
-Planning (`TodoTools`), local workspace FS, `task` / `task_batch` specialists, skills (`load_skill`), discovery (`search_tools` / `activate_tool`). `discovery_core="research-slim"` is experimental. Sandbox: `code_exec=True` / `shell=True`. Case-only kwargs (`dispatch`, `max_rounds`, `checkpointer`) require `mode="case"`. `board=False` is allowed without case mode.
+Planning (`TodoTools`), local workspace FS, `task` / `task_batch` specialists, skills (`load_skill`), discovery (`search_tools` / `activate_tool`). `discovery_core="research-slim"` is experimental. Sandbox: `code_exec=True` / `shell=True` (not a `profile="sandbox"` — profiles are `general` | `research` | `code`). Case-only kwargs (`dispatch`, `max_rounds`, `checkpointer`) require `mode="case"`. `board=False` is allowed without case mode.
 
 ---
 
