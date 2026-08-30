@@ -3309,10 +3309,12 @@ class Agent:
         if self._subagents:
             from .delegation import make_delegation_tools
 
+            chain_max = getattr(self, "_delegation_max_depth", None)
             delegation_tools = make_delegation_tools(
                 self._subagents,
                 max_delegations=self._max_delegations,
-                max_depth=self._max_depth,
+                max_depth=chain_max if chain_max is not None else self._max_depth,
+                depth=int(getattr(self, "_delegation_depth", 0) or 0),
             )
             for dt in delegation_tools:
                 tool_registry[dt.name] = dt

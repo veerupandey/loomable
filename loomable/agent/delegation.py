@@ -106,9 +106,11 @@ def make_delegation_tools(
         Soft budget: after this many successful delegate calls in one parent run,
         further calls return a budget error string (does not crash the parent).
     max_depth:
-        Maximum nesting depth for nested subagents (default 4).
+        Maximum nesting depth for nested subagents (default 4). Depth ``0`` is
+        the top-level parent; a child invoked via ``delegate_to_*`` runs at
+        ``depth + 1`` and rebuilds its own nested tools with that depth.
     depth:
-        Current nesting depth (internal).
+        Current nesting depth (internal / propagated into children).
     """
     tools: list[FunctionTool] = []
     used_slugs: set[str] = set()
@@ -137,12 +139,28 @@ def make_delegation_tools(
                     f"Subagent '{_role}' skipped: max_delegations="
                     f"{max_delegations} budget exhausted."
                 )
+            prev_depth = getattr(_subagent, "_delegation_depth", 0)
+            prev_chain_max = getattr(_subagent, "_delegation_max_depth", None)
+            # Propagate absolute depth + chain budget so nested subagents
+            # cannot bypass the parent's max_depth (was always rebuilt at 0).
+            _subagent._delegation_depth = depth + 1
+            _subagent._delegation_max_depth = max_depth
+            _subagent._built = None
             try:
                 result = await _subagent.arun(task)
                 call_count["n"] += 1
                 return result.output.text()
             except Exception as exc:  # noqa: BLE001 - isolate subagent failures
                 return f"Subagent '{_role}' failed: {exc}"
+            finally:
+                _subagent._delegation_depth = prev_depth
+                if prev_chain_max is None:
+                    if hasattr(_subagent, "_delegation_max_depth"):
+                        delattr(_subagent, "_delegation_max_depth")
+                else:
+                    _subagent._delegation_max_depth = prev_chain_max
+                # Drop the depth-scoped build so the next caller rebuilds cleanly
+                _subagent._built = None
 
         _delegate.__name__ = tool_name
         _delegate.__doc__ = f"Delegate a task to {role}. Returns their text response."
