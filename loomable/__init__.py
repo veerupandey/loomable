@@ -8,6 +8,10 @@ Progressive disclosure:
   Agent → Team → Workflow (+ Step / Loop / branch / parallel)
   Case for goal + WorkItems board + dispatch + accept
   Flow / engines / edges for advanced graph control
+
+Package tiers: facade (``loomable``) → product (``agent``, ``memory``, ``flow``,
+``case``, …) → runtime (``kernel``, ``providers``, ``persist``). There is no
+separate ``loomable.core`` — ``kernel`` is the runtime core.
 """
 
 from __future__ import annotations

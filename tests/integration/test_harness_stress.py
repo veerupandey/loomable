@@ -26,7 +26,7 @@ import pytest
 from loomable.agent import Agent, ModelSpec, tool, FunctionTool
 from loomable.agent.context import RunContext, StopReason
 from loomable.agent.events import Event, JSONTracer, NoOpEvents
-from loomable.agent.notes import Note, NoteStore
+from loomable.memory import Note, NoteStore
 from loomable.agent.routing import ComplexityRouter, RunStrategy
 from loomable.kernel.long_term import LongTermStore
 from loomable.kernel.models import (

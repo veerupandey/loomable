@@ -24,7 +24,7 @@ from loomable import (
     UserMemory,
     open_session_store,
 )
-from loomable.agent import NoteStore
+from loomable.memory import NoteStore
 from loomable.kernel.long_term import LongTermStore
 from loomable.memory import ScopedNoteStore
 

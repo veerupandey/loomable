@@ -1,9 +1,10 @@
-"""Pluggable + composable Agent memory.
+"""Pluggable + composable Agent memory (product L1/L2/L3 API).
 
 Composable (preferred)::
 
     from loomable.memory import (
-        Memory, ConversationMemory, UserMemory, KnowledgeMemory, open_session_store,
+        Memory, ConversationMemory, UserMemory, KnowledgeMemory,
+        NoteStore, open_session_store,
     )
 
     memory = Memory.compose(
@@ -16,6 +17,9 @@ Session store without compose (escape hatch)::
 
     store = open_session_store("postgres", url=DSN, user_id="alice")
     agent = Agent(model=..., session_id="chat-1", session_store=store)
+
+Runtime stores and the vestigial kernel ``MemoryManager`` live under
+``loomable.kernel`` — prefer this package for application code.
 """
 
 from __future__ import annotations
@@ -44,6 +48,7 @@ from loomable.memory.compose import (
     is_kernel_memory_manager,
     is_memory_bundle,
 )
+from loomable.memory.notes import Note, NoteStore, make_memory_tool
 from loomable.providers.vector_store import open_vector_store
 
 StoreKind = Literal["sqlite", "file", "postgres", "memory"]
@@ -66,6 +71,9 @@ __all__ = [
     "KnowledgeMemory",
     "WorkingMemory",
     "ScopedNoteStore",
+    "Note",
+    "NoteStore",
+    "make_memory_tool",
     "extract_user_facts",
     "auto_extract_into_notes",
     "is_memory_bundle",

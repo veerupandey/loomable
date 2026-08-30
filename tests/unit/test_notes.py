@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from loomable.agent.notes import Note, NoteStore, make_memory_tool
+from loomable.memory import Note, NoteStore, make_memory_tool
 from loomable.kernel.long_term import LongTermStore
 from loomable.providers.vector_store import open_vector_store
 
@@ -137,6 +137,15 @@ class TestNoteStore:
     async def test_delete_nonexistent_is_silent(self, note_store: NoteStore):
         # Should not raise
         await note_store.delete("does-not-exist")
+
+    @pytest.mark.asyncio
+    async def test_agent_notes_shim_still_exports(self):
+        from loomable.agent import NoteStore as AgentNoteStore
+        from loomable.agent.notes import NoteStore as ShimNoteStore
+        from loomable.memory import NoteStore as MemNoteStore
+
+        assert AgentNoteStore is MemNoteStore
+        assert ShimNoteStore is MemNoteStore
 
 
 # ---------------------------------------------------------------------------
