@@ -194,6 +194,7 @@ class Workflow:
         self._reducers = dict(reducers) if reducers else None
         self._compiled_flow: Flow | None = None
         self._last_state: SharedState | None = None
+        self._clear_checkpoint_pending = False
         self._step_counter = 0
         self._active_ctx: RunContext | None = None
 
@@ -531,7 +532,6 @@ class Workflow:
             session_id=self._session_id,
             deps=self._deps,
             memory=self._memory,
-            checkpointer=self._checkpointer,
             events=self._events,
             reducers=self._reducers,
         )
@@ -662,6 +662,9 @@ class Workflow:
         automatically. Pass ``resume=True`` to require a checkpoint, or
         ``resume=False`` to start fresh.
         """
+        if self._clear_checkpoint_pending and self._checkpointer is not None:
+            await self.clear_checkpoint()
+            self._clear_checkpoint_pending = False
         flow = self._ensure_compiled()
         ctx = context or RunContext()
         self._active_ctx = ctx
@@ -707,8 +710,7 @@ class Workflow:
             self._compiled_flow = None
         self._session_id = session_id
         if resume is False and self._checkpointer is not None:
-            # Caller will start fresh on next arun(resume=False).
-            return
+            self._clear_checkpoint_pending = True
 
     async def astream_events(
         self,
@@ -746,7 +748,14 @@ class Workflow:
         *,
         status: str = "approved",
     ) -> None:
-        """Approve or reject a HITL-paused node, then call ``arun(resume=True)``."""
+        """Approve or reject a HITL-paused node, then call ``arun(resume=True)``.
+
+        ``status`` must be ``"approved"`` or ``"rejected"``.
+        """
+        if status not in ("approved", "rejected"):
+            raise ValueError(
+                f"approve status must be 'approved' or 'rejected', got {status!r}"
+            )
         if self._checkpointer is None or self._session_id is None:
             raise RuntimeError("approve() requires checkpointer and session_id")
         cp = await self._checkpointer.get(self._session_id)
@@ -847,6 +856,13 @@ class Workflow:
             session = dict(existing.session_state or {})
             step = existing.step
             pending = list(existing.pending or [])
+            for pa in pending:
+                if pa.status == "pending" and (
+                    pa.tool_name == as_node or pa.args.get("node_id") == as_node
+                ):
+                    raise RuntimeError(
+                        f"update_state(as_node={as_node!r}) blocked: node has pending HITL"
+                    )
 
         shared = dict(session.get("shared_state") or {})
         shared.update(values)

@@ -138,9 +138,10 @@ class Planner:
 
     def _parse_response(self, response: ModelResponse) -> ExecutionPlan:
         """Parse a model response into an ExecutionPlan."""
-        # Split the response content into non-empty lines as steps
+        from loomable.plan_parse import parse_plan_steps
+
         content = response.content or ""
-        steps = [line.strip() for line in content.splitlines() if line.strip()]
+        steps = parse_plan_steps(content)
 
         return ExecutionPlan(
             steps=steps,

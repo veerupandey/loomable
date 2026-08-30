@@ -51,8 +51,6 @@ def make_plan_tool(agent: "BuiltAgent") -> FunctionTool:
 
     async def plan(task: str, max_steps: int = 5) -> Any:
         """Decompose a complex task into parallel steps, execute them, and synthesize the results."""
-        import json as _json
-
         from loomable.content import AgentInput
         from loomable.flow.helpers import plan_and_execute
         from loomable.kernel.models import ToolResult
@@ -70,6 +68,8 @@ def make_plan_tool(agent: "BuiltAgent") -> FunctionTool:
                 plan_steps = steps[:max_steps] or [task]
                 return {"plan_steps": plan_steps}
 
+            from loomable.plan_parse import parse_plan_steps
+
             plan_prompt = (
                 f"You are a planner. Break the user's task into at most {max_steps} "
                 "concrete, independent, actionable steps. Return ONLY a JSON array of "
@@ -80,26 +80,8 @@ def make_plan_tool(agent: "BuiltAgent") -> FunctionTool:
             result = await agent._run_single(
                 AgentInput.from_text(plan_prompt), include_history=False
             )
-            text = result.output.text().strip()
-            # Strip code fences if present.
-            if text.startswith("```"):
-                text = text.split("\n", 1)[-1] if "\n" in text else text
-                if text.endswith("```"):
-                    text = text[:-3]
-                text = text.strip()
-                if text.startswith("json"):
-                    text = text[len("json"):].strip()
-            try:
-                steps = _json.loads(text)
-                if not isinstance(steps, list):
-                    steps = [text]
-            except (ValueError, _json.JSONDecodeError):
-                steps = [
-                    line.strip().lstrip("-*•0123456789.) ")
-                    for line in text.splitlines()
-                    if line.strip() and not line.strip().startswith("#")
-                ]
-            plan_steps = [str(s) for s in steps[:max_steps]]
+            steps = parse_plan_steps(result.output.text(), max_steps=max_steps)
+            plan_steps = steps
             return {"plan_steps": plan_steps}
 
         async def _worker(input: Any, **kwargs: Any) -> str:
@@ -110,24 +92,24 @@ def make_plan_tool(agent: "BuiltAgent") -> FunctionTool:
                 f"Complete ONLY this step, concisely and concretely:\n{step}"
             )
             step_input = AgentInput.from_text(prompt)
-            # Prefer the tool loop so step workers keep session/tools/knowledge
-            # (parity with BuiltAgent._run_plan). Nested plan() is bounded by
-            # max_tool_iterations.
-            non_plan = [
-                n for n in agent.tool_runtime._tools if n != "plan"
-            ]
-            if non_plan:
+            if agent.tool_runtime._tools:
                 result = await agent._run_tool_loop(
-                    step_input, include_history=False
+                    step_input,
+                    include_history=False,
+                    exclude_tools=frozenset({"plan"}),
                 )
             else:
                 result = await agent._run_single(step_input, include_history=False)
             return result.output.text()
 
-        async def _synthesizer(input: Any, **kwargs: Any) -> str:
+        async def _synthesizer(input: Any, *, context: Any = None, **kwargs: Any) -> str:
             """Combine step results into a final answer."""
             pieces: list[Any] = []
-            if isinstance(input, dict):
+            if context is not None and getattr(context, "shared_state", None) is not None:
+                raw = context.shared_state.get("map")
+                if isinstance(raw, list):
+                    pieces = raw
+            if not pieces and isinstance(input, dict):
                 pieces = input.get("map", []) or []
             if not pieces:
                 pieces = [str(input)]
@@ -154,4 +136,9 @@ def make_plan_tool(agent: "BuiltAgent") -> FunctionTool:
             metadata={"plan_steps": plan_steps},
         )
 
-    return FunctionTool(plan, name="plan", description="Decompose a complex task into parallel steps, execute them, and synthesize the results.", idempotent=True)
+    return FunctionTool(
+        plan,
+        name="plan",
+        description="Decompose a complex task into parallel steps, execute them, and synthesize the results.",
+        idempotent=False,
+    )
