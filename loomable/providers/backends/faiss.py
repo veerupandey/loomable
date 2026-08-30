@@ -276,3 +276,21 @@ class FaissVectorBackend:
             raise
         except Exception as exc:
             raise MemoryBackendError(self._backend_id) from exc
+
+    async def get(self, id: str) -> dict[str, Any] | None:
+        item_id = str(id)
+        if item_id not in self._metadata:
+            return None
+        meta = dict(self._metadata.get(item_id) or {})
+        meta.pop("score", None)
+        return {**meta, "id": item_id}
+
+    async def scan(self, *, limit: int = 10_000) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for item_id, metadata in self._metadata.items():
+            if len(out) >= max(0, int(limit)):
+                break
+            meta = dict(metadata or {})
+            meta.pop("score", None)
+            out.append({**meta, "id": str(item_id)})
+        return out

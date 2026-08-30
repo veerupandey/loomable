@@ -59,6 +59,24 @@ class InMemoryVectorBackend:
     async def delete(self, id: str) -> None:
         self._store.pop(id, None)
 
+    async def get(self, id: str) -> dict[str, Any] | None:
+        item = self._store.get(str(id))
+        if item is None:
+            return None
+        meta = dict(item.get("metadata") or {})
+        meta.pop("score", None)
+        return {**meta, "id": str(id)}
+
+    async def scan(self, *, limit: int = 10_000) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for item_id, item in self._store.items():
+            if len(out) >= max(0, int(limit)):
+                break
+            meta = dict(item.get("metadata") or {})
+            meta.pop("score", None)
+            out.append({**meta, "id": str(item_id)})
+        return out
+
 
 class LongTermStore:
     """Long-term memory store backed by a pluggable VectorBackend.
@@ -115,6 +133,22 @@ class LongTermStore:
     async def delete(self, id: str) -> None:
         try:
             await self.backend.delete(id)
+        except MemoryBackendError:
+            raise
+        except Exception as exc:
+            raise MemoryBackendError(self.backend_name) from exc
+
+    async def get(self, id: str) -> dict[str, Any] | None:
+        try:
+            return await self.backend.get(id)
+        except MemoryBackendError:
+            raise
+        except Exception as exc:
+            raise MemoryBackendError(self.backend_name) from exc
+
+    async def scan(self, *, limit: int = 10_000) -> list[dict[str, Any]]:
+        try:
+            return await self.backend.scan(limit=limit)
         except MemoryBackendError:
             raise
         except Exception as exc:
