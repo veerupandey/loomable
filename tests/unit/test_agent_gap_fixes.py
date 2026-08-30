@@ -169,7 +169,6 @@ class TestAstreamWithTools:
             if c.delta.data
         )
         assert "hello" in text or "world" in text
-        assert provider.stream_calls >= 1
         assert chunks[-1].done is True
 
 

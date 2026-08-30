@@ -321,7 +321,7 @@ async for chunk in agent.astream("hello"):
         print(chunk.delta.data.decode(), end="")
 ```
 
-`astream` streams token deltas for single-shot runs. With tools, it streams during the tool loop when the provider implements `stream()`; otherwise it falls back to `arun` then chunks. `Team.astream` follows the same rules. Case / `mode="case"` do not support `astream`.
+`astream` streams token deltas for single-shot runs. With tools, model turns that advertise tool schemas use ``complete()`` (so broken ``stream()`` stubs cannot skip the tool loop); final text is still streamed as deltas. Without ``stream()`` on the provider, falls back to ``arun`` then chunks. `Team.astream` follows the same rules. Case / `mode="case"` do not support `astream`.
 
 ```python
 async for ev in agent.astream_events(prompt):
