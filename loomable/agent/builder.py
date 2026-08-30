@@ -573,6 +573,8 @@ class BuiltAgent:
     harness: GuardrailHarness | None = None
     planner: Planner | None = None
     session_store: SessionStore | None = None
+    # When set during :meth:`astream`, model text deltas are queued for NDJSON consumers.
+    _astream_delta_queue: Any = field(default=None, repr=False)
 
     # Conversational memory (Req 15): when the agent has a session, recent turns are
     # injected into each request so it remembers across calls. ``memory_window`` caps
@@ -1249,17 +1251,27 @@ class BuiltAgent:
         """Execute the self-plan strategy via the Flow engine (Req 17.2, 17.3).
 
         Builds a plan→map→synthesize Flow using :func:`plan_and_execute` from
-        ``loomable.flow.helpers``, replacing the removed ``AutoPlan`` class. The
-        planner, worker, and synthesizer are all backed by this agent's single-shot
-        path so the agent's session/tools/knowledge remain available.
+        ``loomable.flow.helpers``. When ``self.planner`` is set, planning uses the
+        kernel :class:`~loomable.kernel.planner.Planner`; otherwise a JSON plan prompt.
+        Workers use the tool loop when tools are registered so session/tools/knowledge
+        remain available during each step.
         """
         from loomable.flow.helpers import plan_and_execute
 
         task_text = _input_text(agent_input)
 
         async def _planner(input: Any, **kwargs: Any) -> dict:
-            """Ask the model for a concise plan; return steps in shared state."""
+            """Produce plan steps — kernel :class:`~loomable.kernel.planner.Planner` when set."""
             import json as _json
+
+            if self.planner is not None:
+                from loomable.kernel.planner import TaskContext
+
+                plan = await self.planner.plan(TaskContext(task=task_text))
+                steps = [str(s).strip() for s in plan.steps if str(s).strip()][:5]
+                if not steps:
+                    steps = [task_text]
+                return {"plan_steps": steps}
 
             plan_prompt = (
                 "You are a planner. Break the user's task into at most 5 concrete, "
@@ -1294,16 +1306,26 @@ class BuiltAgent:
                 ]
             return {"plan_steps": steps[:5]}
 
+        plan_tool_activity: list[Any] = []
+
         async def _worker(input: Any, **kwargs: Any) -> str:
-            """Run a single plan step through the agent's single-shot path."""
+            """Run a single plan step with the agent's full tool loop when tools exist."""
             step = input if isinstance(input, str) else str(input)
             prompt = (
                 f"Overall task:\n{task_text}\n\n"
                 f"Complete ONLY this step, concisely and concretely:\n{step}"
             )
-            result = await self._run_single(
-                AgentInput.from_text(prompt), include_history=False, ctx=ctx
-            )
+            step_input = AgentInput.from_text(prompt)
+            if self.tool_runtime._tools:
+                result = await self._run_tool_loop(
+                    step_input, include_history=False, ctx=ctx
+                )
+            else:
+                result = await self._run_single(
+                    step_input, include_history=False, ctx=ctx
+                )
+            if result.tool_activity:
+                plan_tool_activity.extend(result.tool_activity)
             return result.output.text()
 
         async def _synthesizer(input: Any, *, context: Any = None, **kwargs: Any) -> str:
@@ -1356,10 +1378,62 @@ class BuiltAgent:
                 output=output,
                 session_id=self.session.session_id,
                 usage=flow_result.usage,
-                tool_activity=[],
+                tool_activity=plan_tool_activity,
                 structured=structured,
             )
         )
+
+    async def _emit_astream_delta(self, text: str) -> None:
+        """Forward provider text deltas to an active :meth:`astream` consumer."""
+        if not text:
+            return
+        queue = self._astream_delta_queue
+        if queue is not None:
+            await queue.put(text)
+
+    async def _invoke_model_request(
+        self,
+        request: "ModelRequest",
+    ) -> tuple["ModelResponse", "TierSubstitution | None"]:
+        """Invoke the model, streaming token deltas when ``astream`` is active."""
+        from loomable.kernel.models import ModelRequest, ModelResponse, ToolCall
+
+        tier_substitution: TierSubstitution | None = None
+        if self.router is not None:
+            response, tier_substitution = await self.router.route(request)
+            return response, tier_substitution
+
+        provider = self.model_interface._providers.get(
+            self.model_interface.default_provider
+        )
+        queue = self._astream_delta_queue
+        if (
+            queue is not None
+            and provider is not None
+            and hasattr(provider, "stream")
+        ):
+            accumulated = ""
+            tool_calls: list[ToolCall] = []
+            usage: dict[str, int] = {}
+            async for event in provider.stream(request):
+                if event.kind == "text" and event.text:
+                    accumulated += event.text
+                    await self._emit_astream_delta(event.text)
+                elif event.kind == "tool_call" and event.tool_call is not None:
+                    tool_calls.append(event.tool_call)
+                elif event.kind == "end":
+                    usage = dict(event.usage or {})
+            return (
+                ModelResponse(
+                    content=accumulated,
+                    tool_calls=tool_calls,
+                    usage=usage,
+                ),
+                None,
+            )
+
+        response = await self.model_interface.invoke(request)
+        return response, None
 
     async def _run_single(
         self,
@@ -1424,10 +1498,7 @@ class BuiltAgent:
         # otherwise use the single model interface unchanged (Req 7.4).
         tier_substitution: TierSubstitution | None = None
         _model_call_t0 = time.monotonic()
-        if self.router is not None:
-            response, tier_substitution = await self.router.route(request)
-        else:
-            response = await self.model_interface.invoke(request)
+        response, tier_substitution = await self._invoke_model_request(request)
         _model_call_duration = (time.monotonic() - _model_call_t0) * 1000
 
         # Track token usage from model response (Req 13.4).
@@ -1624,12 +1695,9 @@ class BuiltAgent:
             # Route through the tiered ModelRouter when configured (Req 7.1–7.3),
             # otherwise use the single model interface unchanged (Req 7.4).
             _loop_model_t0 = time.monotonic()
-            if self.router is not None:
-                response, tier_sub = await self.router.route(request)
-                if tier_sub is not None:
-                    tier_substitutions.append(tier_sub)
-            else:
-                response = await self.model_interface.invoke(request)
+            response, tier_sub = await self._invoke_model_request(request)
+            if tier_sub is not None:
+                tier_substitutions.append(tier_sub)
             _loop_model_duration = (time.monotonic() - _loop_model_t0) * 1000
 
             # Track token usage from model response (Req 4.4, 13.4).
@@ -1743,12 +1811,9 @@ class BuiltAgent:
                 if effective_budget is not None:
                     request.messages = self._bound_messages(request.messages, effective_budget)
                 _nudge_t0 = time.monotonic()
-                if self.router is not None:
-                    response, tier_sub = await self.router.route(request)
-                    if tier_sub is not None:
-                        tier_substitutions.append(tier_sub)
-                else:
-                    response = await self.model_interface.invoke(request)
+                response, tier_sub = await self._invoke_model_request(request)
+                if tier_sub is not None:
+                    tier_substitutions.append(tier_sub)
                 _nudge_duration = (time.monotonic() - _nudge_t0) * 1000
                 # Track tokens from the nudge call.
                 nudge_usage = response.usage if hasattr(response, "usage") and response.usage else {}
@@ -2403,14 +2468,12 @@ class BuiltAgent:
     ) -> "AsyncIterator[RunChunk]":
         """Stream incremental output as :class:`RunChunk`s (Req 1.5).
 
-        When the active provider implements ``stream()``, real token-level deltas
-        are yielded as they arrive. Otherwise, falls back to running ``arun()`` and
-        chunking its output (preserving pre-feature behavior).
+        When the active provider implements ``stream()``, token-level deltas are
+        yielded as they arrive — including during the tool loop when tools or a
+        complexity router are wired (model turns stream; tool dispatch stays batch).
 
-        The same context assembly (instructions, knowledge, memory prefix, token
-        bounding) and capability gating apply as in the non-streaming path.
-        Session state is persisted identically to ``arun`` so streamed and
-        non-streamed runs leave the same durable state.
+        Without ``stream()`` on the provider, falls back to running ``arun()`` and
+        chunking its output.
         """
         from loomable.content import Text as _Text
 
@@ -2419,13 +2482,45 @@ class BuiltAgent:
         # Resolve the provider for streaming detection
         provider = self.model_interface._providers.get(self.model_interface.default_provider)
 
-        # Provider ``stream()`` is single-shot (no tool loop / complexity router).
-        # Fall back to arun→chunk whenever tools or a complexity router are wired
-        # so NDJSON does not silently skip tool use.
         has_tools = bool(getattr(self.tool_runtime, "_tools", None))
+        use_provider_stream = provider is not None and hasattr(provider, "stream")
+        needs_tool_or_plan_path = has_tools or self.complexity_router is not None
+
+        if use_provider_stream and needs_tool_or_plan_path:
+            queue: asyncio.Queue[str | None] = asyncio.Queue()
+            self._astream_delta_queue = queue
+
+            async def _run_to_completion() -> None:
+                try:
+                    await self.arun(input, output_schema=output_schema)
+                finally:
+                    await queue.put(None)
+                    self._astream_delta_queue = None
+
+            task = asyncio.create_task(_run_to_completion())
+            try:
+                while True:
+                    delta = await queue.get()
+                    if delta is None:
+                        break
+                    yield RunChunk(delta=_Text(delta))
+                yield RunChunk(delta=_Text(""), done=True)
+            finally:
+                if not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                else:
+                    exc = task.exception()
+                    if exc is not None and not isinstance(exc, asyncio.CancelledError):
+                        raise exc
+            return
+
+        # Provider ``stream()`` single-shot (no tools / router).
         use_provider_stream = (
-            provider is not None
-            and hasattr(provider, "stream")
+            use_provider_stream
             and not has_tools
             and self.complexity_router is None
         )
@@ -2564,20 +2659,65 @@ class BuiltAgent:
                     bridge.publish(TEXT_MESSAGE_END, {"text": accumulated})
                     bridge.publish(RUN_FINISHED, {"text": accumulated})
                 else:
-                    result = await self.arun(
-                        input,
-                        images=images,
-                        videos=videos,
-                        audio=audio,
-                        output_schema=output_schema,
-                        context=context,
+                    has_tools = bool(getattr(self.tool_runtime, "_tools", None))
+                    provider = self.model_interface._providers.get(
+                        self.model_interface.default_provider
                     )
-                    text = (result.output.text() or "") if result.output else ""
-                    if text:
+                    can_stream_tools = (
+                        has_tools
+                        and provider is not None
+                        and hasattr(provider, "stream")
+                    )
+                    if can_stream_tools:
+                        queue: asyncio.Queue[str | None] = asyncio.Queue()
+                        self._astream_delta_queue = queue
+
+                        async def _run_with_stream() -> "RunResult":
+                            try:
+                                return await self.arun(
+                                    input,
+                                    images=images,
+                                    videos=videos,
+                                    audio=audio,
+                                    output_schema=output_schema,
+                                    context=context,
+                                )
+                            finally:
+                                await queue.put(None)
+                                self._astream_delta_queue = None
+
+                        run_task = asyncio.create_task(_run_with_stream())
                         bridge.publish(TEXT_MESSAGE_START, {"role": "assistant"})
-                        bridge.publish(TEXT_MESSAGE_CONTENT, {"delta": text})
+                        accumulated = ""
+                        while True:
+                            delta = await queue.get()
+                            if delta is None:
+                                break
+                            accumulated += delta
+                            bridge.publish(
+                                TEXT_MESSAGE_CONTENT, {"delta": delta}
+                            )
+                        result = await run_task
+                        text = accumulated or (
+                            (result.output.text() or "") if result.output else ""
+                        )
                         bridge.publish(TEXT_MESSAGE_END, {"text": text})
-                    bridge.publish(RUN_FINISHED, {"text": text})
+                        bridge.publish(RUN_FINISHED, {"text": text})
+                    else:
+                        result = await self.arun(
+                            input,
+                            images=images,
+                            videos=videos,
+                            audio=audio,
+                            output_schema=output_schema,
+                            context=context,
+                        )
+                        text = (result.output.text() or "") if result.output else ""
+                        if text:
+                            bridge.publish(TEXT_MESSAGE_START, {"role": "assistant"})
+                            bridge.publish(TEXT_MESSAGE_CONTENT, {"delta": text})
+                            bridge.publish(TEXT_MESSAGE_END, {"text": text})
+                        bridge.publish(RUN_FINISHED, {"text": text})
             except Exception as exc:  # noqa: BLE001
                 bridge.publish(
                     RUN_ERROR,

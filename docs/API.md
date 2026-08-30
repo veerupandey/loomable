@@ -40,7 +40,7 @@ result = await agent.arun("When was Python created?")
 print(result.output.text())
 ```
 
-`run()` is a sync wrapper. With tools, the tool loop runs automatically; without tools, a single model call. `complexity_router=` is opt-in (`SINGLE` / `TOOL_LOOP` / `PLAN`). `PLAN` uses the BuiltAgent `_run_plan` path (`plan_and_execute`); a custom kernel `planner=` is stored on `BuiltAgent` but is **not** driven by the high-level harness (kernel `AgentLoop` only).
+`run()` is a sync wrapper. With tools, the tool loop runs automatically; without tools, a single model call. `complexity_router=` is opt-in (`SINGLE` / `TOOL_LOOP` / `PLAN`). `PLAN` uses `_run_plan` (`plan_and_execute`); when `planner=` is set, planning goes through the kernel `Planner`, and each step runs the tool loop when tools are registered.
 
 ```python
 result.output.text()
@@ -86,7 +86,7 @@ result = await team.arun("Review our API design")
 | `broadcast` | hard | Same input to all, merge labeled results |
 | `sequential` | hard | Chain members in order |
 
-`hard=True` is only valid with `broadcast` / `sequential`. Soft `coordinate` auto-requires `delegate_to_*` and runs skipped members (`metadata["team_coordinate_fallback"]`).
+`hard=True` is only valid with `broadcast` / `sequential`. Soft `coordinate` auto-requires `delegate_to_*` and runs skipped members (`metadata["team_coordinate_fallback"]`). `Team.astream` mirrors `Agent.astream` for soft modes; hard modes chunk the merged `arun` result.
 
 Or pass `subagents=[...]` on a parent `Agent` — each becomes `delegate_to_<role>`. Nested subagents are allowed; `max_depth` (default 4) is an absolute nest budget from the top parent (child rebuilds at `depth+1`). `max_delegations` caps successful `delegate_to_*` calls in one parent run.
 
@@ -210,7 +210,7 @@ agent = create_deep_agent(model, profile="code", repo="./my-app")
 
 `arun()` builds the agent. Call `agent.build()` only when you need the `BuiltAgent` (inspect tools, attach listeners).
 
-Planning (`TodoTools`), local workspace FS, `task` / `task_batch` specialists, skills (`load_skill`), discovery (`search_tools` / `activate_tool`). `discovery_core="research-slim"` is experimental. Sandbox: `code_exec=True` / `shell=True` (not a `profile="sandbox"` — profiles are `general` | `research` | `code`). Case-only kwargs (`dispatch`, `max_rounds`, `checkpointer`) require `mode="case"`. `board=False` is allowed without case mode.
+Planning (`TodoTools`), local workspace FS, `task` / `task_batch` specialists, skills (`load_skill`), discovery (`search_tools` / `activate_tool`). `discovery_core="research-slim"` is experimental. Profiles: `general` | `research` | `code` | `sandbox` (`sandbox` = general + `code_exec` / `shell` with exec tools in the discovery core). Case-only kwargs (`dispatch`, `max_rounds`, `checkpointer`) require `mode="case"`. `board=False` is allowed without case mode.
 
 ---
 
@@ -321,7 +321,7 @@ async for chunk in agent.astream("hello"):
         print(chunk.delta.data.decode(), end="")
 ```
 
-`astream` is token-level only for single-shot (no tools). With tools it falls back to `arun` then chunks. Case / `mode="case"` do not support `astream`.
+`astream` streams token deltas for single-shot runs. With tools, it streams during the tool loop when the provider implements `stream()`; otherwise it falls back to `arun` then chunks. `Team.astream` follows the same rules. Case / `mode="case"` do not support `astream`.
 
 ```python
 async for ev in agent.astream_events(prompt):

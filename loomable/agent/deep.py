@@ -25,6 +25,7 @@ __all__ = [
     "DEEP_DISCOVERY_CORE_TOOLS",
     "DEEP_DISCOVERY_CORE_SLIM",
     "DEEP_DISCOVERY_CORE_CODE",
+    "DEEP_DISCOVERY_CORE_SANDBOX",
     "SpecialistSpec",
     "create_deep_agent",
     "make_compact_conversation_tool",
@@ -119,6 +120,15 @@ DEEP_DISCOVERY_CORE_CODE: frozenset[str] = frozenset(
     }
 )
 
+# Sandbox profile: general research/workspace surface + always-on exec tools.
+DEEP_DISCOVERY_CORE_SANDBOX: frozenset[str] = DEEP_DISCOVERY_CORE_TOOLS | frozenset(
+    {
+        "run_python",
+        "run_python_file",
+        "run_shell",
+    }
+)
+
 
 def _resolve_discovery_core(
     discovery_core: str | Sequence[str] | None,
@@ -129,6 +139,8 @@ def _resolve_discovery_core(
         return list(DEEP_DISCOVERY_CORE_SLIM)
     if discovery_core == "code":
         return list(DEEP_DISCOVERY_CORE_CODE)
+    if discovery_core == "sandbox":
+        return list(DEEP_DISCOVERY_CORE_SANDBOX)
     return [str(x) for x in discovery_core]
 
 
@@ -616,6 +628,9 @@ def create_deep_agent(
     and enables sandbox ``code_exec`` / ``shell``. Pass a prebuilt
     ``code_index=`` or a custom embedder/store via :meth:`CodeIndex.build`.
 
+    ``profile="sandbox"`` is shorthand for ``general`` with ``code_exec`` and
+    ``shell`` enabled (subprocess sandbox under ``workspace/.sandbox``).
+
     ``discovery_core`` controls the always-advertised tool allowlist when
     ``discovery=True`` (default): ``"research"`` (correctness-first),
     ``"research-slim"`` (smaller schema budget), ``"code"`` (nav + sandbox),
@@ -637,11 +652,13 @@ def create_deep_agent(
     from loomable.toolkits.todo_tools import TodoTools
     from loomable.toolkits.workspace_tools import WorkspaceTools
 
-    profile_key = (profile or "general").strip().lower()
-    if profile_key not in {"general", "research", "code"}:
+    orig_profile = (profile or "general").strip().lower()
+    if orig_profile not in {"general", "research", "code", "sandbox"}:
         raise ValueError(
-            f"profile must be 'general', 'research', or 'code', got {profile!r}"
+            f"profile must be 'general', 'research', 'code', or 'sandbox', "
+            f"got {orig_profile!r}"
         )
+    profile_key = "general" if orig_profile == "sandbox" else orig_profile
 
     skill_list = list(skills or [])
     if profile_key == "research" and "research" not in {
@@ -691,6 +708,12 @@ def create_deep_agent(
                 "edit, and verify with sandboxed tests"
             )
         modalities = "text" if modalities == "text+image" else modalities
+
+    if orig_profile == "sandbox":
+        code_exec = True
+        shell = True
+        if discovery_core in (None, "research"):
+            discovery_core = "sandbox"
 
     root = Path(workspace)
     root.mkdir(parents=True, exist_ok=True)
