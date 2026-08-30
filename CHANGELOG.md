@@ -66,6 +66,15 @@
   `output_schema` to member runs (including streaming helpers)
 - Competitive audit: `docs/COMPETITIVE.md` + `tests/unit/test_competitive_agent_audit.py`
 
+### Added (Agno ease + LangGraph flex)
+
+- `Send` + `Workflow.map_over(..., over=...)` — LangGraph-style dynamic list fan-out
+- `Workflow.map(..., over=...)` — parameterized plan→map key
+- `Workflow.bind_session()` — HTTP checkpoint thread binding
+- `RUN_PAUSED` SSE event when Workflow HITL pauses (not `RUN_ERROR`)
+- `mount_team` / `mount_workflow` — Team + Workflow HTTP (state / approve / resume on body)
+- `POST /run` returns `202` + pending payload on Workflow `FlowPaused`
+
 ### Fixed (agent harness parity)
 
 - `_run_plan` aggregates `tool_activity` from plan-step tool loops into the final `RunResult`

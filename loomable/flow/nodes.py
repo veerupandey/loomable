@@ -163,7 +163,9 @@ class MapNode:
         if context is not None and context.shared_state is not None:
             raw = context.shared_state.get(self.over)
             if isinstance(raw, list):
-                items = raw
+                from loomable.flow.send import send_args
+
+                items = send_args(raw)
 
         if not items:
             # No items — still publish an empty list under "map" so synthesizers
