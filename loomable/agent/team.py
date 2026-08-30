@@ -23,7 +23,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
     from .builder import ModelSpec
 
-TeamMode = Literal["coordinate", "route", "broadcast", "sequential"]
+TeamMode = Literal["coordinate", "route", "broadcast", "sequential", "tasks"]
 
 __all__ = ["Team", "TeamMode"]
 
@@ -58,6 +58,18 @@ _MODE_INSTRUCTIONS: dict[str, str] = {
         "1. Call the first member's delegate_to_* tool with the original task.\n"
         "2. Pass each subsequent member the prior member's output as context.\n"
         "3. Return the final member's output (optionally summarize the chain)."
+    ),
+    "tasks": (
+        "You are a team task leader. Maintain a shared task list and execute until "
+        "the goal is complete (Agno TeamMode.tasks parity).\n\n"
+        "Process:\n"
+        "1. Call write_todos with a concrete checklist for the goal "
+        "(keep exactly one item in_progress).\n"
+        "2. For each pending task, delegate to the best-matched member via "
+        "delegate_to_*.\n"
+        "3. Mark todos completed as members finish; replan or add tasks if blocked.\n"
+        "4. When all todos are completed or cancelled, synthesize one final answer.\n"
+        "5. Stop when the goal is done (or you hit the tool-iteration budget)."
     ),
 }
 
@@ -106,17 +118,28 @@ def _input_as_text(value: Any) -> str:
     return "".join(chunks)
 
 
+def _coerce_member(member: "Agent | Team", index: int) -> Agent:
+    """Normalize Agent or nested Team into a nestable Agent."""
+    if isinstance(member, Team):
+        return member.as_agent(index=index)
+    return member
+
+
 class Team:
     """Explicit multi-agent orchestration.
 
-    Soft modes (``coordinate``, ``route``): LLM parent + ``delegate_to_*`` tools.
+    Soft modes (``coordinate``, ``route``, ``tasks``): LLM parent + ``delegate_to_*``
+    tools (``tasks`` also attaches :class:`~loomable.toolkits.todo_tools.TodoTools`).
     Hard modes (``broadcast``, ``sequential``): deterministic fan-out / pipeline
     without relying on the coordinator LLM to call tools correctly.
+
+    Members may be :class:`Agent` instances or nested :class:`Team` instances
+    (nested teams become a thin Agent wrapper via :meth:`as_agent`).
     """
 
     def __init__(
         self,
-        members: list[Agent],
+        members: list["Agent | Team"],
         model: "ModelProvider | ModelSpec | str",
         *,
         mode: TeamMode = "coordinate",
@@ -124,7 +147,9 @@ class Team:
         session_id: str | None = None,
         max_delegations: int | None = None,
         max_depth: int = 4,
+        max_iterations: int | None = None,
         hard: bool | None = None,
+        strict: bool = False,
         # Same memory kwargs as Agent (L1/L2 + L3) — applied to the coordinator.
         resume: bool = False,
         use_memory: bool = True,
@@ -149,29 +174,45 @@ class Team:
 
         from .memory_opts import filter_memory_kwargs
 
-        self._members = members
+        self._raw_members = list(members)
+        self._members = [_coerce_member(m, i) for i, m in enumerate(members)]
         self._model = model
         self._mode = mode
         self._instructions = instructions
         self._session_id = session_id
         self._max_delegations = max_delegations
         self._max_depth = max_depth
-        # Hard by default for broadcast/sequential; soft for coordinate/route.
-        # hard=True on coordinate/route used to be a silent no-op — reject it.
+        self._max_iterations = max_iterations
+        # Hard by default for broadcast/sequential; soft for coordinate/route/tasks.
+        # hard=True on soft modes used to be a silent no-op — reject it.
+        soft_modes = ("coordinate", "route", "tasks")
         if hard is True and mode not in ("broadcast", "sequential"):
             raise AgentConfigError(
                 f"Team(hard=True) only applies to mode='broadcast' or "
                 f"'sequential' (got mode={mode!r}). Omit hard= for "
-                "coordinate/route (soft LLM orchestration)."
+                f"{'/'.join(soft_modes)} (soft LLM orchestration)."
             )
         self._hard = (mode in ("broadcast", "sequential")) if hard is None else bool(hard)
+        self._strict = strict
+
+        extra_tools: list[Any] = []
+        self._todo_tools: Any | None = None
+        if mode == "tasks":
+            from loomable.toolkits.todo_tools import TodoTools
+
+            todo_workspace = (
+                f".team_todos/{session_id}" if session_id else ".team_todos/default"
+            )
+            self._todo_tools = TodoTools(workspace=todo_workspace)
+            extra_tools.append(self._todo_tools)
 
         agent_kwargs: dict[str, Any] = {
             "model": model,
             "role": "Team Coordinator",
             "goal": f"Coordinate the team in {mode} mode",
-            "instructions": _assemble_team_instructions(mode, members, instructions),
-            "subagents": members,
+            "instructions": _assemble_team_instructions(mode, self._members, instructions),
+            "subagents": self._members,
+            "tools": extra_tools or None,
             **filter_memory_kwargs(
                 {
                     "memory": memory,
@@ -194,6 +235,11 @@ class Team:
                 }
             ),
         }
+        if max_iterations is not None:
+            # Tasks loop: each iteration may be write_todos + delegate + update.
+            agent_kwargs["max_tool_iterations"] = max(
+                12, int(max_iterations) * 4
+            )
         # resume=False is meaningful; filter drops None only — force session_id through
         if session_id is not None:
             agent_kwargs["session_id"] = session_id
@@ -201,8 +247,12 @@ class Team:
             agent_kwargs["resume"] = True
         if memory is not None:
             agent_kwargs["memory"] = memory
-        self._agent = Agent(**agent_kwargs)
-        # Stash budgets for build-time wiring (delegation tools rebuilt in arun soft path)
+        if max_delegations is not None:
+            agent_kwargs["max_delegations"] = max_delegations
+        if max_depth != 4:
+            agent_kwargs["max_depth"] = max_depth
+        self._agent = Agent(**{k: v for k, v in agent_kwargs.items() if v is not None})
+        # Stash budgets for build-time wiring (also set via Agent kwargs above).
         self._agent._max_delegations = max_delegations  # type: ignore[attr-defined]
         self._agent._max_depth = max_depth  # type: ignore[attr-defined]
         from .memory_opts import apply_knowledge_base
@@ -217,7 +267,60 @@ class Team:
         if mode == "coordinate" and not self._hard and not self._agent._require_tools:
             from .delegation import delegation_tool_names
 
-            self._agent._require_tools = [name for _, name in delegation_tool_names(members)]
+            self._agent._require_tools = [
+                name for _, name in delegation_tool_names(self._members)
+            ]
+        # Soft route: require at least the first delegate tool (parity with coordinate).
+        if mode == "route" and not self._hard and not self._agent._require_tools:
+            from .delegation import delegation_tool_names
+
+            names = [name for _, name in delegation_tool_names(self._members)]
+            if names:
+                self._agent._require_tools = [names[0]]
+        # Soft tasks: nudge write_todos + at least one delegation.
+        if mode == "tasks" and not self._agent._require_tools:
+            from .delegation import delegation_tool_names
+
+            names = [name for _, name in delegation_tool_names(self._members)]
+            self._agent._require_tools = ["write_todos", *names[:1]]
+
+    def as_agent(self, *, index: int = 0) -> Agent:
+        """Expose this Team as a single Agent for nesting in another Team.
+
+        The wrapper Agent's only tool is ``run_nested_team``, which forwards to
+        :meth:`arun`. Used automatically when a :class:`Team` is passed as a member.
+        """
+        from loomable.agent.tools import FunctionTool
+
+        team = self
+        label = f"NestedTeam_{self._mode}_{index}"
+
+        async def run_nested_team(task: str) -> str:
+            """Run the nested team on a task and return its final text."""
+            result = await team.arun(task)
+            return result.output.text()
+
+        tool = FunctionTool(
+            run_nested_team,
+            name="run_nested_team",
+            description=(
+                f"Run nested team ({self._mode} mode) on a task and return "
+                "the synthesized result."
+            ),
+        )
+        return Agent(
+            model=self._model,
+            name=label,
+            role=label,
+            goal=f"Execute nested {self._mode} team",
+            instructions=(
+                f"You wrap a nested Team (mode={self._mode}). "
+                "Always call run_nested_team with the full task, then return its output."
+            ),
+            tools=[tool],
+            require_tools=["run_nested_team"],
+            max_tool_iterations=4,
+        )
 
     def bind_session(self, session_id: str | None, *, resume: bool | None = None) -> None:
         """Bind HTTP/stream session id — same semantics as :meth:`Agent.bind_session`."""
@@ -239,35 +342,66 @@ class Team:
         """The team member agents."""
         return list(self._members)
 
-    async def _run_broadcast(self, task: str) -> "RunResult":
+    async def _run_broadcast(
+        self,
+        task: str,
+        *,
+        images: "list[str | Any] | None" = None,
+        videos: "list[str | Any] | None" = None,
+        audio: "list[str | Any] | None" = None,
+        output_schema: type | None = None,
+    ) -> "RunResult":
         from loomable.agent.run import RunResult
         from loomable.content import AgentOutput, Text
 
         async def _one(member: Agent, index: int) -> tuple[str, str]:
             label = _member_label(member, index)
             try:
-                result = await member.arun(task)
+                result = await member.arun(
+                    task,
+                    images=images,
+                    videos=videos,
+                    audio=audio,
+                    output_schema=output_schema,
+                )
                 return label, result.output.text()
             except Exception as exc:  # noqa: BLE001
+                if self._strict:
+                    raise
                 return label, f"ERROR: {exc}"
 
         pairs = await asyncio.gather(
             *[_one(m, i) for i, m in enumerate(self._members)]
         )
+        member_errors = any(
+            text.startswith("ERROR:") for _, text in pairs
+        )
         lines = [f"## {label}\n{text}" for label, text in pairs]
         merged = "\n\n".join(lines)
+        meta: dict[str, Any] = {"team_mode": "broadcast", "hard": True}
+        if member_errors:
+            meta["member_errors"] = True
         return RunResult(
             output=AgentOutput(parts=[Text(merged)]),
             session_id=self._session_id or "",
-            metadata={"team_mode": "broadcast", "hard": True},
+            metadata=meta,
         )
 
-    async def _run_sequential(self, task: str) -> "RunResult":
+    async def _run_sequential(
+        self,
+        task: str,
+        *,
+        images: "list[str | Any] | None" = None,
+        videos: "list[str | Any] | None" = None,
+        audio: "list[str | Any] | None" = None,
+        output_schema: type | None = None,
+    ) -> "RunResult":
         from loomable.agent.run import RunResult
         from loomable.content import AgentOutput, Text
 
         current = task
         trail: list[str] = []
+        member_errors = False
         for i, member in enumerate(self._members):
             label = _member_label(member, i)
             prompt = current if i == 0 else (
@@ -275,20 +409,76 @@ class Team:
                 f"Continue the pipeline for the original task:\n{task}"
             )
             try:
-                result = await member.arun(prompt)
+                result = await member.arun(
+                    prompt,
+                    images=images if i == 0 else None,
+                    videos=videos if i == 0 else None,
+                    audio=audio if i == 0 else None,
+                    output_schema=output_schema if i == len(self._members) - 1 else None,
+                )
                 current = result.output.text()
             except Exception as exc:  # noqa: BLE001
+                if self._strict:
+                    raise
+                member_errors = True
                 current = f"ERROR from {label}: {exc}"
             trail.append(f"[{label}] {current[:500]}")
+        meta: dict[str, Any] = {
+            "team_mode": "sequential",
+            "hard": True,
+            "trail": trail,
+        }
+        if member_errors:
+            meta["member_errors"] = True
         return RunResult(
             output=AgentOutput(parts=[Text(current)]),
             session_id=self._session_id or "",
-            metadata={
-                "team_mode": "sequential",
-                "hard": True,
-                "trail": trail,
-            },
+            metadata=meta,
         )
+
+    def _verify_tasks_todos(self) -> None:
+        """Raise when tasks-mode todos remain incomplete."""
+        if self._todo_tools is None:
+            return
+        items = self._todo_tools.store.list()
+        if not items:
+            return
+        incomplete = [
+            item["content"]
+            for item in items
+            if item.get("status") not in ("completed", "cancelled")
+        ]
+        if incomplete:
+            from loomable.agent.errors import RequireToolsError
+
+            raise RequireToolsError(
+                [f"todo_incomplete:{content}" for content in incomplete]
+            )
+
+    async def _soft_arun_with_fallback(
+        self,
+        input: "AgentInput | str",  # noqa: A002
+        *,
+        images: "list[str | Any] | None" = None,
+        videos: "list[str | Any] | None" = None,
+        audio: "list[str | Any] | None" = None,
+        output_schema: type | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> "RunResult":
+        """Soft-mode run with optional coordinate fallback and tasks todo gate."""
+        result = await self._agent.arun(
+            input,
+            images=images,
+            videos=videos,
+            audio=audio,
+            output_schema=output_schema,
+            context=context,
+        )
+        if self._mode == "coordinate" and not self._hard:
+            result = await self._coordinate_fallback(_input_as_text(input), result)
+        if self._mode == "tasks" and not self._hard:
+            self._verify_tasks_todos()
+        return result
 
     async def arun(
         self,
@@ -303,44 +493,31 @@ class Team:
         """Run the team and return a :class:`~loomable.agent.run.RunResult`."""
         if self._hard and self._mode == "broadcast":
             text = _input_as_text(input)
-            return await self._run_broadcast(text)
+            return await self._run_broadcast(
+                text,
+                images=images,
+                videos=videos,
+                audio=audio,
+                output_schema=output_schema,
+            )
         if self._hard and self._mode == "sequential":
             text = _input_as_text(input)
-            return await self._run_sequential(text)
-
-        # Soft path: rebuild delegation tools with budgets if needed
-        if self._max_delegations is not None or self._max_depth != 4:
-            from .delegation import make_delegation_tools
-
-            built = self._agent.build()
-            # Replace delegation tools with budgeted versions
-            budgeted = make_delegation_tools(
-                self._members,
-                max_delegations=self._max_delegations,
-                max_depth=self._max_depth,
-            )
-            for t in budgeted:
-                built.tool_runtime._tools[t.name] = t
-            result = await built.arun(
-                input,
+            return await self._run_sequential(
+                text,
                 images=images,
                 videos=videos,
                 audio=audio,
                 output_schema=output_schema,
-                context=context,
             )
-        else:
-            result = await self._agent.arun(
-                input,
-                images=images,
-                videos=videos,
-                audio=audio,
-                output_schema=output_schema,
-                context=context,
-            )
-        if self._mode == "coordinate" and not self._hard:
-            result = await self._coordinate_fallback(_input_as_text(input), result)
-        return result
+
+        return await self._soft_arun_with_fallback(
+            input,
+            images=images,
+            videos=videos,
+            audio=audio,
+            output_schema=output_schema,
+            context=context,
+        )
 
     async def _coordinate_fallback(self, task: str, result: "RunResult") -> "RunResult":
         """Run members the coordinator never delegated to (WR-020)."""
@@ -418,6 +595,56 @@ class Team:
                 context=context,
             )
         )
+
+    async def astream(
+        self,
+        input: "AgentInput | str",  # noqa: A002
+        *,
+        images: "list[str | Any] | None" = None,
+        videos: "list[str | Any] | None" = None,
+        audio: "list[str | Any] | None" = None,
+        output_schema: type | None = None,
+    ):
+        """Stream NDJSON chunks from the coordinator agent (soft or hard modes).
+
+        Hard ``broadcast`` / ``sequential`` fall back to ``arun`` then chunk
+        (deterministic fan-out has no token stream).
+        """
+        from loomable.agent.run import RunChunk
+
+        if self._hard and self._mode in ("broadcast", "sequential"):
+            result = await self.arun(
+                input,
+                images=images,
+                videos=videos,
+                audio=audio,
+                output_schema=output_schema,
+            )
+            parts = result.output.parts
+            last = len(parts) - 1
+            for index, part in enumerate(parts):
+                yield RunChunk(delta=part, done=index == last)
+            return
+
+        # Coordinate needs full arun for member fallback; other soft modes stream live.
+        if self._mode == "coordinate" and not self._hard:
+            result = await self._soft_arun_with_fallback(
+                input,
+                images=images,
+                videos=videos,
+                audio=audio,
+                output_schema=output_schema,
+            )
+            parts = result.output.parts
+            last = len(parts) - 1
+            for index, part in enumerate(parts):
+                yield RunChunk(delta=part, done=index == last)
+            return
+
+        async for chunk in self._agent.astream(input, output_schema=output_schema):
+            yield chunk
+        if self._mode == "tasks" and not self._hard:
+            self._verify_tasks_todos()
 
     async def astream_events(
         self,
@@ -521,6 +748,8 @@ class Team:
                         data={},
                     )
                 yield finished
+            if self._mode == "tasks" and not self._hard:
+                self._verify_tasks_todos()
             return
 
         import uuid
@@ -546,9 +775,23 @@ class Team:
             try:
                 bridge.publish(RUN_STARTED, {"input": text[:500], "team_mode": self._mode})
                 if self._mode == "broadcast":
-                    result = await self._run_broadcast_streaming(text, bridge)
+                    result = await self._run_broadcast_streaming(
+                        text,
+                        bridge,
+                        images=images,
+                        videos=videos,
+                        audio=audio,
+                        output_schema=output_schema,
+                    )
                 else:
-                    result = await self._run_sequential_streaming(text, bridge)
+                    result = await self._run_sequential_streaming(
+                        text,
+                        bridge,
+                        images=images,
+                        videos=videos,
+                        audio=audio,
+                        output_schema=output_schema,
+                    )
                 out = result.output.text() if result.output is not None else ""
                 bridge.publish(TEXT_MESSAGE_START, {"role": "assistant"})
                 if out:
@@ -575,7 +818,16 @@ class Team:
                 except (asyncio.CancelledError, Exception):
                     pass
 
-    async def _run_broadcast_streaming(self, task: str, bridge: Any) -> "RunResult":
+    async def _run_broadcast_streaming(
+        self,
+        task: str,
+        bridge: Any,
+        *,
+        images: "list[str | Any] | None" = None,
+        videos: "list[str | Any] | None" = None,
+        audio: "list[str | Any] | None" = None,
+        output_schema: type | None = None,
+    ) -> "RunResult":
         import time
 
         from loomable.agent.run import RunResult
@@ -587,7 +839,13 @@ class Team:
             t0 = time.monotonic()
             bridge.publish(NODE_STARTED, {"node_id": label, "role": label})
             try:
-                result = await member.arun(task)
+                result = await member.arun(
+                    task,
+                    images=images,
+                    videos=videos,
+                    audio=audio,
+                    output_schema=output_schema,
+                )
                 text = result.output.text()
                 bridge.publish(
                     NODE_FINISHED,
@@ -621,7 +879,16 @@ class Team:
             metadata={"team_mode": "broadcast", "hard": True},
         )
 
-    async def _run_sequential_streaming(self, task: str, bridge: Any) -> "RunResult":
+    async def _run_sequential_streaming(
+        self,
+        task: str,
+        bridge: Any,
+        *,
+        images: "list[str | Any] | None" = None,
+        videos: "list[str | Any] | None" = None,
+        audio: "list[str | Any] | None" = None,
+        output_schema: type | None = None,
+    ) -> "RunResult":
         import time
 
         from loomable.agent.run import RunResult
@@ -639,7 +906,13 @@ class Team:
             t0 = time.monotonic()
             bridge.publish(NODE_STARTED, {"node_id": label, "role": label})
             try:
-                result = await member.arun(prompt)
+                result = await member.arun(
+                    prompt,
+                    images=images if i == 0 else None,
+                    videos=videos if i == 0 else None,
+                    audio=audio if i == 0 else None,
+                    output_schema=output_schema if i == len(self._members) - 1 else None,
+                )
                 current = result.output.text()
                 bridge.publish(
                     NODE_FINISHED,

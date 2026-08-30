@@ -80,6 +80,30 @@ class TestAppendReducer:
         assert state.get("log") == "event1"
         assert state.get("other") == "plain"
 
+    def test_append_wraps_list_payload(self):
+        state = SharedState(reducers={"log": append})
+        state.write("log", "a")
+        state.write("log", ["b"])
+        assert state.get("log") == ["a", ["b"]]
+
+
+class TestExtendReducer:
+    def test_extend_concatenates_lists(self):
+        from loomable.flow.state import extend
+
+        state = SharedState(reducers={"items": extend})
+        state.write("items", ["a"])
+        state.write("items", ["b", "c"])
+        assert state.get("items") == ["a", "b", "c"]
+
+    def test_extend_wraps_scalars(self):
+        from loomable.flow.state import extend
+
+        state = SharedState(reducers={"items": extend})
+        state.write("items", "a")
+        state.write("items", "b")
+        assert state.get("items") == ["a", "b"]
+
 
 # ---------------------------------------------------------------------------
 # Tests: merge reducer
@@ -177,6 +201,30 @@ class TestSnapshotRestore:
         snap = state.snapshot()
         restored = SharedState.restore(snap)
         assert restored.get("nested") == {"a": {"b": [1, 2, {"c": 3}]}}
+
+    def test_roundtrip_empty_mediapart_from_skipped_step(self):
+        """on_failure=skip writes empty bytes; resume must not MediaPartError."""
+        from loomable.content import AgentOutput
+        from loomable.content.parts import MediaPart, Modality
+
+        state = SharedState()
+        state.write(
+            "vendor",
+            AgentOutput(
+                parts=[
+                    MediaPart(
+                        modality=Modality.TEXT,
+                        media_type="text/plain",
+                        data=b"",
+                    )
+                ]
+            ),
+        )
+        snap = state.snapshot()
+        assert snap["vendor"]["parts"][0]["data_b64"] == ""
+        restored = SharedState.restore(snap)
+        out = restored.get("vendor")
+        assert out.parts[0].data == b""
 
 
 # ---------------------------------------------------------------------------

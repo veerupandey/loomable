@@ -88,6 +88,7 @@ class WorkflowCompiler:
         from loomable.flow.condition import Condition
         from loomable.flow.loop import Loop
         from loomable.flow.parallel_group import Parallel_Group
+        from loomable.flow.route import Route
         from loomable.flow.step import Step
 
         nodes: dict[str, Node | RouterNode] = {}
@@ -98,7 +99,7 @@ class WorkflowCompiler:
         # that represent its "entry" and "exit" points for edge connection.
         # For simple elements (Step, Loop, Parallel_Group, Workflow),
         # entry == exit == the single node_id.
-        # For Condition, entry is the router node, exit is the join node.
+        # For Condition / Route, entry is the router node, exit is the join node.
 
         # We collect (entry_id, exit_id) tuples for each step element.
         element_endpoints: list[tuple[str, str]] = []
@@ -112,15 +113,31 @@ class WorkflowCompiler:
                     require_confirmation=bool(
                         getattr(element, "require_confirmation", False)
                     ),
+                    reads=getattr(element, "reads", None),
                 )
                 element_endpoints.append((node_id, node_id))
 
             elif isinstance(element, Parallel_Group):
                 node_id = element.name
-                # The Parallel_Group is already a Runnable (has arun).
-                # Treat it as a single composite node in the flow.
+                # Inherit durability so on_failure="stop" inside a parallel
+                # group still checkpoints successful siblings.
+                inner = getattr(element, "_compiled_flow", None)
+                if inner is not None and checkpointer is not None:
+                    inner._checkpointer = checkpointer
+                    # Scoped thread id avoids colliding with the parent flow.
+                    base = session_id or "default"
+                    inner._session_id = f"{base}::parallel::{node_id}"
+                if inner is not None and reducers:
+                    inner._reducers = dict(reducers)
+                # Treat as a single composite node in the outer flow.
                 nodes[node_id] = Node(node_id=node_id, runnable=element)
                 element_endpoints.append((node_id, node_id))
+
+            elif isinstance(element, Route):
+                router_id, join_id = _compile_route(
+                    element, i, nodes, edges
+                )
+                element_endpoints.append((router_id, join_id))
 
             elif isinstance(element, Condition):
                 # A Condition compiles to:
@@ -165,13 +182,16 @@ class WorkflowCompiler:
                         result = cond_fn(state)
                         if result:
                             selected = then_target
+                            reason = "condition_true"
                         elif else_target is not None:
                             selected = else_target
+                            reason = "condition_false"
                         else:
                             # No else branch — still route to then (will be
                             # a passthrough). Actually, we need a passthrough node.
                             # We'll route to the join node directly.
                             selected = then_target
+                            reason = "condition_true_no_else"
 
                         output = AgentOutput(
                             parts=[
@@ -182,7 +202,11 @@ class WorkflowCompiler:
                                 )
                             ]
                         )
-                        return RunResult(output=output, session_id="")
+                        return RunResult(
+                            output=output,
+                            session_id="",
+                            metadata={"selection": selected, "reason": reason},
+                        )
 
                     return chooser
 
@@ -200,11 +224,12 @@ class WorkflowCompiler:
                 then_branch = _BranchRunnable(element.then_steps)
                 nodes[then_id] = Node(node_id=then_id, runnable=then_branch)
 
-                # Create edges from router to branches
+    # Create edges from router to branches
                 edges.append(Edge(
                     source=router_id,
                     target=then_id,
                     condition=lambda state: state.get("_router_selection") == then_id,
+                    payload_key="_route_input",
                 ))
 
                 if element.else_steps is not None:
@@ -214,6 +239,7 @@ class WorkflowCompiler:
                         source=router_id,
                         target=else_id,
                         condition=lambda state: state.get("_router_selection") == else_id,
+                        payload_key="_route_input",
                     ))
 
                 # Create a passthrough join node that simply passes input through.
@@ -234,7 +260,11 @@ class WorkflowCompiler:
             elif isinstance(element, Loop):
                 # Loop is already a Runnable — wrap as a single node.
                 node_id = f"_loop_{i}"
-                nodes[node_id] = Node(node_id=node_id, runnable=element)
+                nodes[node_id] = Node(
+                    node_id=node_id,
+                    runnable=element,
+                    reads=getattr(element, "reads", None),
+                )
                 element_endpoints.append((node_id, node_id))
 
             else:
@@ -246,10 +276,15 @@ class WorkflowCompiler:
 
         # Connect sequential elements with edges in declaration order.
         # Each element's exit connects to the next element's entry.
+        # When the target Step declares ``reads=``, the edge carries that
+        # SharedState key as its payload contract.
         for j in range(len(element_endpoints) - 1):
             _, exit_id = element_endpoints[j]
             entry_id, _ = element_endpoints[j + 1]
-            edges.append(Edge(source=exit_id, target=entry_id))
+            payload_key = getattr(steps[j + 1], "reads", None)
+            edges.append(
+                Edge(source=exit_id, target=entry_id, payload_key=payload_key)
+            )
 
         # Build the final Flow with all nodes and edges.
         # Convert the nodes dict to use Runnable values (Flow expects dict[str, Runnable]).
@@ -274,6 +309,43 @@ class WorkflowCompiler:
 # ---------------------------------------------------------------------------
 # Internal helper classes
 # ---------------------------------------------------------------------------
+
+
+def _compile_route(
+    element: Any,
+    index: int,
+    nodes: dict[str, Any],
+    edges: list[Edge],
+) -> tuple[str, str]:
+    """Compile a Route into router + N branches + join. Returns (entry, exit)."""
+    from loomable.flow.helpers import _make_route_condition
+
+    router_id = f"_route_{index}_router"
+    join_id = f"_route_{index}_join"
+    choice_ids = list(element.choices.keys())
+
+    nodes[router_id] = RouterNode(
+        chooser=element.chooser,
+        choices=choice_ids,
+        handoff=bool(getattr(element, "handoff", False)),
+    )
+
+    for choice_id, branch in element.choices.items():
+        branch_id = f"_route_{index}_{choice_id}"
+        steps = branch if isinstance(branch, list) else [branch]
+        nodes[branch_id] = Node(node_id=branch_id, runnable=_BranchRunnable(steps))
+        edges.append(
+            Edge(
+                source=router_id,
+                target=branch_id,
+                condition=_make_route_condition(choice_id),
+                payload_key="_route_input",
+            )
+        )
+        edges.append(Edge(source=branch_id, target=join_id))
+
+    nodes[join_id] = Node(node_id=join_id, runnable=_PassthroughRunnable())
+    return router_id, join_id
 
 
 def _get_element_name(element: Any, index: int) -> str:

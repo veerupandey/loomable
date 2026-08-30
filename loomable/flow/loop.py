@@ -105,9 +105,9 @@ class CallableVerifier:
         loop = Loop(body, verifier=lambda output, ctx: "done" in output.text)
 
     The callable receives the :class:`AgentOutput` and :class:`RunContext` and
-    must return a truthy/falsy value. On falsy, a ``VerdictResult(ok=False)``
-    is returned with an empty detail string (the callable has no way to
-    provide detail).
+    may return a truthy/falsy value, a detail string (treated as failure), or a
+    :class:`VerdictResult`. On falsy bool, detail defaults to
+    ``"Acceptance check failed"`` so repair loops have usable feedback.
     """
 
     def __init__(self, fn: Callable[[AgentOutput, RunContext], bool]) -> None:
@@ -118,7 +118,11 @@ class CallableVerifier:
         result = self._fn(output, context)
         if isinstance(result, VerdictResult):
             return result
-        return VerdictResult(ok=bool(result))
+        if isinstance(result, str) and result:
+            return VerdictResult(ok=False, detail=result)
+        if result:
+            return VerdictResult(ok=True)
+        return VerdictResult(ok=False, detail="Acceptance check failed")
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +191,17 @@ class Loop:
             raise ValueError("Either 'body' or 'steps' must be provided")
 
         self._max_iterations = max_iterations
+
+        # Propagate edge data contracts from a Step body so the compiler can
+        # stamp ``payload_key`` on the edge into this Loop node.
+        self.reads = getattr(body, "reads", None) if body is not None else None
+        if self.reads is None and steps:
+            # First Step in a steps= list may declare reads=
+            for el in steps:
+                reads = getattr(el, "reads", None)
+                if reads:
+                    self.reads = reads
+                    break
 
         if verifier is None:
             self._verifier: Verifier = AlwaysOkVerifier()

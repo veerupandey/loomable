@@ -1,5 +1,104 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Graph engineering** primitives on Workflow / Step (see `examples/patterns/07_graph_engineering.py`):
+  - `Step(on_failure=...)` / `Workflow.step(..., on_failure=)` — local failure policies: `raise`, `retry`, `skip`, `fallback`, `stop` (`StepFailed`)
+  - `Step(reads=...)` / edge `payload_key` — edge data contracts so a step consumes a named SharedState key
+  - `Workflow.verify(body, check=..., max_retries=)` — generate → verify → repair with a hard budget
+  - `Step(complexity="low"|"high")` — cost hint for model-tier routing
+  - Inspectable `route_decision` / SharedState `_route_decision` from `RouterNode` and `Workflow.branch`
+  - Hard-path fixes: parallel `stop` commits successful siblings before escalating; `Workflow.state` preserved after `StepFailed`; `max_retries` honored for all policies; cancel interrupts retries; nested `Parallel_Group` inherits scoped checkpointer; `CancelledError` not swallowed as skip/fallback
+- **LangGraph / Agno control-plane parity:**
+  - `Workflow.route(chooser, **choices)` — N-way Router (Agno Router / LangGraph multi-edge)
+  - `Command(goto=..., update=...)` — combine routing with state patches from steps/choosers
+  - `Workflow.get_state()` / `update_state()` / `list_states()` — checkpoint inspection, patch, time-travel list
+  - `Workflow(reducers={...})` — expose SharedState reducers for parallel joins
+- Nested `Flow` / `Parallel_Group` reuses the parent `SharedState` (parent keys no longer wiped by fan-out)
+- Final checkpoints record only nodes that actually ran (unselected `.route` / `.branch` arms are not marked completed)
+- Parallel/hierarchical engines no longer leak `state_updates` to parent (fixes double-apply with reducers)
+- `extend` SharedState reducer for list fan-in; `Workflow.fork_session()` for checkpoint time-travel forks
+- `InMemoryCheckpointer.fork()` for tests / in-memory time-travel
+- Empty `MapNode` publishes `map=[]` (+ totals metadata) so plan→map→synthesize / Case glue never sees an AgentOutput placeholder
+
+### Changed
+
+- Examples README + pattern docstrings clarify which routing / quality-gate API to pick
+  (`Team(mode="route")` vs `Workflow.branch` vs `Workflow.route`; `.loop` vs `.verify`)
+  so overlapping demos are not confused for the same feature.
+- `Command` docs: `goto` is route-arm selection only (no sequential skip-ahead); `resume` reserved / unwired
+
+### Fixed
+
+- `FlowPaused.node_id` convenience property (paused step name)
+- `Step(reads=)` honored when the step is a nested/root runnable (no incoming edge) —
+  SharedState contract now matches edge `payload_key` behavior
+- Compiled `Node.reads` + sequential/parallel engines resolve root-node data contracts
+- Top-level Flow writes `_workflow_input` so `.route` choosers after a pipeline can
+  still classify the original ticket (ambient input remains previous-step output)
+- SharedState checkpoint restore: empty skipped-step `MediaPart` (`data_b64=""`) no
+  longer raises `MediaPartError` on HITL resume
+
+### Fixed (agent / subagents audit)
+
+- Nested `max_depth` now propagates: `delegate_to_*` rebuilds the child at `depth+1`
+  with the parent's chain budget (was always rebuilt at depth 0)
+- `SubagentOutcome` allows successful `result=None` (Flow/Map workers that return None)
+
+### Added (agent harness parity)
+
+- `PLAN` complexity path uses kernel `planner=` when set on `BuiltAgent` / `Agent`
+- `Agent(planning_model=)` wires the kernel planner's dedicated model/tier id
+- Plan workers run the full tool loop (tools, hooks, knowledge) per step
+- `plan_tool=True` workers use the tool loop (parity with PLAN path); kernel planner when set
+- PLAN path fills `RunResult.sub_results` (`step_0`, …)
+- `astream` streams final text deltas during the tool loop; tool-advertised model
+  turns use `complete()` so broken `stream()` stubs cannot bypass tool dispatch
+- `Team.astream` — soft modes delegate to the coordinator; hard modes chunk `arun` output
+- `Team(mode="tasks")` — shared TodoTools checklist + delegate loop (`max_iterations=`)
+  for Agno `TeamMode.tasks` parity
+- Nested `Team` members via `Team.as_agent()` / automatic coercion
+- `create_deep_agent(profile="sandbox")` — general profile with `code_exec` / `shell` and
+  exec tools in the discovery core (`run_python`, `run_shell`)
+- Hard `Team` modes (`broadcast` / `sequential`) forward `images` / `videos` / `audio` /
+  `output_schema` to member runs (including streaming helpers)
+- Competitive audit: `docs/COMPETITIVE.md` + `tests/unit/test_competitive_agent_audit.py`
+
+### Added (Agno ease + LangGraph flex)
+
+- `Send` + `Workflow.map_over(..., over=...)` — LangGraph-style dynamic list fan-out
+- `Workflow.map(..., over=...)` — parameterized plan→map key
+- `Workflow.bind_session()` — HTTP checkpoint thread binding
+- `RUN_PAUSED` SSE event when Workflow HITL pauses (not `RUN_ERROR`)
+- `mount_team` / `mount_workflow` — Team + Workflow HTTP (state / approve / resume on body)
+- `POST /run` returns `202` + pending payload on Workflow `FlowPaused`
+
+### Fixed (hostile audit)
+
+- **Planner opt-in:** `Agent.build()` no longer auto-installs kernel `Planner`; JSON plan path is live when `planner=` is unset
+- **Shared plan parse:** `loomable.plan_parse.parse_plan_steps` (JSON array → bullets) used by kernel `Planner`, `_run_plan`, and `plan_tool`
+- **`planning_model=` alias:** registered on `ModelInterface` without duplicating in `tiers=`
+- **`plan_tool`:** synthesizer reads `context.shared_state["map"]`; workers exclude `plan` from tool schemas; `idempotent=False`
+- **Team budgets:** removed per-`arun` Agent rebuild (session stable); soft `astream` / coordinate fallback via `_soft_arun_with_fallback`
+- **Case mode:** rejects unsupported per-call kwargs; `Case.from_agent` rejects `subagents` / `complexity_router`; copies `discovery` into runtime
+- **Nested checkpoints:** `map_over` omits inner checkpointer; nested `Flow` / `SequentialEngine` skip final `complete=True`
+- **`Command.goto`:** empty text output (no `str(goto)` poisoning step input)
+- **`MapNode`:** missing / non-list keys raise `FlowConfigError`; empty list remains valid no-op
+- **Workflow HITL:** `approve` validates status; `update_state(as_node=…)` blocked on pending HITL; `bind_session(resume=False)` clears checkpoint
+- **Serve:** `ApproveRequestModel.session_id`; workflow `/run` responses include workflow `session_id`
+- **Team:** `route` requires first delegate; hard modes set `metadata["member_errors"]`; `strict=True` re-raises; tasks todo verifier
+- **`create_deep_agent(profile="sandbox")`:** permissive approver for sandbox exec tools only
+- **Parallel HITL:** runtime warning when `require_confirmation` used with parallel engine
+
+### Added (hostile audit tests)
+
+- `tests/unit/test_planner_fixes.py`, `test_plan_tool_fixes.py`, `test_team_budget_session.py`
+- `tests/unit/test_map_over_checkpoint.py`, `test_command_goto_input.py`, `test_case_mode_guards.py`
+
+- `_run_plan` aggregates `tool_activity` from plan-step tool loops into the final `RunResult`
+
 ## 0.2.0b0 — public beta
 
 ### Added

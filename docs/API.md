@@ -40,7 +40,7 @@ result = await agent.arun("When was Python created?")
 print(result.output.text())
 ```
 
-`run()` is a sync wrapper. With tools, the tool loop runs automatically; without tools, a single model call. `complexity_router=` is opt-in.
+`run()` is a sync wrapper. With tools, the tool loop runs automatically; without tools, a single model call. `complexity_router=` is opt-in (`SINGLE` / `TOOL_LOOP` / `PLAN`). `PLAN` uses `_run_plan` (`plan_and_execute`); when `planner=` is set, planning goes through the kernel `Planner`, and each step runs the tool loop when tools are registered. `planning_model=` sets the kernel planner's dedicated model/tier id. `plan_tool=True` exposes an on-demand plan tool with the same worker tool-loop behavior.
 
 ```python
 result.output.text()
@@ -53,6 +53,8 @@ result.trace            # debug=True or events=JSONTracer()
 ```
 
 Persona fields (`role`, `goal`, `instructions`, `description`) assemble into the system prompt. `role` is reused in delegation labels.
+
+**HITL tools:** `require_confirmation=["deploy"]` gates tools; without a custom `approver`, the default is **deny** (headless-safe). Deep `code_exec` / `shell` auto-join that list.
 
 **Require tools:** `require_tools=["write_file:output/x.md"]` nudges until those side effects happen. `strict_require_tools=True` raises `RequireToolsError`. Same knobs inherit onto Agent steps via `Workflow(require_tools=...)` or `.step(..., require_tools=...)`.
 
@@ -72,7 +74,7 @@ from loomable import Agent, Team
 team = Team(
     members=[researcher, writer, critic],
     model="openai:gpt-4o-mini",
-    mode="coordinate",  # coordinate | route | broadcast | sequential
+    mode="coordinate",  # coordinate | route | broadcast | sequential | tasks
 )
 result = await team.arun("Review our API design")
 ```
@@ -83,10 +85,13 @@ result = await team.arun("Review our API design")
 | `route` | soft | LLM picks one member |
 | `broadcast` | hard | Same input to all, merge labeled results |
 | `sequential` | hard | Chain members in order |
+| `tasks` | soft | Shared TodoTools checklist + delegate until done (`max_iterations=`) — Agno `TeamMode.tasks` parity |
 
-`hard=True` is only valid with `broadcast` / `sequential`. Soft `coordinate` auto-requires `delegate_to_*` and runs skipped members (`metadata["team_coordinate_fallback"]`).
+`hard=True` is only valid with `broadcast` / `sequential`. Soft `coordinate` auto-requires `delegate_to_*` and runs skipped members (`metadata["team_coordinate_fallback"]`). `Team.astream` mirrors `Agent.astream` for soft modes; hard modes chunk the merged `arun` result. Members may be nested `Team` instances (wrapped via `Team.as_agent()`).
 
-Or pass `subagents=[...]` on a parent `Agent` — each becomes `delegate_to_<role>`. Nested subagents are allowed.
+Or pass `subagents=[...]` on a parent `Agent` — each becomes `delegate_to_<role>`. Nested subagents are allowed; `max_depth` (default 4) is an absolute nest budget from the top parent (child rebuilds at `depth+1`). `max_delegations` caps successful `delegate_to_*` calls in one parent run.
+
+Note: Agent `subagents=` (LLM delegation tools) is separate from kernel `SubagentManager` (used by Workflow parallel/map engines).
 
 ---
 
@@ -115,11 +120,53 @@ print(wf.state.get("research").text())
 
 Declarative: `Workflow("pipe", steps=[Step("a", a), Step("b", b)])`.
 
-`confirm=True` requires `checkpointer=` + `session_id=`. Not supported inside `.parallel()` / `.branch()` / `.loop()`.
+`confirm=True` requires `checkpointer=` + `session_id=`. Not supported inside `.parallel()` / `.branch()` / `.loop()` / `.route()`. Catch `FlowPaused` and use `.node_id` (or `pending.tool_name`) before `approve` + `arun(resume=True)`.
 
 `Workflow(memory=True)` is a callable-step blackboard on `RunContext.memory` — **not** Agent chat memory. Agent steps share via SharedState output chaining.
 
-`Loop(body=agent, verifier=..., max_iterations=3)` is a Runnable on its own. Workflow uses `.loop(..., until=)`.
+Top-level runs also write `_workflow_input` (the original `arun` argument) into SharedState. After a pipeline, `.route` choosers see the **previous step's output** as ambient input — read `_workflow_input` or your own keys when classifying the original ticket.
+
+`Loop(body=agent, verifier=..., max_iterations=3)` is a Runnable on its own. Workflow uses `.loop(..., until=)` or `.verify(body, check=..., max_retries=)` (bounded generate → check → repair).
+
+### Graph-engineering knobs
+
+```python
+from loomable import Command, Workflow
+
+wf = (
+    Workflow("job", session_id="t1", checkpointer=cp, reducers={"items": append})
+    .parallel(
+        Step("a", agent_a),
+        Step("b", agent_b, on_failure="skip"),
+    )
+    .route(
+        lambda change: Command(goto="full", update={"severity": "high"}),
+        quick=quick_review,
+        full=full_audit,
+    )
+    .step("draft", drafter, reads="evidence")
+    .verify(polisher, check=quality_ok, max_retries=2)
+)
+state = await wf.get_state()
+await wf.update_state({"note": "human edit"})
+```
+
+| Knob | Where | Effect |
+|------|--------|--------|
+| `on_failure=` | `Step` / `.step` | `raise` / `retry` / `skip` / `fallback` / `stop` — failure stays local |
+| `max_retries=` | `Step` / `.step` | Extra primary attempts before `on_failure` applies (default `2` for `retry`, else `0`) |
+| `reads=` | `Step` / `.step` | Feeds `state[reads]` instead of ambient previous output (works for nested/root steps too) |
+| `.verify` | `Workflow` | Verifier gate with hard repair budget (`max_retries + 1` attempts) |
+| `.route` | `Workflow` | N-way Router (Agno / LangGraph multi-edge); chooser may return `Command(goto=…)` |
+| `Command` | step / chooser return | `goto` selects route arms; `update` patches SharedState (`resume` reserved / unwired) |
+| `Send` | chooser `Command.update` lists | Dynamic map payloads — `Send.node` is metadata only; use `Workflow.map_over(..., over="tasks")` |
+| `get_state` / `update_state` / `list_states` / `fork_session` | `Workflow` | Checkpoint control plane for resume / time-travel |
+| `reducers=` | `Workflow` | Per-key SharedState merge (`append` / `extend` / `merge`) for parallel joins |
+| `complexity=` | `Step` / `.step` | `"low"` / `"high"` cost hint for model-tier optimization |
+| `_route_decision` | SharedState | Inspectable `{selected, choices, reason, handoff}` after routers / `.branch` / `.route` |
+| `_workflow_input` | SharedState | Original top-level `arun` input (for routers after a pipeline) |
+
+`on_failure="stop"` raises `StepFailed` after successful parallel siblings are committed (and checkpointed when a checkpointer is configured). `Workflow.state` still reflects completed work after a hard stop. Cooperative `cancel()` interrupts further retries.
 
 ---
 
@@ -165,7 +212,7 @@ agent = create_deep_agent(model, profile="code", repo="./my-app")
 
 `arun()` builds the agent. Call `agent.build()` only when you need the `BuiltAgent` (inspect tools, attach listeners).
 
-Planning (`TodoTools`), local workspace FS, `task` / `task_batch` specialists, skills (`load_skill`), discovery (`search_tools` / `activate_tool`). `discovery_core="research-slim"` is experimental. Sandbox: `code_exec=True` / `shell=True`. Case-only kwargs (`dispatch`, `max_rounds`, `checkpointer`) require `mode="case"`. `board=False` is allowed without case mode.
+Planning (`TodoTools`), local workspace FS, `task` / `task_batch` specialists, skills (`load_skill`), discovery (`search_tools` / `activate_tool`). `discovery_core="research-slim"` is experimental. Profiles: `general` | `research` | `code` | `sandbox` (`sandbox` = general + `code_exec` / `shell` with exec tools in the discovery core). Case-only kwargs (`dispatch`, `max_rounds`, `checkpointer`) require `mode="case"`. `board=False` is allowed without case mode.
 
 ---
 
@@ -276,7 +323,7 @@ async for chunk in agent.astream("hello"):
         print(chunk.delta.data.decode(), end="")
 ```
 
-`astream` is token-level only for single-shot (no tools). With tools it falls back to `arun` then chunks. Case / `mode="case"` do not support `astream`.
+`astream` streams token deltas for single-shot runs. With tools, model turns that advertise tool schemas use ``complete()`` (so broken ``stream()`` stubs cannot skip the tool loop); final text is still streamed as deltas. Without ``stream()`` on the provider, falls back to ``arun`` then chunks. `Team.astream` follows the same rules. Case / `mode="case"` do not support `astream`.
 
 ```python
 async for ev in agent.astream_events(prompt):
@@ -289,7 +336,7 @@ async for ev in case.astream_events(prompt):
 
 | Family | Events |
 |--------|--------|
-| Lifecycle | `RUN_STARTED`, `RUN_FINISHED`, `RUN_ERROR` |
+| Lifecycle | `RUN_STARTED`, `RUN_FINISHED`, `RUN_ERROR`, `RUN_PAUSED` (Workflow HITL — not an error) |
 | Text | `TEXT_MESSAGE_START`, `TEXT_MESSAGE_CONTENT`, `TEXT_MESSAGE_END` |
 | Tools | `TOOL_CALL_START`, `TOOL_CALL_ARGS`, `TOOL_CALL_END`, `TOOL_CALL_RESULT` |
 | Graph | `NODE_STARTED`, `NODE_FINISHED` |
@@ -297,19 +344,19 @@ async for ev in case.astream_events(prompt):
 
 ```python
 from fastapi import FastAPI
-from loomable.serve import mount_agent, mount_case
+from loomable.serve import mount_agent, mount_case, mount_team, mount_workflow
 
 app = FastAPI()
 mount_agent(app, agent, prefix="/agent", api_key="secret")
+mount_team(app, team, prefix="/teams", api_key="secret")      # alias of mount_agent
 mount_case(app, case, prefix="/cases", api_key="secret")
-# POST /agent/run          JSON
-# POST /agent/run/events   SSE  (disconnect → cancel)
+mount_workflow(app, wf, prefix="/workflows", api_key="secret")
+# POST /agent/run          JSON  (resume= on body when supported)
+# POST /agent/run/events   SSE  (disconnect → cancel; RUN_PAUSED on Workflow HITL)
 # POST /agent/run/stream   NDJSON, Agent only (omitted for Case / mode=case)
-# POST /cases/run          JSON
-# POST /cases/run/events   SSE
+# GET/PATCH /workflows/state — Workflow get_state / update_state
+# POST /workflows/approve  — HITL approve (+ auto_run to resume; optional session_id on body)
 ```
-
-Auth when `api_key=` is set: `Authorization: Bearer …` or `X-API-Key`. No `mount_team` / `mount_workflow`. See [SECURITY.md](../SECURITY.md).
 
 ---
 

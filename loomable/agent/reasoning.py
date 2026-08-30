@@ -44,18 +44,13 @@ def make_plan_tool(agent: "BuiltAgent") -> FunctionTool:
 
     The tool signature is ``plan(task: str, max_steps: int = 5) -> str``. It
     builds a plan→map→synthesize Flow using :func:`~loomable.flow.helpers.plan_and_execute`
-    internally (Req 17.2), replacing the removed ``AutoPlan`` class. The planner,
-    worker, and synthesizer are all backed by the agent's single-shot path so the
-    agent's session/tools/knowledge remain available.
-
-    This lets the model escalate a simple loop into a dynamic graph on demand
-    without requiring a separate graph engine.
+    internally (Req 17.2). Planning uses the kernel :class:`~loomable.kernel.planner.Planner`
+    when set on the agent; workers use the full tool loop when tools are registered
+    (parity with the complexity-router PLAN path).
     """
 
     async def plan(task: str, max_steps: int = 5) -> Any:
         """Decompose a complex task into parallel steps, execute them, and synthesize the results."""
-        import json as _json
-
         from loomable.content import AgentInput
         from loomable.flow.helpers import plan_and_execute
         from loomable.kernel.models import ToolResult
@@ -63,8 +58,18 @@ def make_plan_tool(agent: "BuiltAgent") -> FunctionTool:
         plan_steps: list[str] = []
 
         async def _planner(input: Any, **kwargs: Any) -> dict:
-            """Ask the model for a concise plan."""
+            """Produce plan steps — kernel Planner when set, else JSON prompt."""
             nonlocal plan_steps
+            if getattr(agent, "planner", None) is not None:
+                from loomable.kernel.planner import TaskContext
+
+                exec_plan = await agent.planner.plan(TaskContext(task=task))
+                steps = [str(s).strip() for s in exec_plan.steps if str(s).strip()]
+                plan_steps = steps[:max_steps] or [task]
+                return {"plan_steps": plan_steps}
+
+            from loomable.plan_parse import parse_plan_steps
+
             plan_prompt = (
                 f"You are a planner. Break the user's task into at most {max_steps} "
                 "concrete, independent, actionable steps. Return ONLY a JSON array of "
@@ -75,45 +80,40 @@ def make_plan_tool(agent: "BuiltAgent") -> FunctionTool:
             result = await agent._run_single(
                 AgentInput.from_text(plan_prompt), include_history=False
             )
-            text = result.output.text().strip()
-            # Strip code fences if present.
-            if text.startswith("```"):
-                text = text.split("\n", 1)[-1] if "\n" in text else text
-                if text.endswith("```"):
-                    text = text[:-3]
-                text = text.strip()
-                if text.startswith("json"):
-                    text = text[len("json"):].strip()
-            try:
-                steps = _json.loads(text)
-                if not isinstance(steps, list):
-                    steps = [text]
-            except (ValueError, _json.JSONDecodeError):
-                steps = [
-                    line.strip().lstrip("-*•0123456789.) ")
-                    for line in text.splitlines()
-                    if line.strip() and not line.strip().startswith("#")
-                ]
-            plan_steps = [str(s) for s in steps[:max_steps]]
+            steps = parse_plan_steps(result.output.text(), max_steps=max_steps)
+            plan_steps = steps
             return {"plan_steps": plan_steps}
 
         async def _worker(input: Any, **kwargs: Any) -> str:
-            """Run a single plan step."""
+            """Run a single plan step with the agent's tool loop when tools exist."""
             step = input if isinstance(input, str) else str(input)
             prompt = (
                 f"Overall task:\n{task}\n\n"
                 f"Complete ONLY this step, concisely and concretely:\n{step}"
             )
-            result = await agent._run_single(
-                AgentInput.from_text(prompt), include_history=False
-            )
+            step_input = AgentInput.from_text(prompt)
+            if agent.tool_runtime._tools:
+                result = await agent._run_tool_loop(
+                    step_input,
+                    include_history=False,
+                    exclude_tools=frozenset({"plan"}),
+                )
+            else:
+                result = await agent._run_single(step_input, include_history=False)
             return result.output.text()
 
-        async def _synthesizer(input: Any, **kwargs: Any) -> str:
+        async def _synthesizer(input: Any, *, context: Any = None, **kwargs: Any) -> str:
             """Combine step results into a final answer."""
-            state_data = input if isinstance(input, dict) else {}
-            pieces = state_data.get("map", []) or []
-            combined = "\n".join(f"- {p}" for p in pieces) if pieces else str(input)
+            pieces: list[Any] = []
+            if context is not None and getattr(context, "shared_state", None) is not None:
+                raw = context.shared_state.get("map")
+                if isinstance(raw, list):
+                    pieces = raw
+            if not pieces and isinstance(input, dict):
+                pieces = input.get("map", []) or []
+            if not pieces:
+                pieces = [str(input)]
+            combined = "\n".join(f"- {p}" for p in pieces)
             prompt = (
                 f"Original task:\n{task}\n\n"
                 f"Results from the planned steps:\n{combined}\n\n"
@@ -136,4 +136,9 @@ def make_plan_tool(agent: "BuiltAgent") -> FunctionTool:
             metadata={"plan_steps": plan_steps},
         )
 
-    return FunctionTool(plan, name="plan", description="Decompose a complex task into parallel steps, execute them, and synthesize the results.", idempotent=True)
+    return FunctionTool(
+        plan,
+        name="plan",
+        description="Decompose a complex task into parallel steps, execute them, and synthesize the results.",
+        idempotent=False,
+    )

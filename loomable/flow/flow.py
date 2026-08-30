@@ -339,13 +339,25 @@ class Flow:
         from loomable.flow.optimizer import Optimizer
         from loomable.flow.state import SharedState
 
-        # 1. Build SharedState
-        state = SharedState(reducers=self._reducers)
-
-        # 2. Set up RunContext (use provided or create default)
+        # 1–2. SharedState + RunContext
+        # Nested Flows (e.g. Parallel_Group inside Workflow) must reuse the
+        # caller's SharedState so parent keys survive fan-out/join.
         ctx = context or RunContext()
-        # Attach shared_state to context so nodes can access it
-        ctx.shared_state = state
+        nested = context is not None and context.shared_state is not None
+        if nested:
+            state = ctx.shared_state
+            if self._reducers:
+                for key, reducer in self._reducers.items():
+                    state._reducers.setdefault(key, reducer)
+        else:
+            state = SharedState(reducers=self._reducers)
+            ctx.shared_state = state
+            # Preserve the original user/flow input for later routers / HITL
+            # UIs. Ambient chaining still feeds the previous step's output to
+            # the next node; choosers that need the ticket text should read
+            # ``_workflow_input`` (or their own SharedState keys).
+            if "_workflow_input" not in state._data:
+                state.write("_workflow_input", input)
         # Attach deps if configured
         if self._deps is not None and ctx.deps is None:
             ctx.deps = self._deps
@@ -361,6 +373,7 @@ class Flow:
 
         # 3. Checkpoint restore: if checkpointer configured and a checkpoint
         #    exists for this session, restore SharedState and completed_node_ids (Req 13.2)
+        #    Nested flows skip replace-restore so they cannot wipe the parent state.
         completed_node_ids: set[str] | None = None
         pending_decisions: dict[str, str] | None = None
         if self._checkpointer is not None and self._session_id is not None:
@@ -386,20 +399,37 @@ class Flow:
                 has_incomplete = False
             if has_incomplete and existing_cp is not None:
                 cp_session = existing_cp.session_state
-                if "shared_state" in cp_session:
-                    state = SharedState.restore(
-                        cp_session["shared_state"],
-                        reducers=self._reducers,
-                    )
-                    ctx.shared_state = state
                 if "completed_node_ids" in cp_session:
                     completed_node_ids = set(cp_session["completed_node_ids"])
+                if "shared_state" in cp_session:
+                    if nested:
+                        # Merge into parent state instead of replacing it
+                        restored = SharedState.restore(
+                            cp_session["shared_state"],
+                            reducers=self._reducers,
+                        )
+                        for key, value in restored._data.items():
+                            state.write(key, value)
+                    else:
+                        state = SharedState.restore(
+                            cp_session["shared_state"],
+                            reducers=self._reducers,
+                        )
+                        ctx.shared_state = state
                 # HITL resume: extract pending action decisions (Req 16.3)
                 if existing_cp.pending:
                     pending_decisions = {}
                     for pa in existing_cp.pending:
                         if pa.status in ("approved", "rejected"):
                             pending_decisions[pa.tool_name] = pa.status
+
+            # Re-seed original input if a restored checkpoint predates this key
+            if (
+                not nested
+                and state.get("_workflow_input") is None
+                and input is not None
+            ):
+                state.write("_workflow_input", input)
 
         # 4. Apply optimizer if enabled (Req 10.1, 10.2, 10.7, 10.8)
         optimized_flow = self
@@ -422,6 +452,8 @@ class Flow:
             engine_kwargs["session_id"] = self._session_id
         if pending_decisions is not None:
             engine_kwargs["pending_decisions"] = pending_decisions
+        if nested:
+            engine_kwargs["nested"] = True
 
         try:
             self._active_ctx = ctx
@@ -452,15 +484,27 @@ class Flow:
 
         # 7. Write a final (complete) checkpoint if checkpointer is configured
         #    Skip when cancelled so resume can continue from the last node.
-        if self._checkpointer is not None and not ctx.cancelled:
+        #    Nested inner flows must not mark the parent thread complete.
+        if self._checkpointer is not None and not ctx.cancelled and not nested:
             from loomable.persist.checkpoint import Checkpoint
+
+            ran = result.metadata.get("completed_node_ids")
+            if isinstance(ran, list) and ran:
+                done_ids = list(ran)
+            elif completed_node_ids:
+                done_ids = sorted(completed_node_ids)
+            else:
+                # Fallback: prefer engine-reported set; never invent unselected nodes
+                done_ids = sorted(
+                    (result.sub_results or {}).keys()
+                ) if result.sub_results else []
 
             final_cp = Checkpoint(
                 thread_id=self._session_id or "default",
-                step=len(self._nodes),
+                step=len(done_ids),
                 session_state={
                     "shared_state": state.snapshot(),
-                    "completed_node_ids": sorted(self._nodes.keys()),
+                    "completed_node_ids": done_ids,
                 },
                 complete=True,
             )
@@ -524,7 +568,28 @@ class Flow:
                     text = result.output.text() or ""
                 bridge.publish(RUN_FINISHED, {"text": text[:2000]})
             except Exception as exc:  # noqa: BLE001
-                bridge.publish(RUN_ERROR, {"message": str(exc), "error_type": type(exc).__name__})
+                from loomable.flow.hitl import FlowPaused
+                from loomable.stream import RUN_PAUSED
+
+                if isinstance(exc, FlowPaused):
+                    bridge.publish(
+                        RUN_PAUSED,
+                        {
+                            "node_id": exc.node_id,
+                            "thread_id": exc.thread_id,
+                            "pending": {
+                                "tool_name": exc.pending.tool_name,
+                                "call_id": exc.pending.call_id,
+                                "args": dict(exc.pending.args or {}),
+                                "status": exc.pending.status,
+                            },
+                        },
+                    )
+                else:
+                    bridge.publish(
+                        RUN_ERROR,
+                        {"message": str(exc), "error_type": type(exc).__name__},
+                    )
             finally:
                 self._session_id = prev_session
                 await bus.close()
