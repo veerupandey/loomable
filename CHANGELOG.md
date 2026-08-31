@@ -4,6 +4,7 @@
 
 ### Added
 
+- **Amazon Bedrock provider** (`BedrockProvider`, `pip install "loomable[bedrock]"`) on the unified Converse API — Claude, Nova, Llama, Mistral, etc. Supports system prompts, tool use, image input, streaming, and the standard AWS credential chain (env / shared profile / SSO). Resolver accepts `bedrock:` / `aws:` model strings. See `examples/agents/10_bedrock.py`.
 - **Graph engineering** primitives on Workflow / Step (see `examples/patterns/07_graph_engineering.py`):
   - `Step(on_failure=...)` / `Workflow.step(..., on_failure=)` — local failure policies: `raise`, `retry`, `skip`, `fallback`, `stop` (`StepFailed`)
   - `Step(reads=...)` / edge `payload_key` — edge data contracts so a step consumes a named SharedState key
@@ -22,6 +23,11 @@
 - `extend` SharedState reducer for list fan-in; `Workflow.fork_session()` for checkpoint time-travel forks
 - `InMemoryCheckpointer.fork()` for tests / in-memory time-travel
 - Empty `MapNode` publishes `map=[]` (+ totals metadata) so plan→map→synthesize / Case glue never sees an AgentOutput placeholder
+
+### Fixed
+
+- **Windows portability:** the subprocess sandbox now selects `cmd.exe /c` on Windows (was hardcoded to `/bin/sh -c`) and passes through required Windows env vars, so `run_shell` works cross-platform.
+- **Media MIME inference:** common web media extensions unknown to the platform `mimetypes` registry (e.g. `.webp` on Windows) now resolve via a deterministic fallback map instead of falling back to `application/octet-stream` (which broke the `MediaPart` modality invariant).
 
 ### Changed
 

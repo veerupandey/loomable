@@ -7,6 +7,7 @@ Supported formats:
 - ``"openai:gpt-4o-mini"`` → OpenAIProvider(model="gpt-4o-mini")
 - ``"azure:gpt-4.1-mini"`` → AzureOpenAIProvider(deployment="gpt-4.1-mini")
 - ``"anthropic:claude-sonnet-4-20250514"`` → AnthropicProvider(model="...")
+- ``"bedrock:anthropic.claude-3-haiku-20240307-v1:0"`` → BedrockProvider(model="...")
 - ``"groq:llama-3.3-70b-versatile"`` → GroqProvider(model="...")
 - ``"ollama:llama3.2"`` → OllamaProvider(model="llama3.2")
 - ``"gemini:gemini-2.0-flash"`` → GeminiProvider(model="...")
@@ -58,6 +59,10 @@ def resolve_model(model_str: str) -> Any:
         from .anthropic import AnthropicProvider
         return AnthropicProvider(model=model_name)
 
+    elif provider_key in ("bedrock", "aws"):
+        from .bedrock import BedrockProvider
+        return BedrockProvider(model=model_name)
+
     elif provider_key == "groq":
         from .groq import GroqProvider
         return GroqProvider(model=model_name)
@@ -73,5 +78,5 @@ def resolve_model(model_str: str) -> Any:
     else:
         raise ValueError(
             f"Unknown provider '{provider_key}' in model string '{model_str}'. "
-            f"Supported: openai, azure, anthropic, groq, ollama, gemini."
+            f"Supported: openai, azure, anthropic, bedrock, groq, ollama, gemini."
         )
