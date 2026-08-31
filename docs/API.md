@@ -284,12 +284,15 @@ Agent(model="gemini:gemini-2.0-flash")
 Agent(model="groq:llama-3.3-70b-versatile")
 Agent(model="ollama:mistral")
 Agent(model="azure:gpt-4.1-mini")
+Agent(model="bedrock:amazon.nova-lite-v1:0")  # or "aws:..."; Converse API (us./eu./apac. profiles)
 Agent(model="gpt-4o-mini")  # bare name → OpenAI
 ```
 
 Keys: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY` / `GOOGLE_API_KEY`, `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_DEPLOYMENT_NAME`.
 
 OpenAI-compatible: `OpenAIProvider(model="llama-3", base_url="http://localhost:8000/v1")`.
+
+Amazon Bedrock: `pip install "loomable[bedrock]"`. Uses the standard AWS credential chain (env vars, shared profile, or SSO). Select with `BedrockProvider(model, region_name=..., profile_name=...)` or the `bedrock:` / `aws:` model-string prefix. Requires `bedrock:InvokeModel` permission and model access granted in the region.
 
 ---
 
