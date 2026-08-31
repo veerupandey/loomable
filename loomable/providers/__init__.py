@@ -25,6 +25,7 @@ Example
 """
 
 from .anthropic import AnthropicProvider
+from .bedrock import BedrockProvider
 from .embedders import (
     AzureOpenAIEmbedder,
     Embedder,
@@ -45,6 +46,7 @@ __all__ = [
     "OpenAIProvider",
     "AzureOpenAIProvider",
     "AnthropicProvider",
+    "BedrockProvider",
     "GeminiProvider",
     "GroqProvider",
     "OllamaProvider",
