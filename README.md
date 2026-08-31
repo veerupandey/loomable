@@ -93,7 +93,16 @@ mount_case(app, case, prefix="/cases")                      # POST /cases/run/ev
 
 NDJSON `/run/stream` is Agent-only. Disconnect on `mount_agent` / `mount_case` calls `cancel()`.
 
-Providers: `OpenAIProvider`, `AzureOpenAIProvider`, `AnthropicProvider`, `GeminiProvider`, `GroqProvider`, `OllamaProvider`.
+Providers: `OpenAIProvider`, `AzureOpenAIProvider`, `AnthropicProvider`, `BedrockProvider`, `GeminiProvider`, `GroqProvider`, `OllamaProvider`.
+
+```python
+from loomable import Agent
+from loomable.providers import BedrockProvider  # pip install "loomable[bedrock]"
+
+# Amazon Bedrock (Converse API) — Claude, Nova, Llama, Mistral, ... via one surface.
+# Auth uses the standard AWS chain (env / shared profile / SSO).
+agent = Agent(model=BedrockProvider("amazon.nova-lite-v1:0", region_name="us-east-1"))
+```
 
 ## Examples
 

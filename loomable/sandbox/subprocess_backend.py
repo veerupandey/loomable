@@ -56,7 +56,12 @@ class SubprocessSandbox:
             self._root.mkdir(parents=True, exist_ok=True)
         self._timeout = float(timeout)
         self._scrub_env = scrub_env
-        self._shell_bin = shell_bin or os.environ.get("SHELL") or "/bin/sh"
+        if shell_bin:
+            self._shell_bin = shell_bin
+        elif os.name == "nt":
+            self._shell_bin = os.environ.get("COMSPEC") or "cmd.exe"
+        else:
+            self._shell_bin = os.environ.get("SHELL") or "/bin/sh"
 
     @property
     def root(self) -> str | None:
@@ -75,6 +80,12 @@ class SubprocessSandbox:
                 "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8"),
                 "PYTHONUNBUFFERED": "1",
             }
+            if os.name == "nt":
+                # cmd.exe and most Windows binaries require these to function.
+                for key in ("SystemRoot", "COMSPEC", "PATHEXT", "SystemDrive", "TEMP", "TMP"):
+                    val = os.environ.get(key)
+                    if val:
+                        base[key] = val
             # Keep VIRTUAL_ENV / PYTHONPATH out unless caller opts in via extra.
         else:
             base = dict(os.environ)
@@ -156,9 +167,10 @@ class SubprocessSandbox:
         blocked = shell_command_allowed(command)
         if blocked:
             return ExecResult(error=blocked, returncode=126)
-        # Prefer -c with the configured shell so users get bash features when SHELL=bash.
+        # On Windows use cmd.exe /c; elsewhere -c so users get bash features when SHELL=bash.
+        flag = "/c" if os.name == "nt" else "-c"
         return await self._run(
-            [self._shell_bin, "-c", command],
+            [self._shell_bin, flag, command],
             timeout=timeout,
             env=env,
         )

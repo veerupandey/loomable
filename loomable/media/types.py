@@ -20,6 +20,60 @@ from typing import ClassVar
 from loomable.content.parts import MediaPart, Modality
 
 
+#: Deterministic extension -> MIME map for common media types.
+#: ``mimetypes.guess_type`` is platform/registry dependent (e.g. ``.webp`` is
+#: unknown on many Windows setups), so we resolve well-known media extensions
+#: explicitly first for plug-and-play consistency across platforms.
+_EXT_MIME: dict[str, str] = {
+    # images
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+    "bmp": "image/bmp",
+    "svg": "image/svg+xml",
+    "tif": "image/tiff",
+    "tiff": "image/tiff",
+    "ico": "image/x-icon",
+    "heic": "image/heic",
+    "heif": "image/heif",
+    "avif": "image/avif",
+    # audio
+    "mp3": "audio/mpeg",
+    "wav": "audio/wav",
+    "ogg": "audio/ogg",
+    "flac": "audio/flac",
+    "aac": "audio/aac",
+    "m4a": "audio/mp4",
+    "weba": "audio/webm",
+    # video
+    "mp4": "video/mp4",
+    "mov": "video/quicktime",
+    "webm": "video/webm",
+    "mkv": "video/x-matroska",
+    "avi": "video/x-msvideo",
+    "mpeg": "video/mpeg",
+    "mpg": "video/mpeg",
+}
+
+
+def _guess_mime(ext: str) -> str | None:
+    """Resolve a MIME type from a bare extension.
+
+    Prefer the platform ``mimetypes`` database (so behavior matches system
+    expectations where available), then fall back to an explicit map for
+    common media types the platform may not register (e.g. ``.webp`` on
+    many Windows setups). This keeps inference plug-and-play consistent
+    without overriding a platform's own known mappings.
+    """
+    key = ext.lower().lstrip(".")
+    guessed, _ = mimetypes.guess_type(f"file.{key}")
+    if guessed:
+        return guessed
+    return _EXT_MIME.get(key)
+
+
 class MediaResolveError(Exception):
     """Raised when media content cannot be resolved (file not found, URL unreachable)."""
 
@@ -107,12 +161,11 @@ class _MediaBase:
         # Infer mime_type from format or extension
         if self.mime_type is None:
             if self.format:
-                # Use mimetypes to guess from a synthetic filename
-                guessed, _ = mimetypes.guess_type(f"file.{self.format}")
+                guessed = _guess_mime(self.format)
                 if guessed:
                     self.mime_type = guessed
             elif ext:
-                guessed, _ = mimetypes.guess_type(f"file.{ext}")
+                guessed = _guess_mime(ext)
                 if guessed:
                     self.mime_type = guessed
 
