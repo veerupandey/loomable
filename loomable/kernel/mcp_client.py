@@ -11,6 +11,10 @@ who configure no MCP servers never pay for the import.
 
 from __future__ import annotations
 
+import asyncio
+import base64
+from contextlib import AsyncExitStack
+from inspect import signature
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -44,6 +48,7 @@ class MCPSession:
     server_id: str
     capabilities: MCPCapabilities = field(default_factory=MCPCapabilities)
     connected: bool = False
+    spec: MCPServerSpec | None = field(default=None, repr=False)
 
 
 class MCPClient:
@@ -79,9 +84,12 @@ class MCPClient:
                 naming the server_id from the spec.
         """
         server_id = spec.get("server_id", spec.get("name", "unknown"))
+        if server_id in getattr(self, "_sessions", {}):
+            raise MCPConnectionError(server_id)
 
         try:
-            capabilities = await self._establish_connection(spec)
+            async with asyncio.timeout(spec.get("connect_timeout", 15)):
+                capabilities = await self._establish_connection(spec)
         except MCPConnectionError:
             raise
         except Exception as exc:
@@ -91,6 +99,7 @@ class MCPClient:
             server_id=server_id,
             capabilities=capabilities,
             connected=True,
+            spec=dict(spec) if server_id in getattr(self, "_sessions", {}) else None,
         )
         return session
 
@@ -207,111 +216,92 @@ class MCPClient:
             env=env,
         )
 
-        try:
-            # stdio_client returns an async context manager yielding (read, write) streams
-            transport_ctx = stdio_client(server_params)
-            streams = await transport_ctx.__aenter__()
-            read_stream, write_stream = streams
-
-            # Create and initialize the client session
-            session_ctx = ClientSession(read_stream, write_stream)
-            client_session = await session_ctx.__aenter__()
-            await client_session.initialize()
-
-            # Store for later invoke/close
-            self._sessions[server_id] = {
-                "client_session": client_session,
-                "session_ctx": session_ctx,
-                "transport_ctx": transport_ctx,
-                "cleanup": self._make_cleanup(session_ctx, transport_ctx),
-            }
-
-            # Enumerate tools and resources
-            return await self._enumerate_capabilities(client_session)
-
-        except MCPConnectionError:
-            raise
-        except Exception as exc:
-            raise MCPConnectionError(server_id) from exc
+        async with AsyncExitStack() as stack:
+            streams = await stack.enter_async_context(stdio_client(server_params))
+            return await self._initialize(stack, streams, ClientSession, server_id, spec)
 
     async def _connect_http(
         self, spec: MCPServerSpec, server_id: str
     ) -> MCPCapabilities:
-        """Connect via SSE/HTTP transport (remote server)."""
-        try:
-            from mcp import ClientSession
-        except ImportError as exc:
-            raise MCPConnectionError(server_id) from exc
+        """Connect to the selected remote transport."""
+        from mcp import ClientSession
 
         url = spec["url"]
-        headers = spec.get("headers", {})
-
-        # Try streamablehttp first, fall back to sse_client
-        try:
-            from mcp.client.streamable_http import streamablehttp_client
-
-            transport_factory = streamablehttp_client
-        except ImportError:
-            try:
+        headers = spec.get("headers") or {}
+        async with AsyncExitStack() as stack:
+            if spec.get("transport") == "sse":
                 from mcp.client.sse import sse_client
 
-                transport_factory = sse_client
-            except ImportError as exc:
-                raise MCPConnectionError(server_id) from exc
+                transport = sse_client(url=url, headers=headers)
+            else:
+                try:
+                    from mcp.client.streamable_http import streamable_http_client
+                except ImportError:
+                    from mcp.client.streamable_http import streamablehttp_client
 
-        try:
-            transport_ctx = transport_factory(url=url, headers=headers)
-            streams = await transport_ctx.__aenter__()
-            read_stream, write_stream = streams
+                    transport = streamablehttp_client(url=url, headers=headers)
+                else:
+                    from mcp.client.streamable_http import create_mcp_http_client
 
-            session_ctx = ClientSession(read_stream, write_stream)
-            client_session = await session_ctx.__aenter__()
-            await client_session.initialize()
+                    if headers:
+                        http = await stack.enter_async_context(create_mcp_http_client(headers=headers))
+                        transport = streamable_http_client(url, http_client=http)
+                    else:
+                        transport = streamable_http_client(url)
+            streams = await stack.enter_async_context(transport)
+            return await self._initialize(stack, streams, ClientSession, server_id, spec)
 
-            self._sessions[server_id] = {
-                "client_session": client_session,
-                "session_ctx": session_ctx,
-                "transport_ctx": transport_ctx,
-                "cleanup": self._make_cleanup(session_ctx, transport_ctx),
-            }
+    async def _initialize(self, stack, streams, session_factory, server_id, spec):
+        client_session = await stack.enter_async_context(session_factory(*streams[:2]))
+        initialized = await client_session.initialize()
+        capabilities = (MCPCapabilities() if spec.get("_skip_discovery")
+                        else await self._enumerate_capabilities(client_session, getattr(initialized, "capabilities", None)))
+        self._sessions[server_id] = {
+            "client_session": client_session,
+            "cleanup": stack.pop_all().aclose,
+        }
+        return capabilities
 
-            return await self._enumerate_capabilities(client_session)
+    @staticmethod
+    async def _list_all(method, field: str) -> list[Any]:
+        items: list[Any] = []
+        seen: set[str] = set()
+        page = await method()
+        while True:
+            items.extend(getattr(page, field))
+            cursor = getattr(page, "next_cursor", None) or getattr(page, "nextCursor", None)
+            if not cursor:
+                return items
+            if cursor in seen:
+                raise ValueError(f"MCP server repeated a {field} pagination cursor")
+            seen.add(cursor)
+            if "params" in signature(method).parameters:
+                from mcp.types import PaginatedRequestParams
 
-        except MCPConnectionError:
-            raise
-        except Exception as exc:
-            raise MCPConnectionError(server_id) from exc
+                page = await method(params=PaginatedRequestParams(cursor=cursor))
+            else:
+                page = await method(cursor=cursor)
 
-    async def _enumerate_capabilities(self, client_session: Any) -> MCPCapabilities:
-        """Enumerate tools and resources from the connected session."""
-        tools: list[dict[str, Any]] = []
-        resources: list[dict[str, Any]] = []
-
-        try:
-            tools_result = await client_session.list_tools()
-            for tool in tools_result.tools:
+    async def _enumerate_capabilities(self, client_session: Any, advertised=None) -> MCPCapabilities:
+        """Enumerate all pages for capabilities the server advertises."""
+        tools = []
+        if advertised is None or getattr(advertised, "tools", None) is not None:
+            for tool in await self._list_all(client_session.list_tools, "tools"):
                 tools.append({
                     "name": tool.name,
                     "description": getattr(tool, "description", "") or "",
-                    "parameters": (
-                        tool.inputSchema if hasattr(tool, "inputSchema")
-                        else getattr(tool, "input_schema", {"type": "object", "properties": {}})
-                    ),
+                    "parameters": getattr(tool, "input_schema", None)
+                    or getattr(tool, "inputSchema", None)
+                    or {"type": "object", "properties": {}},
                 })
-        except Exception:
-            pass  # tools not available
-
-        try:
-            resources_result = await client_session.list_resources()
-            for resource in resources_result.resources:
+        resources = []
+        if advertised is None or getattr(advertised, "resources", None) is not None:
+            for resource in await self._list_all(client_session.list_resources, "resources"):
                 resources.append({
                     "uri": str(getattr(resource, "uri", "")),
                     "name": getattr(resource, "name", ""),
                     "description": getattr(resource, "description", ""),
                 })
-        except Exception:
-            pass  # resources not available
-
         return MCPCapabilities(tools=tools, resources=resources)
 
     async def _invoke_tool(
@@ -335,34 +325,54 @@ class MCPClient:
         return self._map_call_result(result, tool_name)
 
     def _map_call_result(self, result: Any, tool_name: str) -> ToolResult:
-        """Map an MCP CallToolResult to a kernel ToolResult."""
-        # MCP results have .content (list of content blocks) and .isError
-        is_error = getattr(result, "isError", False)
+        """Preserve text, structured data and typed artifacts."""
+        from loomable.media import Audio, File, Image, Video
 
-        # Extract text content from result
-        content_parts: list[str] = []
+        text_parts = []
+        media = []
         for block in getattr(result, "content", []):
-            if hasattr(block, "text"):
-                content_parts.append(block.text)
-            elif hasattr(block, "data"):
-                content_parts.append(str(block.data))
+            kind = getattr(block, "type", None)
+            if kind in {"image", "audio"}:
+                cls = Image if kind == "image" else Audio
+                mime = getattr(block, "mime_type", None) or block.mimeType
+                media.append(cls(content=base64.b64decode(block.data, validate=True), mime_type=mime))
+            elif kind in {"resource", "resource_link"}:
+                resource = block.resource if kind == "resource" else block
+                mime = getattr(resource, "mime_type", None) or getattr(resource, "mimeType", None)
+                blob = getattr(resource, "blob", None)
+                if blob is not None:
+                    cls = {"image": Image, "audio": Audio, "video": Video}.get(
+                        (mime or "").partition("/")[0], File
+                    )
+                    media.append(cls(
+                        content=base64.b64decode(blob, validate=True),
+                        mime_type=mime or "application/octet-stream",
+                    ))
+                elif getattr(resource, "text", None) is not None:
+                    text_parts.append(resource.text)
+                else:
+                    # Keep references as metadata and text; do not fetch arbitrary URLs.
+                    text_parts.append(str(resource.uri))
+            elif hasattr(block, "text"):
+                text_parts.append(block.text)
 
-        text = "\n".join(content_parts) if content_parts else ""
-
-        if is_error:
+        text = "\n".join(text_parts)
+        if getattr(result, "is_error", False) or getattr(result, "isError", False):
             return ToolResult(error=text or f"Tool '{tool_name}' returned an error")
-        return ToolResult(content=text)
 
-    @staticmethod
-    def _make_cleanup(session_ctx: Any, transport_ctx: Any):
-        """Create a cleanup coroutine for closing session and transport."""
-        async def _cleanup():
-            try:
-                await session_ctx.__aexit__(None, None, None)
-            except Exception:
-                pass
-            try:
-                await transport_ctx.__aexit__(None, None, None)
-            except Exception:
-                pass
-        return _cleanup
+        structured = getattr(result, "structured_content", None)
+        if structured is None:
+            structured = getattr(result, "structuredContent", None)
+        metadata = {"media": media} if media else {}
+        if structured is not None:
+            metadata["structured_content"] = structured
+            if text:
+                metadata["text"] = text
+        links = [str(block.uri) for block in getattr(result, "content", [])
+                 if getattr(block, "type", None) == "resource_link"]
+        if links:
+            metadata["resource_links"] = links
+        content = structured if structured is not None else text
+        if not text and structured is None and media:
+            content = f"[MCP tool returned {len(media)} media artifact(s)]"
+        return ToolResult(content=content, metadata=metadata)

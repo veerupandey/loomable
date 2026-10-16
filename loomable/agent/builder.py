@@ -794,13 +794,16 @@ class BuiltAgent:
                 loop_repeat_threshold=self.loop_repeat_threshold,
             )
 
+        from .tools import mcp_run_scope
+
         self._active_ctx = ctx
         try:
-            return await self._arun_with_context(
-                agent_input,
-                output_schema=output_schema,
-                ctx=ctx,
-            )
+            async with mcp_run_scope():
+                return await self._arun_with_context(
+                    agent_input,
+                    output_schema=output_schema,
+                    ctx=ctx,
+                )
         finally:
             if self._active_ctx is ctx:
                 self._active_ctx = None
@@ -3411,6 +3414,7 @@ class Agent:
         # activate_tool (progressive disclosure).
         mcp_tools, mcp_errors, mcp_stubs, mcp_server_stubs = self._connect_mcp_servers_sync(
             defer=self._discovery and self._defer_mcp,
+            occupied=set(tool_registry),
             lazy=self._discovery and self._lazy_mcp,
         )
         tool_registry.update(mcp_tools)
@@ -4120,6 +4124,7 @@ class Agent:
         *,
         defer: bool = False,
         lazy: bool = False,
+        occupied: set[str] | None = None,
     ) -> tuple[dict[str, Tool], list[MCPConnectionError], list[Any], list[Any]]:
         """Connect to configured MCP servers synchronously (Req 5.1–5.4).
 
@@ -4141,16 +4146,17 @@ class Agent:
 
             with concurrent.futures.ThreadPoolExecutor(1) as pool:
                 future = pool.submit(
-                    asyncio.run, self._connect_mcp_servers(defer=defer, lazy=lazy)
+                    asyncio.run, self._connect_mcp_servers(defer=defer, lazy=lazy, occupied=occupied)
                 )
                 return future.result()
-        return asyncio.run(self._connect_mcp_servers(defer=defer, lazy=lazy))
+        return asyncio.run(self._connect_mcp_servers(defer=defer, lazy=lazy, occupied=occupied))
 
     async def _connect_mcp_servers(
         self,
         *,
         defer: bool = False,
         lazy: bool = False,
+        occupied: set[str] | None = None,
     ) -> tuple[dict[str, Tool], list[MCPConnectionError], list[Any], list[Any]]:
         """Connect to configured MCP servers and enumerate their tools (Req 5.1–5.4).
 
@@ -4180,8 +4186,9 @@ class Agent:
             list, and server ServerStub list.
         """
         from .discovery import ServerStub, ToolStub
-        from .tools import MCPTool
+        from .tools import MCPTool, mcp_tool_name
 
+        occupied = set(occupied or ())
         registry: dict[str, Tool] = {}
         errors: list[MCPConnectionError] = []
         stubs: list[Any] = []
@@ -4224,13 +4231,19 @@ class Agent:
                 spec.get("description", "") if isinstance(spec, dict) else ""
             )
             try:
-                session = await client.connect(spec)
-                capabilities = await client.list_capabilities(session)
+                session = await client.connect({**spec, "server_id": server_id})
+                try:
+                    capabilities = await client.list_capabilities(session)
+                finally:
+                    if getattr(session, "spec", None) is not None:
+                        await client.close(session)
                 server_tool_names: list[str] = []
                 for tool_info in capabilities.tools:
-                    tool_name = tool_info.get("name", "")
-                    if not tool_name:
+                    remote_name = tool_info.get("name", "")
+                    if not remote_name:
                         continue
+                    tool_name = mcp_tool_name(server_id, remote_name, occupied)
+                    occupied.add(tool_name)
                     tool_description = tool_info.get("description", "")
                     parameters = tool_info.get("parameters", {
                         "type": "object",
@@ -4245,6 +4258,7 @@ class Agent:
                         activated=not defer,
                         mcp_client=client,
                         mcp_session=session,
+                        remote_name=remote_name,
                         namespace=f"mcp:{server_id}",
                     )
                     stubs.append(stub)
@@ -4257,6 +4271,7 @@ class Agent:
                         parameters=parameters,
                         mcp_client=client,
                         session=session,
+                        remote_name=remote_name,
                     )
                     registry[tool_name] = mcp_tool
                 servers.append(

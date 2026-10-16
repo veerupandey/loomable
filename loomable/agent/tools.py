@@ -22,6 +22,10 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import re
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
+from hashlib import sha256
 from typing import Any, Callable, get_type_hints
 
 from loomable.kernel.contracts import Tool
@@ -224,6 +228,81 @@ def tool(
 # ---------------------------------------------------------------------------
 
 
+def mcp_tool_name(server_id: str, remote_name: str, occupied: set[str]) -> str:
+    """Keep valid unique names and qualify collisions for provider tool schemas."""
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", remote_name) and remote_name not in occupied:
+        return remote_name
+    prefix = re.sub(r"[^A-Za-z0-9_-]", "_", f"mcp_{server_id}_{remote_name}")[:49]
+    digest = sha256(f"{server_id}:{remote_name}".encode()).hexdigest()[:12]
+    alias = f"{prefix}_{digest}"
+    candidate = alias
+    suffix = 1
+    while candidate in occupied:
+        tail = f"_{suffix}"
+        candidate = alias[:64 - len(tail)] + tail
+        suffix += 1
+    return candidate
+
+
+class _MCPRunSessions:
+    """Own each transport in one task and share it across a run's calls."""
+
+    def __init__(self) -> None:
+        self._sessions: dict[int, tuple[asyncio.Task, asyncio.Future, asyncio.Event]] = {}
+
+    async def get(self, discovered: MCPSession):
+        key = id(discovered)
+        if key not in self._sessions:
+            ready = asyncio.get_running_loop().create_future()
+            stop = asyncio.Event()
+            task = asyncio.create_task(self._own(discovered.spec, ready, stop))
+            self._sessions[key] = task, ready, stop
+        _, ready, _ = self._sessions[key]
+        return await asyncio.shield(ready)
+
+    @staticmethod
+    async def _own(spec, ready: asyncio.Future, stop: asyncio.Event) -> None:
+        from loomable.kernel.mcp_client import MCPClient
+
+        client = MCPClient()
+        try:
+            session = await client.connect({**spec, "_skip_discovery": True})
+        except asyncio.CancelledError:
+            ready.cancel()
+            raise
+        except Exception as exc:
+            ready.set_exception(exc)
+            return
+        try:
+            ready.set_result((client, session))
+            await stop.wait()
+        finally:
+            await client.close(session)
+
+    async def close(self) -> None:
+        for task, ready, stop in self._sessions.values():
+            if not ready.done():
+                task.cancel()
+            elif not ready.cancelled():
+                ready.exception()
+            stop.set()
+        await asyncio.gather(*(task for task, _, _ in self._sessions.values()), return_exceptions=True)
+
+
+_mcp_run_sessions: ContextVar[_MCPRunSessions | None] = ContextVar("mcp_run_sessions", default=None)
+
+
+@asynccontextmanager
+async def mcp_run_scope():
+    sessions = _MCPRunSessions()
+    token = _mcp_run_sessions.set(sessions)
+    try:
+        yield
+    finally:
+        _mcp_run_sessions.reset(token)
+        await sessions.close()
+
+
 class MCPTool(Tool):
     """A :class:`Tool` backed by a remote MCP server tool.
 
@@ -240,12 +319,16 @@ class MCPTool(Tool):
         parameters: dict[str, Any],
         mcp_client: Any,  # MCPClient instance (typed loosely to avoid circular)
         session: "MCPSession",
+        remote_name: str | None = None,
     ) -> None:
         self.name = name
         self.description = description
         self.parameters = parameters
         self._mcp_client = mcp_client
         self._session = session
+        self._remote_name = remote_name or name
+        spec = getattr(session, "spec", None) or {}
+        self.idempotent = self._remote_name in spec.get("idempotent_tools", ())
 
     def schema(self) -> dict[str, Any]:
         """Return an OpenAI-style function-tool schema for this MCP tool."""
@@ -260,4 +343,13 @@ class MCPTool(Tool):
 
     async def invoke(self, args: dict[str, Any]) -> ToolResult:
         """Invoke the MCP tool via MCPClient.call_tool."""
-        return await self._mcp_client.call_tool(self._session, self.name, args)
+        spec = getattr(self._session, "spec", None)
+        if spec is None or self._session.connected:
+            return await self._mcp_client.call_tool(self._session, self._remote_name, args)
+
+        sessions = _mcp_run_sessions.get()
+        if sessions is None:
+            async with mcp_run_scope():
+                return await self.invoke(args)
+        client, session = await sessions.get(self._session)
+        return await client.call_tool(session, self._remote_name, args)

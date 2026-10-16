@@ -69,6 +69,7 @@ class ToolStub:
     # Deferred MCP activation payload
     mcp_client: Any | None = None
     mcp_session: Any | None = None
+    remote_name: str | None = None
     # Tool namespace / group (e.g. "mcp:github", "images") for search_namespaces.
     namespace: str | None = None
     tags: list[str] = field(default_factory=list)
@@ -722,6 +723,7 @@ class DiscoveryRuntime:
                 or {"type": "object", "properties": {}},
                 mcp_client=stub.mcp_client,
                 session=stub.mcp_session,
+                remote_name=stub.remote_name,
             )
             self._register_tool(mcp_tool)
             stub.activated = True
@@ -827,10 +829,16 @@ class DiscoveryRuntime:
         from loomable.kernel.errors import MCPConnectionError
         from loomable.kernel.mcp_client import MCPClient
 
+        from .tools import mcp_tool_name
+
         client = MCPClient()
         try:
-            session = await client.connect(server.spec)
-            capabilities = await client.list_capabilities(session)
+            session = await client.connect({**server.spec, "server_id": server_id})
+            try:
+                capabilities = await client.list_capabilities(session)
+            finally:
+                if getattr(session, "spec", None) is not None:
+                    await client.close(session)
         except MCPConnectionError as exc:
             return {"ok": False, "error": f"failed to connect to {server_id}: {exc}"}
         except Exception as exc:  # noqa: BLE001
@@ -838,39 +846,25 @@ class DiscoveryRuntime:
 
         ns_name = f"mcp:{server.server_id}"
         tool_names: list[str] = []
+        occupied = set(getattr(self.tool_runtime, "names", ())) | {t.name for t in self.catalog.tools}
         for tool_info in capabilities.tools:
-            tool_name = tool_info.get("name", "")
-            if not tool_name:
+            remote_name = tool_info.get("name", "")
+            if not remote_name:
                 continue
-            description = tool_info.get("description", "")
-            parameters = tool_info.get("parameters") or {
-                "type": "object",
-                "properties": {},
-            }
-            existing = self.catalog.tool_by_name(tool_name)
-            if existing is not None:
-                existing.source = "mcp"
-                existing.server_id = server.server_id
-                existing.mcp_client = client
-                existing.mcp_session = session
-                existing.parameters = parameters if isinstance(parameters, dict) else {}
-                existing.description = description or existing.description
-                existing.namespace = existing.namespace or ns_name
-            else:
-                self.catalog.tools.append(
-                    ToolStub(
-                        name=tool_name,
-                        description=description,
-                        source="mcp",
-                        server_id=server.server_id,
-                        parameters=parameters if isinstance(parameters, dict) else {},
-                        activated=False,
-                        mcp_client=client,
-                        mcp_session=session,
-                        namespace=ns_name,
-                    )
-                )
-            tool_names.append(tool_name)
+            existing = next((t for t in self.catalog.tools if t.source == "mcp"
+                             and t.server_id == server_id and (t.remote_name or t.name) == remote_name), None)
+            if existing is None:
+                tool_name = mcp_tool_name(server_id, remote_name, occupied)
+                existing = ToolStub(name=tool_name, description="", source="mcp",
+                                    server_id=server_id, namespace=ns_name)
+                self.catalog.tools.append(existing)
+                occupied.add(tool_name)
+            existing.description = tool_info.get("description") or existing.description
+            existing.parameters = tool_info.get("parameters") or {"type": "object", "properties": {}}
+            existing.mcp_client = client
+            existing.mcp_session = session
+            existing.remote_name = remote_name
+            tool_names.append(existing.name)
 
         server.connected = True
         server.tool_count = len(tool_names)
@@ -912,14 +906,27 @@ class DiscoveryRuntime:
     async def _refresh_server_async(
         self, server_id: str, client: Any, session: Any
     ) -> list[str]:
-        capabilities = await client.list_capabilities(session)
+        if getattr(session, "spec", None) is not None:
+            session = await client.connect(session.spec)
+            try:
+                capabilities = await client.list_capabilities(session)
+            finally:
+                await client.close(session)
+        else:
+            capabilities = await client.list_capabilities(session)
+        from .tools import mcp_tool_name
+
+        occupied = set(getattr(self.tool_runtime, "names", ())) | {t.name for t in self.catalog.tools}
         ns_name = f"mcp:{server_id}"
         ns = self.catalog.namespace_by_name(ns_name)
         added: list[str] = []
         for tool_info in capabilities.tools:
-            tool_name = tool_info.get("name", "")
-            if not tool_name or self.catalog.tool_by_name(tool_name) is not None:
+            remote_name = tool_info.get("name", "")
+            if not remote_name or any(t.source == "mcp" and t.server_id == server_id
+                                      and (t.remote_name or t.name) == remote_name for t in self.catalog.tools):
                 continue
+            tool_name = mcp_tool_name(server_id, remote_name, occupied)
+            occupied.add(tool_name)
             self.catalog.tools.append(
                 ToolStub(
                     name=tool_name,
@@ -931,6 +938,7 @@ class DiscoveryRuntime:
                     activated=False,
                     mcp_client=client,
                     mcp_session=session,
+                    remote_name=remote_name,
                     namespace=ns_name,
                 )
             )

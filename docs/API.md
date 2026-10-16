@@ -395,6 +395,16 @@ built.events = CheckpointListener(
 
 ---
 
+## MCP tools
+
+Install `loomable[mcp]` to connect to MCP servers. Use `command` and `args` for stdio, or `url` for Streamable HTTP. Select `transport="sse"` explicitly for a legacy SSE endpoint. HTTP specs accept `headers` and all specs accept `connect_timeout` in seconds.
+
+MCP discovery closes its connection after listing tools. Agent runs open one session per server on first use, share it across tool calls, and close it at the end of the run. Session state is scoped to a single agent run. Use `discovery=True` to defer catalog connections and `tool_timeout=` to bound execution.
+
+Unique remote tool names are exposed as-is when they fit the model's tool schema. Colliding or incompatible names get a server-qualified alias. Use the exposed name in `require_confirmation` to gate side effects. Remote tools default to non-idempotent. List known repeat-safe remote names in the server spec's `idempotent_tools`.
+
+Structured results are available on the tool outcome. MCP images, audio, and embedded binary artifacts appear on the corresponding `RunResult` media properties. Resource links remain references and are never fetched automatically.
+
 ## Production knobs
 
 All opt-in.
