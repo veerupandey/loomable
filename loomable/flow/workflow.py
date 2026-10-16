@@ -708,6 +708,7 @@ class Workflow:
             return
         if session_id != self._session_id:
             self._compiled_flow = None
+            self._last_state = None
         self._session_id = session_id
         if resume is False and self._checkpointer is not None:
             self._clear_checkpoint_pending = True
@@ -772,15 +773,16 @@ class Workflow:
 
     async def clear_checkpoint(self) -> None:
         """Mark any incomplete checkpoint complete so the next run starts fresh."""
-        if self._checkpointer is None or self._session_id is None:
+        session_id = self._session_id
+        if self._checkpointer is None or session_id is None:
             return
-        cp = await self._checkpointer.get(self._session_id)
+        cp = await self._checkpointer.get(session_id)
         if cp is not None and not cp.complete:
             from loomable.persist.checkpoint import Checkpoint
 
             await self._checkpointer.put(
                 Checkpoint(
-                    thread_id=self._session_id,
+                    thread_id=session_id,
                     step=cp.step,
                     session_state=dict(cp.session_state),
                     complete=True,
@@ -842,13 +844,14 @@ class Workflow:
         checkpoint so the next ``arun(resume=True)`` picks up the patch.
         When ``as_node`` is set, that node id is also marked completed.
         """
-        if self._checkpointer is None or self._session_id is None:
+        session_id = self._session_id
+        if self._checkpointer is None or session_id is None:
             raise RuntimeError(
                 "update_state() requires Workflow(..., checkpointer=..., session_id=...)"
             )
         from loomable.persist.checkpoint import Checkpoint
 
-        existing = await self._checkpointer.get(self._session_id)
+        existing = await self._checkpointer.get(session_id)
         session: dict[str, Any] = {}
         step = 0
         pending: list[Any] = []
@@ -874,7 +877,7 @@ class Workflow:
             session["completed_node_ids"] = completed
 
         cp = Checkpoint(
-            thread_id=self._session_id,
+            thread_id=session_id,
             step=step,
             session_state=session,
             complete=False,

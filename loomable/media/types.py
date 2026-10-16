@@ -4,14 +4,13 @@ Provides ergonomic ``Image``, ``Audio``, ``Video``, and ``File`` classes that
 unify URL, filepath, raw bytes, and base64 source representations behind a
 single interface with lazy resolution.
 
-Depends only on ``loomable.content`` (for ``MediaPart``, ``Modality``) and stdlib.
+Depends only on ``loomable.content`` (for ``MediaPart``, ``Modality``) and shared HTTP safety helpers for explicit URL downloads.
 """
 
 from __future__ import annotations
 
 import base64
 import mimetypes
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
@@ -197,8 +196,7 @@ class _MediaBase:
                 ) from exc
         elif self.url is not None:
             try:
-                with urllib.request.urlopen(self.url) as response:  # noqa: S310
-                    self._resolved_bytes = response.read()
+                self._resolved_bytes = self._download_url(self.url)
             except Exception as exc:
                 raise MediaResolveError(
                     f"Cannot resolve media from URL '{self.url}': {exc}"
@@ -209,6 +207,31 @@ class _MediaBase:
             )
 
         return self._resolved_bytes
+
+    @staticmethod
+    def _download_url(url: str) -> bytes:
+        import httpx
+
+        from ._http import pinned_http_target, validate_redirect_target
+
+        for _ in range(8):
+            target, options = pinned_http_target(url)
+            with httpx.Client(timeout=30, trust_env=False) as client:
+                with client.stream("GET", target, **options) as response:
+                    if response.is_redirect:
+                        error, target_url = validate_redirect_target(url, response.headers.get("location", ""))
+                        if error or not target_url:
+                            raise ValueError(error or "Invalid media redirect")
+                        url = target_url
+                        continue
+                    response.raise_for_status()
+                    data = bytearray()
+                    for chunk in response.iter_bytes(chunk_size=65536):
+                        data.extend(chunk)
+                        if len(data) > 64 * 1024 * 1024:
+                            raise ValueError("Media download exceeds 64 MiB")
+                    return bytes(data)
+        raise ValueError("Too many media redirects")
 
     def save(self, path: str | Path) -> None:
         """Write the resolved content bytes to disk.

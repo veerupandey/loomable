@@ -263,6 +263,15 @@ class JsonFileCheckpointer:
         if self._max_checkpoints is not None:
             await self._prune(cp.thread_id)
 
+    @staticmethod
+    def _open_checkpoint(path: str):
+        def open_no_symlink(name, flags):
+            return os.open(name, flags | getattr(os, "O_NOFOLLOW", 0))
+
+        if os.path.islink(path):
+            raise ValueError("Checkpoint file must not be a symbolic link")
+        return open(path, "r", encoding="utf-8", opener=open_no_symlink)
+
     async def get(self, thread_id: str) -> Checkpoint | None:
         """Get the latest checkpoint for a thread (by filename sort order)."""
         thread_dir = self._thread_path(thread_id)
@@ -270,14 +279,14 @@ class JsonFileCheckpointer:
             return None
 
         files = sorted(
-            [f for f in os.listdir(thread_dir) if f.endswith(".json")],
+            [f for f in os.listdir(thread_dir) if f.endswith(".json") and not os.path.islink(os.path.join(thread_dir, f))],
             reverse=True,
         )
         if not files:
             return None
 
         filepath = os.path.join(thread_dir, files[0])
-        with open(filepath, "r", encoding="utf-8") as f:
+        with self._open_checkpoint(filepath) as f:
             data = json.load(f)
         return Checkpoint.from_dict(data)
 
@@ -288,12 +297,12 @@ class JsonFileCheckpointer:
             return []
 
         files = sorted(
-            [f for f in os.listdir(thread_dir) if f.endswith(".json")]
+            [f for f in os.listdir(thread_dir) if f.endswith(".json") and not os.path.islink(os.path.join(thread_dir, f))]
         )
         checkpoints: list[Checkpoint] = []
         for filename in files:
             filepath = os.path.join(thread_dir, filename)
-            with open(filepath, "r", encoding="utf-8") as f:
+            with self._open_checkpoint(filepath) as f:
                 data = json.load(f)
             checkpoints.append(Checkpoint.from_dict(data))
         return checkpoints

@@ -22,7 +22,7 @@ Depends on ``loomable.agent`` and ``loomable.content`` plus FastAPI/Pydantic.
 from __future__ import annotations
 
 import asyncio
-from contextlib import aclosing
+from contextlib import aclosing, asynccontextmanager, nullcontext
 import base64
 import json
 from hmac import compare_digest
@@ -104,6 +104,7 @@ class StatePatchModel(BaseModel):
 
     values: dict[str, Any] = Field(default_factory=dict)
     as_node: str | None = None
+    session_id: str | None = None
 
 
 class RunResultModel(BaseModel):
@@ -273,6 +274,7 @@ def _register_agent_routes(
     prefix: str = "",
     api_key: str | None = None,
     max_concurrent_runs: int | None = None,
+    workflow_scope=None,
 ) -> None:
     """Register health / run / NDJSON stream / AG-UI SSE routes on ``app``."""
     p = prefix.rstrip("/")
@@ -312,7 +314,8 @@ def _register_agent_routes(
     def _target(body: RunRequestModel):
         if isinstance(agent, Agent) and agent._mode != "case":
             return agent._for_session(body.session_id)
-        _apply_session(body)
+        if workflow_scope is None:
+            _apply_session(body)
         return agent
 
     def _cancel_agent(target) -> None:
@@ -435,7 +438,8 @@ def _register_agent_routes(
         except ValueError as exc:
             return JSONResponse(status_code=422, content={"detail": str(exc)})
         try:
-            result = await _invoke_arun(agent_input, body)
+            async with (workflow_scope(body.session_id) if workflow_scope else nullcontext()) as scoped_id:
+                result = await _invoke_arun(agent_input, body)
         except UnsupportedModalityError as exc:
             return JSONResponse(status_code=400, content={"detail": str(exc)})
         except Exception as exc:  # noqa: BLE001
@@ -452,7 +456,7 @@ def _register_agent_routes(
                     content=_paused_to_model(exc).model_dump(),
                 )
             raise
-        wf_sid = body.session_id or getattr(agent, "_session_id", None)
+        wf_sid = scoped_id if workflow_scope else body.session_id or getattr(agent, "_session_id", None)
         return JSONResponse(
             status_code=200,
             content=_run_result_to_model(result, session_id=wf_sid).model_dump(),
@@ -523,12 +527,17 @@ def _register_agent_routes(
             from loomable.stream import RUN_ERROR, RUN_PAUSED, StreamEvent
 
             try:
-                async with aclosing(_invoke_astream_events(agent_input, body, target)) as stream:
-                    async for event in stream:
-                        if await request.is_disconnected():
-                            _cancel_agent(target)
-                            break
-                        yield sse_encode(event)
+                async with workflow_scope(body.session_id) if workflow_scope else nullcontext():
+                    try:
+                        async with aclosing(_invoke_astream_events(agent_input, body, target)) as stream:
+                            async for event in stream:
+                                if await request.is_disconnected():
+                                    _cancel_agent(target)
+                                    break
+                                yield sse_encode(event)
+                    except asyncio.CancelledError:
+                        _cancel_agent(target)
+                        raise
             except FlowPaused as exc:
                 yield sse_encode(
                     StreamEvent(
@@ -554,9 +563,6 @@ def _register_agent_routes(
                         data={"message": str(exc)},
                     )
                 )
-            except asyncio.CancelledError:
-                _cancel_agent(target)
-                raise
             except Exception as exc:  # noqa: BLE001
                 yield sse_encode(
                     StreamEvent(
@@ -566,7 +572,7 @@ def _register_agent_routes(
                     )
                 )
             finally:
-                if await request.is_disconnected():
+                if workflow_scope is None and await request.is_disconnected():
                     _cancel_agent(target)
 
         return StreamingResponse(
@@ -635,7 +641,29 @@ def mount_workflow(
     - ``PATCH {prefix}/state`` — ``Workflow.update_state()``
     - ``POST {prefix}/approve`` — HITL approve + optional auto resume
     """
-    _register_agent_routes(app, workflow, prefix=prefix, api_key=api_key)
+    default_session = getattr(workflow, "session_id", None)
+    lock = asyncio.Lock()
+
+    @asynccontextmanager
+    async def workflow_scope(session_id: str | None):
+        sid = session_id if session_id is not None else default_session
+        if sid is not None and (
+            not sid or sid in {".", ".."} or any(c in sid for c in ("/", chr(92), chr(0)))
+        ):
+            raise HTTPException(422, "Invalid workflow session_id")
+        async with lock:
+            if sid is None and (
+                getattr(workflow, "session_id", None) is not None
+                or getattr(workflow, "_checkpointer", None) is not None
+            ):
+                raise HTTPException(422, "Workflow session_id is required")
+            bind = getattr(workflow, "bind_session", None)
+            if sid is not None and callable(bind):
+                bind(sid)
+            yield sid
+
+    _register_agent_routes(app, workflow, prefix=prefix, api_key=api_key,
+                           workflow_scope=workflow_scope)
     p = prefix.rstrip("/")
     expected_key = (api_key or "").strip() or None
 
@@ -652,13 +680,14 @@ def mount_workflow(
         return None
 
     @app.get(f"{p}/state")
-    async def workflow_state(request: Request) -> JSONResponse:
+    async def workflow_state(request: Request, session_id: str | None = None) -> JSONResponse:
         denied = _auth_or_401(request)
         if denied is not None:
             return denied
         if not hasattr(workflow, "get_state"):
             return JSONResponse(status_code=501, content={"detail": "not a Workflow"})
-        state = await workflow.get_state()
+        async with workflow_scope(session_id):
+            state = await workflow.get_state()
         return JSONResponse(status_code=200, content=state)
 
     @app.patch(f"{p}/state")
@@ -671,9 +700,8 @@ def mount_workflow(
         if not hasattr(workflow, "update_state"):
             return JSONResponse(status_code=501, content={"detail": "not a Workflow"})
         try:
-            state = await workflow.update_state(
-                body.values, as_node=body.as_node
-            )
+            async with workflow_scope(body.session_id):
+                state = await workflow.update_state(body.values, as_node=body.as_node)
         except RuntimeError as exc:
             return JSONResponse(status_code=400, content={"detail": str(exc)})
         return JSONResponse(status_code=200, content=state)
@@ -687,33 +715,30 @@ def mount_workflow(
             return denied
         if not hasattr(workflow, "approve"):
             return JSONResponse(status_code=501, content={"detail": "not a Workflow"})
-        if body.session_id:
-            bind = getattr(workflow, "bind_session", None)
-            if callable(bind):
-                bind(body.session_id)
-        try:
-            await workflow.approve(body.node_id, status=body.status)
-        except RuntimeError as exc:
-            return JSONResponse(status_code=400, content={"detail": str(exc)})
-        if not body.auto_run:
-            return JSONResponse(status_code=200, content={"approved": body.node_id})
-        try:
-            result = await workflow.arun(None, resume=True)
-        except Exception as exc:  # noqa: BLE001
-            from loomable.flow.hitl import FlowPaused
+        async with workflow_scope(body.session_id):
+            try:
+                await workflow.approve(body.node_id, status=body.status)
+            except (RuntimeError, ValueError) as exc:
+                return JSONResponse(status_code=400, content={"detail": str(exc)})
+            if not body.auto_run:
+                return JSONResponse(status_code=200, content={"approved": body.node_id})
+            try:
+                result = await workflow.arun(None, resume=True)
+            except Exception as exc:  # noqa: BLE001
+                from loomable.flow.hitl import FlowPaused
 
-            if isinstance(exc, FlowPaused):
-                return JSONResponse(
-                    status_code=202,
-                    content=_paused_to_model(exc).model_dump(),
-                )
-            return JSONResponse(status_code=500, content={"detail": str(exc)})
-        return JSONResponse(
-            status_code=200,
-            content=_run_result_to_model(
-                result, session_id=getattr(workflow, "_session_id", None) or body.session_id
-            ).model_dump(),
-        )
+                if isinstance(exc, FlowPaused):
+                    return JSONResponse(
+                        status_code=202,
+                        content=_paused_to_model(exc).model_dump(),
+                    )
+                return JSONResponse(status_code=500, content={"detail": "Workflow resume failed"})
+            return JSONResponse(
+                status_code=200,
+                content=_run_result_to_model(
+                    result, session_id=body.session_id or default_session
+                ).model_dump(),
+            )
 
     return app
 

@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 from loomable.agent.tools import FunctionTool
 from loomable.toolkits._base import Toolkit
-from loomable.toolkits.net_safety import validate_http_url, validate_redirect_target
+from loomable.toolkits.net_safety import pinned_http_target, validate_http_url, validate_redirect_target
 
 __all__ = ["ImageTools"]
 
@@ -112,49 +112,47 @@ class ImageTools(Toolkit):
             return err, None, ""
         current = url
         try:
-            async with httpx.AsyncClient(
-                timeout=self._timeout, follow_redirects=False
-            ) as client:
-                for _ in range(_MAX_REDIRECTS):
-                    err = validate_http_url(
-                        current, block_private_hosts=self._block_private_hosts
-                    )
-                    if err:
-                        return err, None, ""
-                    response = await client.get(current)
-                    if response.status_code in {301, 302, 303, 307, 308}:
-                        loc = (response.headers or {}).get("location", "")
-                        if not loc:
-                            return (
-                                f"Error: HTTP {response.status_code} for URL: {url}",
-                                None,
-                                "",
-                            )
-                        hop_err, next_url = validate_redirect_target(
-                            current,
-                            loc,
-                            block_private_hosts=self._block_private_hosts,
-                        )
-                        if hop_err:
-                            return hop_err, None, ""
-                        current = next_url or current
-                        continue
-                    if response.status_code < 200 or response.status_code >= 300:
+            for _ in range(_MAX_REDIRECTS):
+                target, options = pinned_http_target(
+                    current, block_private_hosts=self._block_private_hosts,
+                )
+                async with httpx.AsyncClient(
+                    timeout=self._timeout, follow_redirects=False, trust_env=False,
+                ) as client:
+                    response = await client.get(target, **options)
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    loc = (response.headers or {}).get("location", "")
+                    if not loc:
                         return (
                             f"Error: HTTP {response.status_code} for URL: {url}",
                             None,
                             "",
                         )
-                    data = response.content
-                    if len(data) > self._max_bytes:
-                        return (
-                            f"Error: image exceeds max_bytes={self._max_bytes}",
-                            None,
-                            "",
-                        )
-                    content_type = response.headers.get("content-type", "")
-                    return None, data, content_type
-                return "Error: too many redirects", None, ""
+                    hop_err, next_url = validate_redirect_target(
+                        current,
+                        loc,
+                        block_private_hosts=self._block_private_hosts,
+                    )
+                    if hop_err:
+                        return hop_err, None, ""
+                    current = next_url or current
+                    continue
+                if response.status_code < 200 or response.status_code >= 300:
+                    return (
+                        f"Error: HTTP {response.status_code} for URL: {url}",
+                        None,
+                        "",
+                    )
+                data = response.content
+                if len(data) > self._max_bytes:
+                    return (
+                        f"Error: image exceeds max_bytes={self._max_bytes}",
+                        None,
+                        "",
+                    )
+                content_type = response.headers.get("content-type", "")
+                return None, data, content_type
+            return "Error: too many redirects", None, ""
         except httpx.TimeoutException:
             return (
                 f"Error: Request timed out after {self._timeout} seconds: {url}",

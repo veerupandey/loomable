@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -15,6 +16,10 @@ from loomable.providers.backends.postgres import PgVectorBackend, PostgresMemory
 class _FakeConn:
     def __init__(self, store: dict[str, Any]) -> None:
         self.store = store
+
+    @asynccontextmanager
+    async def transaction(self):
+        yield
 
     async def execute(self, query: str, *args: Any) -> str:
         q = " ".join(query.split()).lower()

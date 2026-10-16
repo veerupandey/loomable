@@ -203,7 +203,7 @@ class FileTools(Toolkit):
         matches: list[str] = []
         base = self._base_dir
         for p in base.rglob("*"):
-            if not p.is_file():
+            if not p.is_file() or isinstance(self._resolve_safe_path(str(p)), str):
                 continue
             rel = str(p.relative_to(base)).replace("\\", "/")
             if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(p.name, pattern):
@@ -219,8 +219,11 @@ class FileTools(Toolkit):
         root = safe if safe.is_dir() else safe.parent
         files = [safe] if safe.is_file() else [p for p in root.rglob("*") if p.is_file()]
         for fp in files:
+            resolved = self._resolve_safe_path(str(fp))
+            if isinstance(resolved, str):
+                continue
             try:
-                text = fp.read_text(encoding="utf-8")
+                text = resolved.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
             for i, line in enumerate(text.splitlines(), start=1):

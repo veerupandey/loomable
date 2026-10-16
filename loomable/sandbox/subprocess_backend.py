@@ -6,6 +6,7 @@ import asyncio
 import os
 import re
 import shlex
+import signal
 import sys
 from pathlib import Path
 from typing import Mapping
@@ -119,14 +120,27 @@ class SubprocessSandbox:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
                 env=self._env(env),
+                start_new_session=os.name == "posix",
             )
         except OSError as exc:
             return ExecResult(error=str(exc), returncode=127)
         try:
             stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=limit)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
+        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            try:
+                if os.name == "posix":
+                    os.killpg(proc.pid, signal.SIGKILL)
+                else:
+                    proc.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(proc.communicate(), timeout=1)
+            except asyncio.TimeoutError:
+                # A process that created its own session may still hold a pipe.
+                pass
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             return ExecResult(timed_out=True, returncode=-1, error=f"timed out after {limit} seconds")
         return ExecResult(
             stdout=stdout_b.decode(errors="replace"),

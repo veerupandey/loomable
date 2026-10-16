@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from loomable.agent.tools import FunctionTool
 from loomable.toolkits._base import Toolkit
-from loomable.toolkits.net_safety import validate_http_url
+from loomable.toolkits.net_safety import pinned_http_target, validate_http_url
 
 __all__ = ["CitationStore", "CitationTools"]
 
@@ -217,14 +217,15 @@ class CitationTools(Toolkit):
         if err:
             return err
         try:
-            async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
-                response = await client.head(target)
+            endpoint, options = pinned_http_target(target)
+            async with httpx.AsyncClient(timeout=20, follow_redirects=False, trust_env=False) as client:
+                response = await client.head(endpoint, **options)
                 if response.is_redirect:
                     # Accept redirects as reachable; registration still SSRF-guards URL.
                     status = response.status_code
                 elif response.status_code >= 400:
                     # Some hosts reject HEAD — try GET.
-                    response = await client.get(target)
+                    response = await client.get(endpoint, **options)
                     status = response.status_code
                 else:
                     status = response.status_code

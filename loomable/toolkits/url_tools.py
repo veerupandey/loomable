@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from loomable.agent.tools import FunctionTool
 from loomable.toolkits._base import Toolkit
-from loomable.toolkits.net_safety import validate_http_url, validate_redirect_target
+from loomable.toolkits.net_safety import pinned_http_target, validate_http_url, validate_redirect_target
 
 _DEFAULT_UA = "loomable-research-agent/0.1 (+https://github.com/veerupandey/loomable)"
 _MAX_REDIRECTS = 8
@@ -76,34 +76,32 @@ class URLTools(Toolkit):
             return err, None
         current = url
         try:
-            async with httpx.AsyncClient(
-                timeout=self._timeout,
-                follow_redirects=False,
-                headers={"User-Agent": self._user_agent},
-            ) as client:
-                for _ in range(_MAX_REDIRECTS):
-                    err = self._validate_url(current)
-                    if err:
-                        return err, None
-                    response = await client.get(current)
-                    if response.status_code in {301, 302, 303, 307, 308}:
-                        loc = (response.headers or {}).get("location", "")
-                        if not loc:
-                            return (
-                                f"Error: HTTP {response.status_code} for URL: {url}",
-                                None,
-                            )
-                        hop_err, next_url = validate_redirect_target(
-                            current,
-                            loc,
-                            block_private_hosts=self._block_private_hosts,
+            for _ in range(_MAX_REDIRECTS):
+                target, options = pinned_http_target(
+                    current, block_private_hosts=self._block_private_hosts,
+                )
+                async with httpx.AsyncClient(
+                    timeout=self._timeout, follow_redirects=False, trust_env=False, headers={"User-Agent": self._user_agent},
+                ) as client:
+                    response = await client.get(target, **options)
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    loc = (response.headers or {}).get("location", "")
+                    if not loc:
+                        return (
+                            f"Error: HTTP {response.status_code} for URL: {url}",
+                            None,
                         )
-                        if hop_err:
-                            return hop_err, None
-                        current = next_url or current
-                        continue
-                    return None, response
-                return "Error: too many redirects", None
+                    hop_err, next_url = validate_redirect_target(
+                        current,
+                        loc,
+                        block_private_hosts=self._block_private_hosts,
+                    )
+                    if hop_err:
+                        return hop_err, None
+                    current = next_url or current
+                    continue
+                return None, response
+            return "Error: too many redirects", None
         except httpx.TimeoutException:
             return f"Error: Request timed out after {self._timeout} seconds: {url}", None
         except httpx.HTTPError as exc:

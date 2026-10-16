@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sqlite3
+from pathlib import Path
 
 from loomable.agent.tools import FunctionTool
 from loomable.toolkits._base import Toolkit
@@ -60,10 +61,27 @@ class SQLTools(Toolkit):
         if self._read_only:
             if not os.path.exists(db_path):
                 raise FileNotFoundError(f"Database not found: {db_path}")
-            uri = f"file:{db_path}?mode=ro"
-            return sqlite3.connect(uri, uri=True)
+            uri = f"{Path(db_path).absolute().as_uri()}?mode=ro"
+            conn = sqlite3.connect(uri, uri=True)
+            try:
+                conn.execute("PRAGMA query_only = ON")
+                conn.set_authorizer(self._authorize_read)
+            except BaseException:
+                conn.close()
+                raise
+            return conn
         else:
             return sqlite3.connect(db_path)
+
+    @staticmethod
+    def _authorize_read(action, name, argument, database, trigger) -> int:
+        if action in {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_RECURSIVE}:
+            return sqlite3.SQLITE_OK
+        if action == sqlite3.SQLITE_FUNCTION and argument not in {"load_extension", "writefile"}:
+            return sqlite3.SQLITE_OK
+        if action == sqlite3.SQLITE_PRAGMA and name == "table_info":
+            return sqlite3.SQLITE_OK
+        return sqlite3.SQLITE_DENY
 
     def _execute_run_sql(self, db_path: str, query: str) -> str:
         """Synchronous implementation for run_sql."""
@@ -106,7 +124,7 @@ class SQLTools(Toolkit):
         """Synchronous implementation for describe_table."""
         conn = self._connect(db_path)
         try:
-            cursor = conn.execute(f"PRAGMA table_info({table})")
+            cursor = conn.execute("SELECT * FROM pragma_table_info(?)", (table,))
             columns = cursor.fetchall()
             if not columns:
                 return f"Error: Table '{table}' not found or has no columns"

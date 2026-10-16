@@ -34,15 +34,24 @@ class WorkspaceStore:
         raw = (path or "").strip().replace("\\", "/")
         if not raw or raw.startswith("/"):
             raw = raw.lstrip("/")
-        if ".." in raw.split("/"):
+        if ".." in raw.split("/") or "\x00" in raw or Path(raw).drive:
             return None
-        return raw or ""
+        if self._mirror and self._root is not None:
+            try:
+                if not (self._root / raw).resolve().is_relative_to(self._root):
+                    return None
+            except (OSError, RuntimeError):
+                return None
+        return raw
 
     def _hydrate_from_disk(self) -> None:
         assert self._root is not None
         for p in self._root.rglob("*"):
             if p.is_file():
                 rel = str(p.relative_to(self._root)).replace("\\", "/")
+                if self._norm(rel) is None:
+                    self._files.pop(rel, None)
+                    continue
                 try:
                     self._files[rel] = p.read_text(encoding="utf-8")
                 except (OSError, UnicodeDecodeError):
