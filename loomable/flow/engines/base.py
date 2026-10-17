@@ -157,8 +157,6 @@ def detect_cycle(nodes: dict[str, Node], edges: list[Edge]) -> None:
 
     # DFS states: 0 = unvisited, 1 = in current path, 2 = fully processed
     state: dict[str, int] = {nid: 0 for nid in nodes}
-    # Track path for cycle reconstruction
-    parent: dict[str, str | None] = {nid: None for nid in nodes}
 
     def _dfs(node_id: str, path: list[str]) -> list[str] | None:
         """Return the cycle (list of node_ids) if found, else None."""

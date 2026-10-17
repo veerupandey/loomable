@@ -9,10 +9,9 @@ One tool failure does NOT cancel siblings.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 from loomable.kernel.contracts import Tool
-from loomable.kernel.models import ToolCall, ToolError, ToolOutcome, ToolResult
+from loomable.kernel.models import ToolCall, ToolError, ToolOutcome
 
 
 class ToolRuntime:

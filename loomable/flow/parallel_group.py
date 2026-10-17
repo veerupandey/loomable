@@ -19,7 +19,6 @@ from typing import Any, TYPE_CHECKING
 from loomable.agent.context import RunContext
 from loomable.agent.run import RunResult
 from loomable.flow.flow import Flow
-from loomable.flow.nodes import Node
 from loomable.flow.runnable import Runnable
 
 if TYPE_CHECKING:

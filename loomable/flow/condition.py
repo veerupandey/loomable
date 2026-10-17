@@ -23,7 +23,6 @@ from typing import Any, Callable, Union, TYPE_CHECKING
 from loomable.agent.context import RunContext
 from loomable.agent.run import RunResult
 from loomable.flow.loop import Loop
-from loomable.flow.runnable import FunctionRunnable, Runnable
 from loomable.flow.state import SharedState
 
 if TYPE_CHECKING:

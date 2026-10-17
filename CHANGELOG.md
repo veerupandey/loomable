@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Amazon Bedrock provider** (`BedrockProvider`, `pip install "loomable[bedrock]"`) on the unified Converse API — Claude, Nova, Llama, Mistral, etc. Supports system prompts, tool use, image input, streaming, and the standard AWS credential chain (env / shared profile / SSO). Resolver accepts `bedrock:` / `aws:` model strings. See `examples/agents/10_bedrock.py`.
+- **Amazon Bedrock provider** (`BedrockProvider`, `pip install "loomable[bedrock]"`) on the unified Converse API — Claude, Nova, Llama, Mistral, etc. Supports system prompts, tool use, image input, streaming, and the standard AWS credential chain (env / shared profile / SSO). Resolver accepts `bedrock:` / `aws:` model strings.
 - **Graph engineering** primitives on Workflow / Step (see `examples/patterns/07_graph_engineering.py`):
   - `Step(on_failure=...)` / `Workflow.step(..., on_failure=)` — local failure policies: `raise`, `retry`, `skip`, `fallback`, `stop` (`StepFailed`)
   - `Step(reads=...)` / edge `payload_key` — edge data contracts so a step consumes a named SharedState key
@@ -70,7 +70,7 @@
   exec tools in the discovery core (`run_python`, `run_shell`)
 - Hard `Team` modes (`broadcast` / `sequential`) forward `images` / `videos` / `audio` /
   `output_schema` to member runs (including streaming helpers)
-- Competitive audit: `docs/COMPETITIVE.md` + `tests/unit/test_competitive_agent_audit.py`
+- Competitive audit coverage in `tests/unit/test_competitive_agent_audit.py`
 
 ### Added (Agno ease + LangGraph flex)
 
@@ -181,7 +181,7 @@
 - `rank_match` discovery helper — use `rank_bm25`
 - Passing kernel `MemoryManager` as `Agent(memory=...)` — use `Memory.compose`
 - `HITLPause` — never raised; Workflow HITL uses `FlowPaused`
-- Internal planning docs (`docs/STABILITY.md`, `docs/BETA_PLAN.md`, `docs/COMPETITIVE.md`)
+- Internal planning docs (`docs/STABILITY.md` and `docs/BETA_PLAN.md`)
 - `ExtensionRegistry` removed from `loomable.kernel.__all__` (import `loomable.kernel.registry`)
 
 ### Limits (documented)

@@ -135,7 +135,7 @@ class TestListTablesReturnsAllTableNames:
         db_path = os.path.join(tmp_dir, "test.db")
         conn = sqlite3.connect(db_path)
         for table_name in table_names:
-            conn.execute(f"CREATE TABLE {table_name} (id INTEGER PRIMARY KEY)")
+            conn.execute(f'CREATE TABLE "{table_name}" (id INTEGER PRIMARY KEY)')
         conn.commit()
         conn.close()
 
@@ -181,7 +181,7 @@ class TestDescribeTableReturnsColumnSchema:
         tmp_dir = tempfile.mkdtemp()
         db_path = os.path.join(tmp_dir, "test.db")
         conn = sqlite3.connect(db_path)
-        col_defs = ", ".join(f"{name} {typ}" for name, typ in columns)
+        col_defs = ", ".join(f'"{name}" {typ}' for name, typ in columns)
         conn.execute(f"CREATE TABLE test_table (id INTEGER PRIMARY KEY, {col_defs})")
         conn.commit()
         conn.close()
@@ -302,7 +302,7 @@ class TestSQLReadOnlyModeBlocksWriteOperations:
         conn.close()
 
         tools_ro = SQLTools(read_only=True)
-        statement = f"CREATE TABLE {table_name} (id INTEGER PRIMARY KEY)"
+        statement = f'CREATE TABLE "{table_name}" (id INTEGER PRIMARY KEY)'
         result = await tools_ro._run_sql(db_path, statement)
         assert "Error" in result, (
             f"Expected error for read-only CREATE TABLE, got: {result}"

@@ -16,6 +16,7 @@ __all__ = ["RunContext", "StopReason"]
 import hashlib
 import json
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -66,6 +67,7 @@ class RunContext:
     """
 
     events: AgentEvents = field(default_factory=NoOpEvents)
+    run_id: str = field(default_factory=lambda: uuid.uuid4().hex, kw_only=True)
     max_steps: int = 6
     token_budget: int | None = None
     #: Cumulative spend stop for the run. ``None`` falls back to ``token_budget``
@@ -98,6 +100,9 @@ class RunContext:
         default_factory=dict, init=False, repr=False
     )
     _t0: float = field(default_factory=time.monotonic, init=False, repr=False)
+    _delta_queue: Any = field(default=None, init=False, repr=False)
+    _usage: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    _budget: list[int] = field(default_factory=lambda: [0, 0], init=False, repr=False)
 
     # ------------------------------------------------------------------
     # Cancellation (cooperative)
@@ -129,8 +134,8 @@ class RunContext:
             memory=self.memory,
         )
         ctx._cancel_flag = self._cancel_flag
-        ctx._steps_used = self._steps_used
-        ctx._tokens_used = self._tokens_used
+        ctx.run_id = self.run_id
+        ctx._budget = self._budget
         ctx._call_history = self._call_history
         return ctx
 
@@ -143,12 +148,14 @@ class RunContext:
 
         Returns ``False`` once the step budget is exhausted.
         """
-        self._steps_used += 1
-        return self._steps_used <= self.max_steps
+        self._budget[0] += 1
+        self._steps_used = self._budget[0]
+        return self._budget[0] <= self.max_steps
 
     def add_tokens(self, n: int) -> None:
         """Add *n* tokens to the cumulative usage counter."""
-        self._tokens_used += n
+        self._budget[1] += n
+        self._tokens_used = self._budget[1]
 
     def token_budget_exceeded(self) -> bool:
         """Return ``True`` when cumulative spend has reached the run budget.
@@ -162,10 +169,10 @@ class RunContext:
         if self.max_run_tokens is not None:
             if self.max_run_tokens <= 0:
                 return False
-            return self._tokens_used >= self.max_run_tokens
+            return self._budget[1] >= self.max_run_tokens
         if self.token_budget is None:
             return False
-        return self._tokens_used >= self.token_budget
+        return self._budget[1] >= self.token_budget
 
     # ------------------------------------------------------------------
     # Loop / no-progress detection

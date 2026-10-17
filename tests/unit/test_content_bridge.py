@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import base64
 
+import pytest
+
+from loomable.agent.errors import UnsupportedModalityError
 from loomable.content import (
     AgentInput,
     AgentOutput,
@@ -22,6 +25,39 @@ from loomable.content import (
     to_model_request,
 )
 from loomable.kernel.models import ModelRequest, ModelResponse
+from loomable.content.message import to_agent_input
+from loomable.providers._common import to_openai_messages
+from loomable.providers.gemini import GeminiMediaProvider
+
+
+def test_audio_round_trips_as_audio_and_uses_the_correct_wire_format() -> None:
+    raw = b"RIFF audio payload"
+    encoded = base64.b64encode(raw).decode()
+    response = ModelResponse(metadata={"media": [{"media_type": "audio/wav", "data": encoded}]})
+    output = from_model_response(response)
+    assert output.parts[0].modality is Modality.AUDIO
+    assert output.parts[0].data == raw
+    request = to_model_request(to_agent_input(output))
+    part = request.messages[0]["content"][0]
+    assert GeminiMediaProvider._part(part) == {
+        "inlineData": {"mimeType": "audio/wav", "data": encoded}
+    }
+    assert to_openai_messages(request.messages, audio=True)[0]["content"] == [{
+        "type": "input_audio", "input_audio": {"format": "wav", "data": encoded},
+    }]
+    with pytest.raises(UnsupportedModalityError, match="audio"):
+        to_openai_messages(request.messages)
+
+
+def test_video_is_preserved_for_native_gemini_and_rejected_by_openai_chat() -> None:
+    output = AgentOutput(parts=[Text("Inspect this"), Video(data=b"clip")])
+    request = to_model_request(to_agent_input(output))
+    assert request.messages[0]["content"][0]["text"] == "Inspect this"
+    assert GeminiMediaProvider._part(request.messages[0]["content"][1]) == {
+        "inlineData": {"mimeType": "video/mp4", "data": "Y2xpcA=="}
+    }
+    with pytest.raises(UnsupportedModalityError, match="video"):
+        to_openai_messages(request.messages)
 
 
 # ---------------------------------------------------------------------------

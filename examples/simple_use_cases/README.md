@@ -18,14 +18,11 @@ Minimal Loomable agents for everyday questions.
 export GEMINI_API_KEY="..."
 export GEMINI_MODEL="gemini-flash-latest"   # optional
 
-# Or Z.AI / OpenAI-compatible
-export ZAI_API_KEY="..."
-export ZAI_BASE_URL="https://api.z.ai/api/coding/paas/v4"
-export ZAI_MODEL="glm-5.2"
+# Or OpenAI
+export OPENAI_API_KEY="..."
+export OPENAI_MODEL="gpt-4o-mini"  # optional
 
-# Or Azure OpenAI via .env (AZURE_OPENAI_*)
-
-pip install -e ".[web,pdf,ppt]"
+pip install -e ".[examples,web,pdf,ppt]"
 # or: pip install duckduckgo-search pypdf python-pptx
 ```
 

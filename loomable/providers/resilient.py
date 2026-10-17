@@ -103,6 +103,36 @@ class ResilientModel:
         self._inner = inner
         self._policy = policy if policy is not None else RetryPolicy()
         self._events = events
+        if self._policy.max_attempts < 1 or self._policy.per_call_timeout <= 0:
+            raise ValueError("RetryPolicy requires positive attempts and timeout")
+
+    def __getattr__(self, name):
+        if name == "stream":
+            if hasattr(self._inner, "stream"):
+                return self._stream
+            raise AttributeError(name)
+        # Preserve declared provider capabilities and optional lifecycle methods.
+        return getattr(self._inner, name)
+
+    async def _stream(self, request):
+        """Retry only before any event is exposed; never replay partial output."""
+        from contextlib import aclosing
+        policy = self._policy
+        for attempt in range(policy.max_attempts):
+            exposed = False
+            try:
+                async with aclosing(self._inner.stream(request)) as source:
+                    while True:
+                        try:
+                            event = await asyncio.wait_for(anext(source), policy.per_call_timeout)
+                        except StopAsyncIteration:
+                            return
+                        exposed = True
+                        yield event
+            except (TransientProviderError, asyncio.TimeoutError) as exc:
+                if exposed or attempt + 1 == policy.max_attempts:
+                    raise
+                await asyncio.sleep(_backoff_delay(attempt, policy, getattr(exc, "retry_after", None)))
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         """Attempt up to ``policy.max_attempts`` calls to the inner provider.

@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import hashlib
 import json
 import os
 import sqlite3
+import tempfile
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -272,7 +274,10 @@ def _run_sync(fn_or_coro: Any) -> Any:
 class SessionStore:
     """SQLite-backed session persistence (default Agent L1/L2 store)."""
 
-    def __init__(self, db_path: str = ":memory:") -> None:
+    def __init__(self, db_path: str = ":memory:", *, max_sessions: int | None = None) -> None:
+        if max_sessions is not None and max_sessions < 1:
+            raise ValueError("max_sessions must be positive")
+        self._max_sessions = max_sessions
         self._db_path = db_path
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.execute(
@@ -289,6 +294,12 @@ class SessionStore:
             "INSERT OR REPLACE INTO sessions (session_id, data) VALUES (?, ?)",
             (session.session_id, json.dumps(data)),
         )
+        if self._max_sessions is not None:
+            self._conn.execute(
+                "DELETE FROM sessions WHERE rowid IN "
+                "(SELECT rowid FROM sessions ORDER BY rowid DESC LIMIT -1 OFFSET ?)",
+                (self._max_sessions,),
+            )
         self._conn.commit()
 
     def resume(self, session_id: str) -> Session:
@@ -305,27 +316,40 @@ class SessionStore:
 
 
 class FileSessionStore:
-    """One JSON file per session under ``root`` (``{session_id}.json``)."""
+    """One JSON file per session under ``root``, keyed by a hash of its ID."""
 
     def __init__(self, root: str | Path = ".sessions") -> None:
         self._root = Path(root)
         self._root.mkdir(parents=True, exist_ok=True)
 
-    def _path(self, session_id: str) -> Path:
+    def _legacy_path(self, session_id: str) -> Path:
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in session_id)
         return self._root / f"{safe}.json"
 
+    def _path(self, session_id: str) -> Path:
+        digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
+        return self._root / f".session-{digest}.json"
+
     def save(self, session: Session) -> None:
         path = self._path(session.session_id)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(serialize_session(session), indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        fd, tmp = tempfile.mkstemp(dir=self._root, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(serialize_session(session), stream, indent=2)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(tmp, path)
+        finally:
+            Path(tmp).unlink(missing_ok=True)
 
     def resume(self, session_id: str) -> Session:
-        path = self._path(session_id)
-        if not path.is_file():
-            raise SessionNotFoundError(session_id)
-        return deserialize_session(json.loads(path.read_text(encoding="utf-8")))
+        for path in (self._path(session_id), self._legacy_path(session_id)):
+            if path.is_symlink() or not path.is_file():
+                continue
+            session = deserialize_session(json.loads(path.read_text(encoding="utf-8")))
+            if session.session_id == session_id:
+                return session
+        raise SessionNotFoundError(session_id)
 
 
 class BackendSessionStore:

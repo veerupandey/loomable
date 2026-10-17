@@ -14,11 +14,11 @@ __all__ = [
     "ModelTierRule",
 ]
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import Any, TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from loomable.flow.flow import Flow
-    from loomable.flow.nodes import Edge, Node
+    from loomable.flow.nodes import Node
 
 
 @runtime_checkable
@@ -94,7 +94,6 @@ class ParallelizeRule:
         Returns the same flow instance if no edges can be removed.
         """
         from loomable.flow.flow import Flow
-        from loomable.flow.nodes import Edge
 
         edges = flow._edges
         nodes = flow._nodes

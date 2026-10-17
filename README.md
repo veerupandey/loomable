@@ -28,7 +28,7 @@ def search(query: str) -> str:
     """Search the knowledge base."""
     return "Python was created in 1991."
 
-agent = Agent(model=provider, tools=[search], knowledge_base=["./handbook.pdf"])
+agent = Agent(model="openai:gpt-4o-mini", tools=[search], knowledge_base=["./handbook.pdf"])
 print((await agent.arun("When was Python created?")).output.text())
 ```
 
@@ -38,9 +38,11 @@ print((await agent.arun("When was Python created?")).output.text())
 pip install "loomable @ git+https://github.com/veerupandey/loomable.git@v0.2.0b0"
 # or
 pip install -e ".[dev,toolkits]"
+# Optional integrations
+pip install "loomable[serve,mcp]"
 ```
 
-Copy [`.env.example`](.env.example) to `.env` (gitignored) or export `GEMINI_API_KEY` / `OPENAI_API_KEY` / Azure vars.
+For examples that read a local `.env`, install the `examples` extra and copy [`.env.example`](.env.example) to `.env` (gitignored). For the base package, export `GEMINI_API_KEY` / `OPENAI_API_KEY`.
 
 ```python
 import asyncio
@@ -97,14 +99,14 @@ Providers: `OpenAIProvider`, `AzureOpenAIProvider`, `AnthropicProvider`, `Bedroc
 
 ```python
 from loomable import Agent
-from loomable.providers import BedrockProvider  # pip install "loomable[bedrock]"
 
-# Amazon Bedrock (Converse API) — Claude, Nova, Llama, Mistral, ... via one surface.
-# Auth uses the standard AWS chain (env / shared profile / SSO).
-agent = Agent(model=BedrockProvider("amazon.nova-lite-v1:0", region_name="us-east-1"))
+agent = Agent(model="openai:gpt-4o-mini")
+print(agent.run("What is the capital of France?").text)
 ```
 
 ## Examples
+
+The [incident triage agent](examples/incident_triage/README.md) uses live models and read-only tools to turn metrics and a runbook into a structured on-call handoff.
 
 ```bash
 python examples/agents/01_hello_world.py

@@ -22,16 +22,18 @@ Depends on ``loomable.agent`` and ``loomable.content`` plus FastAPI/Pydantic.
 from __future__ import annotations
 
 import asyncio
+from contextlib import aclosing
 import base64
 import json
+from hmac import compare_digest
 import logging
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from loomable.agent import BuiltAgent, RunChunk, RunResult, UnsupportedModalityError
+from loomable.agent import Agent, RunChunk, RunResult, UnsupportedModalityError
 from loomable.content import (
     AgentInput,
     AgentOutput,
@@ -270,6 +272,7 @@ def _register_agent_routes(
     *,
     prefix: str = "",
     api_key: str | None = None,
+    max_concurrent_runs: int | None = None,
 ) -> None:
     """Register health / run / NDJSON stream / AG-UI SSE routes on ``app``."""
     p = prefix.rstrip("/")
@@ -279,7 +282,7 @@ def _register_agent_routes(
         if expected_key is None:
             return None
         provided = _extract_request_api_key(request)
-        if provided is None or provided != expected_key:
+        if provided is None or not compare_digest(provided.encode("utf-8"), expected_key.encode("utf-8")):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "unauthorized"},
@@ -287,16 +290,41 @@ def _register_agent_routes(
             )
         return None
 
-    def _cancel_agent() -> None:
+    if max_concurrent_runs is not None and max_concurrent_runs < 1:
+        raise ValueError("max_concurrent_runs must be positive")
+    active_runs = 0
+
+    async def _admit_run(request: Request):
+        nonlocal active_runs
+        if max_concurrent_runs is None or _auth_or_401(request) is not None:
+            yield
+            return
+        if active_runs >= max_concurrent_runs:
+            raise HTTPException(429, "Agent run capacity exceeded", headers={"Retry-After": "1"})
+        active_runs += 1
+        try:
+            yield
+        finally:
+            active_runs -= 1
+
+    run_dependencies = [Depends(_admit_run)] if max_concurrent_runs is not None else None
+
+    def _target(body: RunRequestModel):
+        if isinstance(agent, Agent) and agent._mode != "case":
+            return agent._for_session(body.session_id)
+        _apply_session(body)
+        return agent
+
+    def _cancel_agent(target) -> None:
         seen: set[int] = set()
         targets: list[Any] = [
-            agent,
-            getattr(agent, "_built", None),
-            getattr(agent, "_agent", None),
-            getattr(agent, "_case", None),
-            getattr(agent, "_workflow", None),
+            target,
+            getattr(target, "_built", None),
+            getattr(target, "_agent", None),
+            getattr(target, "_case", None),
+            getattr(target, "_workflow", None),
         ]
-        members = getattr(agent, "_members", None)
+        members = getattr(target, "_members", None)
         if members:
             targets.extend(list(members))
         for target in targets:
@@ -365,7 +393,7 @@ def _register_agent_routes(
                     wf._session_id = sid
 
     async def _invoke_arun(agent_input: AgentInput | str, body: RunRequestModel) -> RunResult:
-        _apply_session(body)
+        target = _target(body)
         kwargs: dict[str, Any] = {}
         if body.resume is not None:
             kwargs["resume"] = body.resume
@@ -374,31 +402,21 @@ def _register_agent_routes(
             from loomable.agent.builder import _input_text
 
             text = agent_input if isinstance(agent_input, str) else _input_text(agent_input)
-            return await agent.arun(text, **kwargs)
-        if isinstance(agent_input, str):
-            return await agent.arun(agent_input, **kwargs)
-        return await agent.arun(agent_input, **kwargs)
+            return await target.arun(text, **kwargs)
+        return await target.arun(agent_input, **kwargs)
 
-    async def _invoke_astream_events(agent_input: AgentInput | str, body: RunRequestModel):
-        _apply_session(body)
+    def _invoke_astream_events(agent_input: AgentInput | str, body: RunRequestModel, target):
         kwargs: dict[str, Any] = {}
-        if body.session_id:
+        if body.session_id and not isinstance(target, Agent):
             kwargs["session_id"] = body.session_id
         if body.resume is not None:
             kwargs["resume"] = body.resume
         if type(agent).__name__ in ("Case", "Workflow") or getattr(agent, "_mode", None) == "case":
             from loomable.agent.builder import _input_text
 
-            text = agent_input if isinstance(agent_input, str) else _input_text(agent_input)
-            async for event in agent.astream_events(text, **kwargs):
-                yield event
-            return
-        if isinstance(agent_input, str):
-            async for event in agent.astream_events(agent_input, **kwargs):
-                yield event
-            return
-        async for event in agent.astream_events(agent_input, **kwargs):
-            yield event
+            if not isinstance(agent_input, str):
+                agent_input = _input_text(agent_input)
+        return target.astream_events(agent_input, **kwargs)
 
     @app.get(f"{p}/health")
     async def health(request: Request) -> Any:
@@ -407,7 +425,7 @@ def _register_agent_routes(
             return denied
         return {"status": "ok"}
 
-    @app.post(f"{p}/run")
+    @app.post(f"{p}/run", dependencies=run_dependencies)
     async def run(request: Request, body: RunRequestModel) -> JSONResponse:
         denied = _auth_or_401(request)
         if denied is not None:
@@ -422,6 +440,11 @@ def _register_agent_routes(
             return JSONResponse(status_code=400, content={"detail": str(exc)})
         except Exception as exc:  # noqa: BLE001
             from loomable.flow.hitl import FlowPaused
+            from loomable.persist import CheckpointBusy
+
+            if isinstance(exc, CheckpointBusy):
+                return JSONResponse(status_code=409, content={"detail": str(exc)},
+                                    headers={"Retry-After": "1"})
 
             if isinstance(exc, FlowPaused):
                 return JSONResponse(
@@ -429,7 +452,7 @@ def _register_agent_routes(
                     content=_paused_to_model(exc).model_dump(),
                 )
             raise
-        wf_sid = getattr(agent, "_session_id", None) or body.session_id
+        wf_sid = body.session_id or getattr(agent, "_session_id", None)
         return JSONResponse(
             status_code=200,
             content=_run_result_to_model(result, session_id=wf_sid).model_dump(),
@@ -440,7 +463,7 @@ def _register_agent_routes(
     # ``astream_events`` only — do not register a lying route.
     if _supports_ndjson_stream(agent):
 
-        @app.post(f"{p}/run/stream")
+        @app.post(f"{p}/run/stream", dependencies=run_dependencies)
         async def run_stream(request: Request, body: RunRequestModel) -> Any:
             denied = _auth_or_401(request)
             if denied is not None:
@@ -449,32 +472,33 @@ def _register_agent_routes(
                 agent_input = _resolve_run_input(body)
             except ValueError as exc:
                 return JSONResponse(status_code=422, content={"detail": str(exc)})
-            _apply_session(body)
+            target = _target(body)
 
             async def event_stream():
                 try:
                     run_input = agent_input
                     if not isinstance(run_input, str):
                         run_input = _request_to_agent_input(body)
-                    async for chunk in agent.astream(run_input):
-                        if await request.is_disconnected():
-                            _cancel_agent()
-                            break
-                        yield json.dumps(_chunk_to_dict(chunk)) + "\n"
+                    async with aclosing(target.astream(run_input)) as stream:
+                        async for chunk in stream:
+                            if await request.is_disconnected():
+                                _cancel_agent(target)
+                                break
+                            yield json.dumps(_chunk_to_dict(chunk)) + "\n"
                 except UnsupportedModalityError as exc:
                     yield json.dumps({"error": str(exc)}) + "\n"
                 except asyncio.CancelledError:
-                    _cancel_agent()
+                    _cancel_agent(target)
                     raise
                 except Exception as exc:  # noqa: BLE001
                     yield json.dumps({"error": str(exc)}) + "\n"
                 finally:
                     if await request.is_disconnected():
-                        _cancel_agent()
+                        _cancel_agent(target)
 
             return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
-    @app.post(f"{p}/run/events")
+    @app.post(f"{p}/run/events", dependencies=run_dependencies)
     async def run_events(request: Request, body: RunRequestModel) -> Any:
         """AG-UI-compatible Server-Sent Events stream."""
         from loomable.stream import sse_encode
@@ -494,15 +518,17 @@ def _register_agent_routes(
             )
 
         async def sse_stream():
+            target = _target(body)
             from loomable.flow.hitl import FlowPaused
             from loomable.stream import RUN_ERROR, RUN_PAUSED, StreamEvent
 
             try:
-                async for event in _invoke_astream_events(agent_input, body):
-                    if await request.is_disconnected():
-                        _cancel_agent()
-                        break
-                    yield sse_encode(event)
+                async with aclosing(_invoke_astream_events(agent_input, body, target)) as stream:
+                    async for event in stream:
+                        if await request.is_disconnected():
+                            _cancel_agent(target)
+                            break
+                        yield sse_encode(event)
             except FlowPaused as exc:
                 yield sse_encode(
                     StreamEvent(
@@ -529,7 +555,7 @@ def _register_agent_routes(
                     )
                 )
             except asyncio.CancelledError:
-                _cancel_agent()
+                _cancel_agent(target)
                 raise
             except Exception as exc:  # noqa: BLE001
                 yield sse_encode(
@@ -541,7 +567,7 @@ def _register_agent_routes(
                 )
             finally:
                 if await request.is_disconnected():
-                    _cancel_agent()
+                    _cancel_agent(target)
 
         return StreamingResponse(
             sse_stream(),
@@ -560,6 +586,7 @@ def mount_agent(
     *,
     prefix: str = "/agent",
     api_key: str | None = None,
+    max_concurrent_runs: int | None = None,
 ) -> FastAPI:
     """Mount Agent AG-UI routes on an existing FastAPI app.
 
@@ -569,6 +596,7 @@ def mount_agent(
 
     When ``api_key`` is set, require ``Authorization: Bearer <key>`` or
     ``X-API-Key: <key>`` on all routes (including health).
+    A configured run limit returns HTTP 429 when all slots are in use.
     """
     # High-level Agent → BuiltAgent when needed for legacy adapter compat
     target = agent
@@ -576,7 +604,8 @@ def mount_agent(
         target = agent.build()
     elif hasattr(agent, "_get_built") and not hasattr(agent, "astream_events"):
         target = agent._get_built()
-    _register_agent_routes(app, target, prefix=prefix, api_key=api_key)
+    _register_agent_routes(app, target, prefix=prefix, api_key=api_key,
+                           max_concurrent_runs=max_concurrent_runs)
     return app
 
 
@@ -614,7 +643,7 @@ def mount_workflow(
         if expected_key is None:
             return None
         provided = _extract_request_api_key(request)
-        if provided is None or provided != expected_key:
+        if provided is None or not compare_digest(provided.encode("utf-8"), expected_key.encode("utf-8")):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "unauthorized"},

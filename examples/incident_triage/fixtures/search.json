@@ -1,0 +1,9 @@
+{
+  "incident": "INC-2042",
+  "signals": [
+    {"id": "M1", "text": "Search latency increased from 150 ms to 740 ms at 09:08 UTC. Search errors stayed below 1%."},
+    {"id": "D1", "text": "A scheduled catalog reindex started at 09:05 UTC. There was no application deployment."},
+    {"id": "C1", "text": "Search latency remained below 160 ms on the shard without reindex work."}
+  ],
+  "policy": {"id": "R1", "text": "Declare SEV3 for search latency above 500 ms with errors below 1%. Page Search On-Call. Propose throttling reindex work for operator approval. Verify search latency returns below 250 ms."}
+}

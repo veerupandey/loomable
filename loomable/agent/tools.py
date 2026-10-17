@@ -23,10 +23,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import re
-from contextlib import asynccontextmanager
-from contextvars import ContextVar
 from hashlib import sha256
 from typing import Any, Callable, get_type_hints
+
+from pydantic import ConfigDict, create_model
 
 from loomable.kernel.contracts import Tool
 from loomable.kernel.mcp_client import MCPSession
@@ -101,27 +101,43 @@ def _media_summary(items: list[_MediaBase]) -> str:
     return f"[{len(items)} media items: {', '.join(parts)}]"
 
 
-def _build_parameters_schema(func: Callable[..., Any]) -> dict[str, Any]:
-    """Build a JSON-schema ``parameters`` object from a function signature."""
+def _argument_model(func):
     signature = inspect.signature(func)
     try:
-        hints = get_type_hints(func)
-    except Exception:  # pragma: no cover - unusual annotations
+        hints = get_type_hints(func, include_extras=True)
+    except (NameError, TypeError):
         hints = {}
-
-    properties: dict[str, Any] = {}
-    required: list[str] = []
+    fields = {}
     for name, param in signature.parameters.items():
         if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
             continue
         annotation = hints.get(name, param.annotation)
-        properties[name] = {"type": _json_type(annotation)}
-        if param.default is inspect.Parameter.empty:
-            required.append(name)
+        if annotation is inspect.Parameter.empty:
+            annotation = Any
+        default = ... if param.default is inspect.Parameter.empty else None
+        fields[name] = (annotation, default)
+    extra = "allow" if any(p.kind == p.VAR_KEYWORD for p in signature.parameters.values()) else "forbid"
+    return create_model(f"{func.__name__}Arguments",
+                        __config__=ConfigDict(extra=extra, arbitrary_types_allowed=True), **fields)
 
-    schema: dict[str, Any] = {"type": "object", "properties": properties}
-    if required:
-        schema["required"] = required
+
+def _build_parameters_schema(func: Callable[..., Any], model) -> dict[str, Any]:
+    """Derive full schemas with the same types used for runtime validation."""
+    schema = model.model_json_schema()
+    schema.pop("title", None)
+    schema.pop("additionalProperties", None)
+    if not schema.get("required"):
+        schema.pop("required", None)
+    signature = inspect.signature(func)
+    for name, prop in schema.get("properties", {}).items():
+        prop.pop("title", None)
+        prop.pop("default", None)
+        if signature.parameters[name].annotation is inspect.Parameter.empty:
+            prop.setdefault("type", "string")  # compatibility for unannotated tools
+        if prop.get("items") == {}:
+            prop.pop("items")
+        if prop.get("additionalProperties") is True:
+            prop.pop("additionalProperties")
     return schema
 
 
@@ -139,7 +155,8 @@ class FunctionTool(Tool):
         self._func = func
         self.name = name or func.__name__
         self.description = description or (inspect.getdoc(func) or "").strip()
-        self.parameters = _build_parameters_schema(func)
+        self._arguments = _argument_model(func)
+        self.parameters = _build_parameters_schema(func, self._arguments)
         self._is_async = asyncio.iscoroutinefunction(func)
         self.idempotent = idempotent
 
@@ -167,10 +184,13 @@ class FunctionTool(Tool):
         are wrapped unchanged.
         """
         try:
+            parsed = self._arguments.model_validate(args)
+            validated = {name: getattr(parsed, name) for name in self._arguments.model_fields if name in args}
+            validated.update(parsed.model_extra or {})
             if self._is_async:
-                result = await self._func(**args)
+                result = await self._func(**validated)
             else:
-                result = await asyncio.to_thread(self._func, **args)
+                result = await asyncio.to_thread(self._func, **validated)
         except Exception as exc:  # noqa: BLE001 - isolate tool failures
             return ToolResult(error=f"Tool '{self.name}' failed: {exc}")
 
@@ -244,65 +264,6 @@ def mcp_tool_name(server_id: str, remote_name: str, occupied: set[str]) -> str:
     return candidate
 
 
-class _MCPRunSessions:
-    """Own each transport in one task and share it across a run's calls."""
-
-    def __init__(self) -> None:
-        self._sessions: dict[int, tuple[asyncio.Task, asyncio.Future, asyncio.Event]] = {}
-
-    async def get(self, discovered: MCPSession):
-        key = id(discovered)
-        if key not in self._sessions:
-            ready = asyncio.get_running_loop().create_future()
-            stop = asyncio.Event()
-            task = asyncio.create_task(self._own(discovered.spec, ready, stop))
-            self._sessions[key] = task, ready, stop
-        _, ready, _ = self._sessions[key]
-        return await asyncio.shield(ready)
-
-    @staticmethod
-    async def _own(spec, ready: asyncio.Future, stop: asyncio.Event) -> None:
-        from loomable.kernel.mcp_client import MCPClient
-
-        client = MCPClient()
-        try:
-            session = await client.connect({**spec, "_skip_discovery": True})
-        except asyncio.CancelledError:
-            ready.cancel()
-            raise
-        except Exception as exc:
-            ready.set_exception(exc)
-            return
-        try:
-            ready.set_result((client, session))
-            await stop.wait()
-        finally:
-            await client.close(session)
-
-    async def close(self) -> None:
-        for task, ready, stop in self._sessions.values():
-            if not ready.done():
-                task.cancel()
-            elif not ready.cancelled():
-                ready.exception()
-            stop.set()
-        await asyncio.gather(*(task for task, _, _ in self._sessions.values()), return_exceptions=True)
-
-
-_mcp_run_sessions: ContextVar[_MCPRunSessions | None] = ContextVar("mcp_run_sessions", default=None)
-
-
-@asynccontextmanager
-async def mcp_run_scope():
-    sessions = _MCPRunSessions()
-    token = _mcp_run_sessions.set(sessions)
-    try:
-        yield
-    finally:
-        _mcp_run_sessions.reset(token)
-        await sessions.close()
-
-
 class MCPTool(Tool):
     """A :class:`Tool` backed by a remote MCP server tool.
 
@@ -347,9 +308,11 @@ class MCPTool(Tool):
         if spec is None or self._session.connected:
             return await self._mcp_client.call_tool(self._session, self._remote_name, args)
 
-        sessions = _mcp_run_sessions.get()
-        if sessions is None:
-            async with mcp_run_scope():
-                return await self.invoke(args)
-        client, session = await sessions.get(self._session)
-        return await client.call_tool(session, self._remote_name, args)
+        from loomable.kernel.mcp_client import MCPClient
+
+        client = MCPClient()
+        session = await client.connect({**spec, "_skip_discovery": True})
+        try:
+            return await client.call_tool(session, self._remote_name, args)
+        finally:
+            await client.close(session)

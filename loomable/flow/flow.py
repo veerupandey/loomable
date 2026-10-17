@@ -79,10 +79,7 @@ class FlowPlan:
 
 if TYPE_CHECKING:
     from loomable.agent.context import RunContext
-    from loomable.agent.events import AgentEvents
     from loomable.agent.run import RunResult
-    from loomable.flow.memory import MemoryStore
-    from loomable.persist.checkpoint import Checkpointer
 
 
 class Flow:
@@ -335,8 +332,6 @@ class Flow:
             ``None`` (default) — auto-resume when an incomplete checkpoint exists.
         """
         from loomable.agent.context import RunContext
-        from loomable.flow.engines.sequential import SequentialEngine
-        from loomable.flow.optimizer import Optimizer
         from loomable.flow.state import SharedState
 
         # 1–2. SharedState + RunContext
@@ -544,7 +539,6 @@ class Flow:
             RUN_STARTED,
             AsyncStreamBus,
             StreamBridge,
-            StreamEvent,
         )
 
         rid = run_id or uuid.uuid4().hex

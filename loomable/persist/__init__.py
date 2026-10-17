@@ -2,6 +2,7 @@
 
 from .checkpoint import (
     Checkpoint,
+    CheckpointBusy,
     CheckpointConfig,
     Checkpointer,
     InMemoryCheckpointer,
@@ -14,6 +15,7 @@ from .postgres import PostgresCheckpointer
 
 __all__ = [
     "Checkpoint",
+    "CheckpointBusy",
     "CheckpointConfig",
     "Checkpointer",
     "CheckpointListener",

@@ -8,94 +8,79 @@ primitives without modifying ``loomable.kernel``:
 - ``AgentConfigError`` for invalid/missing builder configuration
 
 L3 ``NoteStore`` lives in :mod:`loomable.memory` (re-exported here for compatibility).
-Multi-agent orchestration is handled via ``Team`` / ``Workflow`` (and low-level ``Flow``).
-"""
+Multi-agent orchestration is handled via ``Team`` / ``Workflow`` (and low-level ``Flow``)."""
+from __future__ import annotations
 
-from .builder import (
-    Agent,
-    BuiltAgent,
-    GatedDispatchResult,
-    ModelSpec,
-    PostToolHook,
-    ToolHook,
-)
-from .context import RunContext, StopReason
-from .context_policy import CompactionResult, ContextPolicy
-from .delegation import make_delegation_tools, spawn_specialist
-from .errors import (
-    AgentConfigError,
-    InputValidationError,
-    RequireToolsError,
-    StructuredOutputError,
-    ToolHookRejection,
-    UnsupportedModalityError,
-)
-from .events import AgentEvents, Event, JSONTracer, NoOpEvents
-from .media import image, video
-from loomable.media import Image as Image, Audio, Video, File
-from .notes import Note, NoteStore, make_memory_tool  # compat re-export; prefer loomable.memory
-from .reasoning import make_plan_tool, make_think_tool
-from .routing import ComplexityRouter, RunStrategy
-from .run import RunChunk, RunResult
-from .summarize import LLMSummarizer
-from .team import Team
-from .tools import FunctionTool, MCPTool, tool
-from .deep import (
-    SpecialistSpec,
-    create_deep_agent,
-    make_compact_conversation_tool,
-    make_research_accept,
-    make_task_tool,
-    make_task_tools,
-)
+from importlib import import_module
 
-__all__ = [
-    "Agent",
-    "BuiltAgent",
-    "GatedDispatchResult",
-    "ModelSpec",
-    "Team",
-    "ToolHook",
-    "PostToolHook",
-    "AgentConfigError",
-    "UnsupportedModalityError",
-    "StructuredOutputError",
-    "InputValidationError",
-    "ToolHookRejection",
-    "RequireToolsError",
-    "RunResult",
-    "RunChunk",
-    "RunContext",
-    "StopReason",
-    "ContextPolicy",
-    "CompactionResult",
-    "AgentEvents",
-    "Event",
-    "NoOpEvents",
-    "JSONTracer",
-    "ComplexityRouter",
-    "RunStrategy",
-    "NoteStore",
-    "Note",
-    "make_memory_tool",
-    "make_delegation_tools",
-    "spawn_specialist",
-    "make_think_tool",
-    "make_plan_tool",
-    "create_deep_agent",
-    "make_task_tool",
-    "make_task_tools",
-    "make_research_accept",
-    "make_compact_conversation_tool",
-    "SpecialistSpec",
-    "LLMSummarizer",
-    "image",
-    "video",
-    "Image",
-    "Audio",
-    "Video",
-    "File",
-    "tool",
-    "FunctionTool",
-    "MCPTool",
-]
+__all__ = ['Agent', 'BuiltAgent', 'GatedDispatchResult', 'ModelSpec', 'Team', 'ToolHook', 'PostToolHook', 'AgentConfigError', 'UnsupportedModalityError', 'StructuredOutputError', 'InputValidationError', 'ToolHookRejection', 'RequireToolsError', 'RunResult', 'RunChunk', 'RunContext', 'StopReason', 'ContextPolicy', 'CompactionResult', 'AgentEvents', 'Event', 'NoOpEvents', 'JSONTracer', 'ComplexityRouter', 'RunStrategy', 'NoteStore', 'Note', 'make_memory_tool', 'make_delegation_tools', 'spawn_specialist', 'make_think_tool', 'make_plan_tool', 'create_deep_agent', 'make_task_tool', 'make_task_tools', 'make_research_accept', 'make_compact_conversation_tool', 'SpecialistSpec', 'LLMSummarizer', 'image', 'video', 'Image', 'Audio', 'Video', 'File', 'tool', 'FunctionTool', 'MCPTool']
+
+_EXPORTS = {
+    'ExecutionOptions': ('.options', 'ExecutionOptions'),
+    'DurabilityOptions': ('.options', 'DurabilityOptions'),
+    'AgentPaused': ('.durable', 'AgentPaused'),
+    'UnknownToolOutcome': ('.durable', 'UnknownToolOutcome'),
+    'Agent': ('.builder', 'Agent'),
+    'BuiltAgent': ('.builder', 'BuiltAgent'),
+    'GatedDispatchResult': ('.builder', 'GatedDispatchResult'),
+    'ModelSpec': ('.builder', 'ModelSpec'),
+    'Team': ('.team', 'Team'),
+    'ToolHook': ('.builder', 'ToolHook'),
+    'PostToolHook': ('.builder', 'PostToolHook'),
+    'AgentConfigError': ('.errors', 'AgentConfigError'),
+    'UnsupportedModalityError': ('.errors', 'UnsupportedModalityError'),
+    'StructuredOutputError': ('.errors', 'StructuredOutputError'),
+    'InputValidationError': ('.errors', 'InputValidationError'),
+    'ToolHookRejection': ('.errors', 'ToolHookRejection'),
+    'RequireToolsError': ('.errors', 'RequireToolsError'),
+    'RunResult': ('.run', 'RunResult'),
+    'RunChunk': ('.run', 'RunChunk'),
+    'RunContext': ('.context', 'RunContext'),
+    'StopReason': ('.context', 'StopReason'),
+    'ContextPolicy': ('.context_policy', 'ContextPolicy'),
+    'CompactionResult': ('.context_policy', 'CompactionResult'),
+    'AgentEvents': ('.events', 'AgentEvents'),
+    'Event': ('.events', 'Event'),
+    'NoOpEvents': ('.events', 'NoOpEvents'),
+    'JSONTracer': ('.events', 'JSONTracer'),
+    'ComplexityRouter': ('.routing', 'ComplexityRouter'),
+    'RunStrategy': ('.routing', 'RunStrategy'),
+    'NoteStore': ('.notes', 'NoteStore'),
+    'Note': ('.notes', 'Note'),
+    'make_memory_tool': ('.notes', 'make_memory_tool'),
+    'make_delegation_tools': ('.delegation', 'make_delegation_tools'),
+    'spawn_specialist': ('.delegation', 'spawn_specialist'),
+    'make_think_tool': ('.reasoning', 'make_think_tool'),
+    'make_plan_tool': ('.reasoning', 'make_plan_tool'),
+    'create_deep_agent': ('.deep', 'create_deep_agent'),
+    'make_task_tool': ('.deep', 'make_task_tool'),
+    'make_task_tools': ('.deep', 'make_task_tools'),
+    'make_research_accept': ('.deep', 'make_research_accept'),
+    'make_compact_conversation_tool': ('.deep', 'make_compact_conversation_tool'),
+    'SpecialistSpec': ('.deep', 'SpecialistSpec'),
+    'LLMSummarizer': ('.summarize', 'LLMSummarizer'),
+    'image': ('.media', 'image'),
+    'video': ('.media', 'video'),
+    'Image': ('loomable.media', 'Image'),
+    'Audio': ('loomable.media', 'Audio'),
+    'Video': ('loomable.media', 'Video'),
+    'File': ('loomable.media', 'File'),
+    'tool': ('.tools', 'tool'),
+    'FunctionTool': ('.tools', 'FunctionTool'),
+    'MCPTool': ('.tools', 'MCPTool'),
+}
+
+__all__ += ["ExecutionOptions", "DurabilityOptions", "AgentPaused", "UnknownToolOutcome"]
+
+def __getattr__(name):
+    try:
+        module, attribute = _EXPORTS[name]
+    except KeyError:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
+    value = getattr(import_module(module, __name__), attribute)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))

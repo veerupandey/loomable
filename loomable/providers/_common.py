@@ -117,15 +117,16 @@ def _parse_data_uri(url: str) -> tuple[str, bytes] | None:
 # ---------------------------------------------------------------------------
 
 
-def to_openai_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def to_openai_messages(
+    messages: list[dict[str, Any]], *, provider_id: str = "openai", audio: bool = False,
+) -> list[dict[str, Any]]:
     """Translate provider-agnostic messages to OpenAI chat-completions messages.
 
     - A message whose ``content`` is a plain string is passed through.
     - A message whose ``content`` is a list of only text parts is flattened to a
       single string (maximally compatible across OpenAI-compatible servers).
-    - A message with mixed/multimodal parts keeps the content-array form, retaining
-      ``text`` and ``image_url`` parts (the types the OpenAI schema supports) and
-      dropping any unsupported part types (e.g. ``video_url``).
+    - A message with mixed/multimodal parts keeps the content-array form.
+      Unsupported parts raise before the request is sent.
     - Tool-related fields (``tool_calls`` on assistant messages and ``tool_call_id``
       on tool messages) are preserved so the tool-use loop works end-to-end.
     """
@@ -140,12 +141,31 @@ def to_openai_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         elif _content_is_all_text(content):
             translated = {"role": role, "content": _join_text(content)}
         else:
-            # Mixed content: keep text and image_url parts, drop unsupported types.
-            kept = [
-                part
-                for part in content
-                if isinstance(part, dict) and part.get("type") in {"text", "image_url"}
-            ]
+            kept = []
+            for part in content:
+                kind = part.get("type")
+                if kind in {"text", "image_url"} or (audio and kind == "input_audio"):
+                    kept.append(part)
+                elif audio and kind == "audio_url":
+                    url = part["audio_url"]["url"]
+                    header, _, encoded = url.partition(",")
+                    audio_format = {
+                        "data:audio/wav;base64": "wav",
+                        "data:audio/x-wav;base64": "wav",
+                        "data:audio/mpeg;base64": "mp3",
+                        "data:audio/mp3;base64": "mp3",
+                    }.get(header)
+                    if not audio_format or not encoded:
+                        raise ValueError("Chat audio requires inline WAV or MP3 data.")
+                    kept.append({
+                        "type": "input_audio",
+                        "input_audio": {"format": audio_format, "data": encoded},
+                    })
+                else:
+                    from loomable.agent.errors import UnsupportedModalityError
+
+                    modality = "audio" if kind == "input_audio" else str(kind).removesuffix("_url")
+                    raise UnsupportedModalityError(modality, provider_id)
             translated = {"role": role, "content": kept}
 
         # Preserve tool_calls on assistant messages (required for the tool-use loop).

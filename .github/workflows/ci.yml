@@ -43,6 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DEEP_AGENT_LIVE: "1"
+      LOOMABLE_LIVE_PROVIDER: gemini
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
       POSTGRES_URL: ${{ secrets.POSTGRES_URL }}
@@ -62,6 +63,7 @@ jobs:
             echo "GEMINI_API_KEY not set; skipping live Gemini gate"
             exit 0
           fi
+          python -m pytest tests/integration/test_model_live.py --live -q --tb=short
           python examples/deep_agent/live_gate.py
       - name: Live Postgres
         run: |
@@ -69,4 +71,4 @@ jobs:
             echo "POSTGRES_URL not set; skipping live Postgres tests"
             exit 0
           fi
-          python -m pytest tests/integration/test_postgres_live.py -q --tb=short
+          python -m pytest tests/integration/test_postgres_live.py --live -q --tb=short

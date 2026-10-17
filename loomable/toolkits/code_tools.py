@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from loomable.agent.tools import FunctionTool
 from loomable.codeindex import CodeIndex

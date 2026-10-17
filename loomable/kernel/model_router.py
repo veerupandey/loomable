@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from loomable.kernel.errors import ModelProviderError
 from loomable.kernel.model_interface import ModelInterface
 from loomable.kernel.models import (
-    AgentConfig,
     ModelRequest,
     ModelResponse,
     TierPolicy,

@@ -150,10 +150,8 @@ def _part_to_content(part: MediaPart) -> dict[str, Any]:
     if part.modality is Modality.TEXT:
         text = part.data.decode("utf-8") if part.data is not None else ""
         return {"type": "text", "text": text}
-    if part.modality is Modality.IMAGE:
-        return {"type": "image_url", "image_url": {"url": _media_url(part)}}
-    # Modality.VIDEO
-    return {"type": "video_url", "video_url": {"url": _media_url(part)}}
+    kind = f"{part.modality.value}_url"
+    return {"type": kind, kind: {"url": _media_url(part)}}
 
 
 def _coerce_modality(raw: Any, media_type: str | None) -> Modality:
@@ -191,6 +189,8 @@ def _media_from_entry(entry: dict[str, Any]) -> MediaPart:
         return Image(data=data, uri=uri, media_type=media_type or "image/png")
     if modality is Modality.VIDEO:
         return Video(data=data, uri=uri, media_type=media_type or "video/mp4")
+    if modality is Modality.AUDIO:
+        return MediaPart(modality, media_type or "audio/wav", data=data, uri=uri)
     # Modality.TEXT
     if data is not None:
         return Text(data.decode("utf-8"))
@@ -222,6 +222,7 @@ def to_model_request(
     - text → ``{"type": "text", "text": <decoded utf-8>}``
     - image → ``{"type": "image_url", "image_url": {"url": <uri or data URI>}}``
     - video → ``{"type": "video_url", "video_url": {"url": <uri or data URI>}}``
+    - audio → ``{"type": "audio_url", "audio_url": {"url": <uri or data URI>}}``
 
     Message and part ordering is preserved (Req 4.3, 4.5). Inline ``data`` is encoded
     as a base64 ``data:`` URI using the part's ``media_type``.

@@ -18,7 +18,6 @@ from loomable.kernel.guardrails import GuardrailHarness, VerificationGate
 from loomable.kernel.memory import MemoryManager
 from loomable.kernel.models import (
     AgentConfig,
-    ContextItem,
     LoopPhase,
     LoopState,
     Session,

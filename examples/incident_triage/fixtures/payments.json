@@ -1,0 +1,9 @@
+{
+  "incident": "INC-2041",
+  "signals": [
+    {"id": "M1", "text": "Checkout payment failures rose from 1% to 31% at 14:04 UTC."},
+    {"id": "D1", "text": "Release payments-2.8.4 reached the affected region at 14:02 UTC."},
+    {"id": "C1", "text": "The region still on 2.8.3 stayed at 1% payment failures."}
+  ],
+  "policy": {"id": "R1", "text": "Declare SEV2 when checkout failures exceed 10%. Page Payments On-Call. Propose rollback for incident commander approval when the previous release is healthy. Verify payment failures return below 2%."}
+}

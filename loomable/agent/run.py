@@ -195,3 +195,4 @@ class RunChunk:
 
     delta: MediaPart
     done: bool = False
+    result: RunResult | None = None

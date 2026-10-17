@@ -36,7 +36,7 @@ import asyncio
 import json
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Literal
 
 from loomable.agent.events import AgentEvents, Event, NoOpEvents
@@ -110,10 +110,12 @@ def sse_encode(event: StreamEvent) -> bytes:
 class AsyncStreamBus:
     """Async multicast queue for :class:`StreamEvent` frames."""
 
-    def __init__(self, run_id: str = "", session_id: str = "") -> None:
+    def __init__(
+        self, run_id: str = "", session_id: str = "", *, max_pending: int = 0,
+    ) -> None:
         self.run_id = run_id
         self.session_id = session_id
-        self._queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue()
+        self._queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue(maxsize=max_pending)
         self._closed = False
 
     async def publish(self, event: StreamEvent) -> None:
@@ -128,10 +130,7 @@ class AsyncStreamBus:
     def publish_nowait(self, event: StreamEvent) -> None:
         if self._closed:
             return
-        try:
-            self._queue.put_nowait(event)
-        except asyncio.QueueFull:
-            pass
+        self._queue.put_nowait(event)
 
     def emit_sync(self, event: StreamEvent) -> None:
         """Sync publish (for tool callbacks / AgentEvents bridges)."""
@@ -157,7 +156,7 @@ class AsyncStreamBus:
             pass
 
     async def events(self) -> AsyncIterator[StreamEvent]:
-        while True:
+        while not (self._closed and self._queue.empty()):
             item = await self._queue.get()
             if item is None:
                 break
@@ -201,6 +200,12 @@ class StreamBridge:
                 session_id=self._session_id,
                 data=data or {},
             )
+        )
+
+    async def apublish(self, type_: str, data: dict[str, Any] | None = None) -> None:
+        await self._bus.publish(
+            StreamEvent(type=type_, run_id=self._run_id,
+                        session_id=self._session_id, data=data or {})
         )
 
     def _map(self, event: Event) -> list[StreamEvent]:

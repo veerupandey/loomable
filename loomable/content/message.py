@@ -96,8 +96,8 @@ def to_agent_input(value: Any) -> AgentInput:
 
     - :class:`AgentInput` -> returned unchanged.
     - ``str`` -> a single user text message.
-    - :class:`AgentOutput` -> its ``.text()`` as a user message.
-    - ``RunResult`` -> its ``.output.text()`` as a user message.
+    - :class:`AgentOutput` -> its ordered parts as a user message.
+    - ``RunResult`` -> its model output as a user message.
     - Pydantic ``BaseModel`` -> its ``model_dump_json()`` as user text.
     - dataclass instance -> ``json.dumps(asdict(...))`` as user text.
     - ``dict`` -> ``json.dumps(...)`` as user text.
@@ -110,16 +110,17 @@ def to_agent_input(value: Any) -> AgentInput:
     if isinstance(value, str):
         return AgentInput.from_text(value)
 
-    # AgentOutput: extract the text content (framework's own output type).
+    if isinstance(value, MediaPart):
+        return AgentInput(messages=[Message(role="user", parts=[value])])
     if isinstance(value, AgentOutput):
-        return AgentInput.from_text(value.text())
+        return AgentInput(messages=[Message(role="user", parts=list(value.parts))])
 
-    # RunResult: unwrap to AgentOutput, then extract text.
+    # RunResult: unwrap to AgentOutput without losing native media.
     # Import lazily to avoid circular dependency.
     try:
         from loomable.agent.run import RunResult
         if isinstance(value, RunResult):
-            return AgentInput.from_text(value.output.text())
+            return to_agent_input(value.output)
     except ImportError:
         pass
 

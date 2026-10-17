@@ -15,11 +15,15 @@ This module lives at the edge — the kernel imports none of it.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
+import tempfile
 import time
 import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -27,6 +31,28 @@ from typing import Any, Protocol, runtime_checkable
 # ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
+
+
+class CheckpointBusy(RuntimeError):
+    """A worker already owns this checkpoint thread."""
+
+
+@asynccontextmanager
+async def _local_claim(root: Path, thread_id: str):
+    # Keep the lock inode stable. SQLite releases the transaction on process exit.
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    name = hashlib.sha256(thread_id.encode()).hexdigest()
+    connection = sqlite3.connect(root / name, timeout=0)
+    try:
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError as exc:
+            if exc.sqlite_errorcode in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                raise CheckpointBusy("Checkpoint thread already has an owner") from exc
+            raise
+        yield
+    finally:
+        connection.close()
 
 
 @dataclass
@@ -186,9 +212,18 @@ class JsonFileCheckpointer:
         self._max_checkpoints = max_checkpoints
         os.makedirs(location, exist_ok=True)
 
-    def _thread_dir(self, thread_id: str) -> str:
-        """Return the directory for a thread, creating it if needed."""
+    def _thread_path(self, thread_id: str) -> str:
+        if not thread_id or thread_id in {".", ".."} or any(
+            separator in thread_id for separator in ("/", chr(92), chr(0))
+        ) or os.path.splitdrive(thread_id)[0]:
+            raise ValueError("Checkpoint thread ID must be a single path component")
         path = os.path.join(self._location, thread_id)
+        if os.path.islink(path):
+            raise ValueError("Checkpoint directory must not be a symbolic link")
+        return path
+
+    def _thread_dir(self, thread_id: str) -> str:
+        path = self._thread_path(thread_id)
         os.makedirs(path, exist_ok=True)
         return path
 
@@ -197,6 +232,9 @@ class JsonFileCheckpointer:
         ts = f"{cp.timestamp:.6f}".replace(".", "_")
         uid = uuid.uuid4().hex[:8]
         return f"{ts}_{uid}.json"
+
+    def claim(self, thread_id: str):
+        return _local_claim(Path(self._location).resolve() / ".ownership", thread_id)
 
     async def put(self, cp: Checkpoint) -> None:
         """Write a checkpoint as a JSON file.
@@ -210,8 +248,16 @@ class JsonFileCheckpointer:
         filename = self._checkpoint_filename(cp)
         filepath = os.path.join(thread_dir, filename)
 
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(cp.to_dict(), f, indent=2, default=str)
+        fd, temporary = tempfile.mkstemp(dir=thread_dir, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(cp.to_dict(), f, indent=2, default=str)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, filepath)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
 
         # Prune if max_checkpoints is set
         if self._max_checkpoints is not None:
@@ -219,7 +265,7 @@ class JsonFileCheckpointer:
 
     async def get(self, thread_id: str) -> Checkpoint | None:
         """Get the latest checkpoint for a thread (by filename sort order)."""
-        thread_dir = os.path.join(self._location, thread_id)
+        thread_dir = self._thread_path(thread_id)
         if not os.path.isdir(thread_dir):
             return None
 
@@ -237,7 +283,7 @@ class JsonFileCheckpointer:
 
     async def list(self, thread_id: str) -> list[Checkpoint]:
         """List all checkpoints for a thread in commit order (oldest first)."""
-        thread_dir = os.path.join(self._location, thread_id)
+        thread_dir = self._thread_path(thread_id)
         if not os.path.isdir(thread_dir):
             return []
 
@@ -282,7 +328,7 @@ class JsonFileCheckpointer:
         if self._max_checkpoints is None:
             return
 
-        thread_dir = os.path.join(self._location, thread_id)
+        thread_dir = self._thread_path(thread_id)
         if not os.path.isdir(thread_dir):
             return
 
@@ -312,7 +358,18 @@ class InMemoryCheckpointer:
 
     def __init__(self, max_checkpoints: int | None = None) -> None:
         self._store: dict[str, list[Checkpoint]] = {}
+        self._claims: set[str] = set()
         self._max_checkpoints = max_checkpoints
+
+    @asynccontextmanager
+    async def claim(self, thread_id: str):
+        if thread_id in self._claims:
+            raise CheckpointBusy("Checkpoint thread already has an owner")
+        self._claims.add(thread_id)
+        try:
+            yield
+        finally:
+            self._claims.remove(thread_id)
 
     async def put(self, cp: Checkpoint) -> None:
         """Store a checkpoint in memory."""
@@ -375,6 +432,10 @@ class SQLiteCheckpointer:
     """
 
     def __init__(self, db_path: str = ":memory:", max_checkpoints: int | None = None) -> None:
+        self._claims: set[str] = set()
+        self._lock_root = None if str(db_path) in {":memory:", ""} else Path(
+            str(Path(db_path).resolve()) + ".ownership"
+        )
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._max_checkpoints = max_checkpoints
@@ -392,6 +453,20 @@ class SQLiteCheckpointer:
             ON checkpoints(thread_id, id)
         """)
         self._conn.commit()
+
+    @asynccontextmanager
+    async def claim(self, thread_id: str):
+        if self._lock_root is None:
+            if thread_id in self._claims:
+                raise CheckpointBusy("Checkpoint thread already has an owner")
+            self._claims.add(thread_id)
+            try:
+                yield
+            finally:
+                self._claims.remove(thread_id)
+        else:
+            async with _local_claim(self._lock_root, thread_id):
+                yield
 
     async def put(self, cp: Checkpoint) -> None:
         """Persist a checkpoint."""

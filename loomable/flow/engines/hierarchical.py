@@ -16,7 +16,7 @@ from typing import Any
 from loomable.agent.context import RunContext
 from loomable.agent.run import RunResult
 from loomable.content import AgentOutput, MediaPart, Modality
-from loomable.flow.nodes import Edge, FlowConfigError, Node
+from loomable.flow.nodes import FlowConfigError, Node
 from loomable.flow.state import SharedState
 from loomable.kernel.subagents import DelegatedTask, SubagentManager, SubagentOutcome
 from loomable.persist.checkpoint import Checkpoint

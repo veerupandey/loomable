@@ -84,8 +84,6 @@ class MCPClient:
                 naming the server_id from the spec.
         """
         server_id = spec.get("server_id", spec.get("name", "unknown"))
-        if server_id in getattr(self, "_sessions", {}):
-            raise MCPConnectionError(server_id)
 
         try:
             async with asyncio.timeout(spec.get("connect_timeout", 15)):

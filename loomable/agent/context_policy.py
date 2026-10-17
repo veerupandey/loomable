@@ -12,8 +12,8 @@ from __future__ import annotations
 
 __all__ = ["ContextPolicy", "CompactionResult"]
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, Sequence
+from dataclasses import dataclass
+from typing import Any, Sequence
 
 
 @dataclass

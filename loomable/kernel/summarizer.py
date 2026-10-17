@@ -11,7 +11,7 @@ Requirements covered: 10.1, 10.2, 10.3, 10.4, 11.2
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from loomable.kernel.models import ContextItem, StructuredSummary, Turn
 
@@ -189,11 +189,6 @@ class Summarizer:
         """
         summary = self.summarize(turns)
 
-        # Remove turn items that are within the covered step range
-        # We identify them by kind == "turn" and filter by token matching
-        # Since ContextItems don't carry step info, we remove turn items
-        # whose token count matches one of the covered turns
-        covered_turn_tokens = {t.tokens for t in turns}
         covered_turn_count = len(turns)
 
         # Strategy: remove turn-kind items from the context that correspond

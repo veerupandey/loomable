@@ -8,7 +8,6 @@ toolkits transparently so they integrate with the ``Agent(tools=[...])`` API.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
 
 from loomable.agent.tools import FunctionTool
 from loomable.agent.errors import AgentConfigError

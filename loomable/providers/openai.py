@@ -9,24 +9,59 @@ OpenAI (deployment + api-version, ``api-key`` header). Both implement the kernel
 
 from __future__ import annotations
 
+import base64
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
 
+from loomable.content.capabilities import capabilities_for
 from loomable.kernel.models import ModelRequest, ModelResponse, StreamEvent
+from loomable.media import Image
 
 from ._common import (
     _classify_http_error,
     parse_openai_response,
-    parse_openai_sse_line,
     to_openai_messages,
 )
 
 _DEFAULT_TIMEOUT = 60.0
 
 
-class OpenAIProvider:
+class _HTTPClientScope:
+    """Reuse a caller-owned client or own a pool inside an async context."""
+
+    _client: httpx.AsyncClient | None
+    _owned_client: httpx.AsyncClient | None = None
+    _timeout: float
+
+    async def __aenter__(self):
+        if self._client is None:
+            self._owned_client = httpx.AsyncClient(timeout=self._timeout)
+            self._client = self._owned_client
+        return self
+
+    async def __aexit__(self, *exc):
+        await self.aclose()
+
+    async def aclose(self):
+        if self._owned_client is not None:
+            client = self._owned_client
+            self._owned_client = self._client = None
+            await client.aclose()
+
+    @asynccontextmanager
+    async def _http_client(self):
+        if self._client is not None:
+            yield self._client
+        else:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                yield client
+
+
+class OpenAIProvider(_HTTPClientScope):
     """A ``ModelProvider`` for OpenAI and OpenAI-compatible chat endpoints.
 
     Parameters
@@ -47,6 +82,9 @@ class OpenAIProvider:
         Per-request timeout in seconds.
     """
 
+    capabilities = capabilities_for("text+image")
+    _chat_audio = False
+
     def __init__(
         self,
         model: str,
@@ -56,6 +94,8 @@ class OpenAIProvider:
         organization: str | None = None,
         default_headers: dict[str, str] | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
+        client: httpx.AsyncClient | None = None,
+        native_structured_output: bool = False,
     ) -> None:
         self.model = model
         self._api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY")
@@ -63,6 +103,8 @@ class OpenAIProvider:
         self._organization = organization
         self._default_headers = dict(default_headers or {})
         self._timeout = timeout
+        self._client = client
+        self._native_structured_output = native_structured_output
 
     @property
     def _provider_id(self) -> str:
@@ -79,14 +121,41 @@ class OpenAIProvider:
     def _build_body(self, request: ModelRequest) -> dict[str, Any]:
         body: dict[str, Any] = {
             "model": self.model,
-            "messages": to_openai_messages(request.messages),
+            "messages": to_openai_messages(
+                request.messages, provider_id=self._provider_id, audio=self._chat_audio,
+            ),
             "temperature": request.temperature,
         }
         if request.max_tokens:
             body["max_tokens"] = request.max_tokens
         if request.tools:
             body["tools"] = request.tools
+        if self._native_structured_output and "output_schema" in request.metadata:
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": request.metadata["output_schema"],
+            }
         return body
+
+    async def generate_image(
+        self, prompt: str, *, model: str, quality: str = "auto",
+    ) -> Image:
+        """Generate a PNG with the Images API. Usable as a Loomable tool result."""
+        body = {"model": model, "prompt": prompt, "n": 1, "output_format": "png", "quality": quality}
+        try:
+            async with self._http_client() as client:
+                response = await client.post(
+                    f"{self._base_url}/images/generations", json=body, headers=self._headers(),
+                )
+                response.raise_for_status()
+                data = base64.b64decode(response.json()["data"][0]["b64_json"], validate=True)
+        except httpx.HTTPError as exc:
+            raise _classify_http_error(f"openai:{model}", exc) from exc
+        except (ValueError, TypeError, KeyError, IndexError) as exc:
+            from loomable.kernel.errors import ModelProviderError
+
+            raise ModelProviderError(f"openai:{model}") from exc
+        return Image(content=data, mime_type="image/png")
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         """Send the chat-completion request and return a ``ModelResponse``.
@@ -96,9 +165,10 @@ class OpenAIProvider:
         provider when the endpoint is unreachable or returns a non-success status.
         """
         url = f"{self._base_url}/chat/completions"
+        body = self._build_body(request)
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.post(url, json=self._build_body(request), headers=self._headers())
+            async with self._http_client() as client:
+                resp = await client.post(url, json=body, headers=self._headers())
                 resp.raise_for_status()
                 data = resp.json()
         except httpx.HTTPError as exc:
@@ -115,15 +185,13 @@ class OpenAIProvider:
         Yields text deltas, assembled tool calls, and a terminal end event.
         Falls back to the same error classification as complete().
         """
-        from collections.abc import AsyncIterator
-
         url = f"{self._base_url}/chat/completions"
         body = self._build_body(request)
         body["stream"] = True
         body["stream_options"] = {"include_usage": True}
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with self._http_client() as client:
                 async with client.stream(
                     "POST", url, json=body, headers=self._headers()
                 ) as resp:
@@ -167,12 +235,12 @@ class OpenAIProvider:
                 continue
 
             choice = choices[0]
-            delta = choice.get("delta", {})
+            delta = choice.get("delta") or {}
             finish_reason = choice.get("finish_reason")
 
             content = delta.get("content")
-            if content:
-                yield StreamEvent(kind="text", text=content)
+            if isinstance(content, (str, int, float)) and content != "":
+                yield StreamEvent(kind="text", text=str(content))
 
             tc_list = delta.get("tool_calls")
             if tc_list:
@@ -212,7 +280,7 @@ class OpenAIProvider:
         yield StreamEvent(kind="end")
 
 
-class AzureOpenAIProvider:
+class AzureOpenAIProvider(_HTTPClientScope):
     """A ``ModelProvider`` for Azure OpenAI chat deployments.
 
     Parameters
@@ -244,6 +312,8 @@ class AzureOpenAIProvider:
         api_version: str | None = None,
         default_headers: dict[str, str] | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
+        client: httpx.AsyncClient | None = None,
+        native_structured_output: bool = False,
     ) -> None:
         self.deployment = (
             deployment if deployment is not None
@@ -266,6 +336,8 @@ class AzureOpenAIProvider:
         )
         self._default_headers = dict(default_headers or {})
         self._timeout = timeout
+        self._client = client
+        self._native_structured_output = native_structured_output
 
     @property
     def _provider_id(self) -> str:
@@ -293,6 +365,11 @@ class AzureOpenAIProvider:
             body["max_tokens"] = request.max_tokens
         if request.tools:
             body["tools"] = request.tools
+        if self._native_structured_output and "output_schema" in request.metadata:
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": request.metadata["output_schema"],
+            }
         return body
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
@@ -302,7 +379,7 @@ class AzureOpenAIProvider:
         when the endpoint is unreachable or returns a non-success status.
         """
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with self._http_client() as client:
                 resp = await client.post(self._url(), json=self._build_body(request), headers=self._headers())
                 resp.raise_for_status()
                 data = resp.json()
@@ -325,7 +402,7 @@ class AzureOpenAIProvider:
         body["stream_options"] = {"include_usage": True}
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with self._http_client() as client:
                 async with client.stream(
                     "POST", url, json=body, headers=self._headers()
                 ) as resp:
@@ -368,12 +445,12 @@ class AzureOpenAIProvider:
                 continue
 
             choice = choices[0]
-            delta = choice.get("delta", {})
+            delta = choice.get("delta") or {}
             finish_reason = choice.get("finish_reason")
 
             content = delta.get("content")
-            if content:
-                yield StreamEvent(kind="text", text=content)
+            if isinstance(content, (str, int, float)) and content != "":
+                yield StreamEvent(kind="text", text=str(content))
 
             tc_list = delta.get("tool_calls")
             if tc_list:

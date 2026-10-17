@@ -210,7 +210,6 @@ class FlowClass:
             The result of executing the compiled Flow graph.
         """
         from loomable.agent.context import RunContext
-        from loomable.flow.state import SharedState
 
         ctx = RunContext()
         result = await self._compiled_flow.arun(input, context=ctx)

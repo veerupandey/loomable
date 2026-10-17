@@ -74,6 +74,63 @@ Persona fields (`role`, `goal`, `instructions`, `description`) assemble into the
 
 **Cancel:** `agent.cancel()` / `built.cancel()` — cooperative at tool-loop boundaries.
 
+### Execution and streaming
+
+`Agent.arun`, `Agent.astream`, and `Agent.astream_events` use the same model and tool lifecycle. Streamed deltas are provisional until validation and persistence succeed. The final `RunChunk` carries the `RunResult` in `result`. The AG-UI terminal event includes final text and usage. Model turns with advertised tools use buffered completions for provider compatibility.
+
+Pass `session_id=` per call to keep histories separate on one Agent. Calls on the same runtime must run sequentially. Cancel a specific active session with `agent.cancel(session_id=...)`. Use a shared session store for conversation history across process restarts. For advanced limits, import `ExecutionOptions` from `loomable.agent` and pass it as `execution=`. Keep existing flat arguments or pass the options object for those settings.
+
+Use `async with OpenAIProvider(...) as provider` to reuse a client pool within one event loop, or inject a caller-owned `httpx.AsyncClient`. The same applies to `AzureOpenAIProvider`. Set `native_structured_output=True` on a compatible endpoint to send Pydantic JSON Schema in the request. Local validation still applies.
+
+### Durable tool approval
+
+```python
+from loomable import Agent, SQLiteCheckpointer
+from loomable.agent import AgentPaused, DurabilityOptions
+
+agent = Agent(
+    model=provider,
+    tools=[publish],
+    session_id="review-42",
+    require_confirmation=["publish"],
+    durability=DurabilityOptions(SQLiteCheckpointer("runs.sqlite", max_checkpoints=8)),
+)
+try:
+    result = await agent.arun("Prepare and publish the draft.")
+except AgentPaused as pause:
+    # Save the run ID and proposed calls for a reviewer.
+    run_id = pause.run_id
+    call_id = pause.pending[0].id
+
+# Later, reconstruct the same agent and pass explicit reviewer decisions.
+result = await agent.acontinue_run(run_id, approvals={call_id: True})
+```
+
+Use static tools with JSON arguments and results, plain text inputs, and a stable configuration. The runtime acquires a checkpoint claim before it reads or changes the journal. File-backed SQLite and JSON coordinate workers using the same local storage directory. PostgreSQL uses a session advisory lock and the same connection for journal reads and writes. A competing worker receives `CheckpointBusy` from `loomable.persist`. Custom durable checkpointers must provide an async `claim(thread_id)` context manager. In-memory claims are instance-local. If a worker exits after recording the start of a tool batch but before recording its result, `UnknownToolOutcome` identifies the affected call IDs. Reconcile the effects externally and pass a `ToolResult` for each affected call via `outcomes=`. A known completed tool batch is replayed from its recorded outcomes. Keep the checkpointer separate from conversation history if history must survive later runs and process restarts.
+
+Agent retains up to 128 per-call session runtimes by default. Set `max_cached_sessions=` to adjust that cap. The default in-memory conversation store retains the most recently saved sessions up to the same limit. An explicit session store controls its own history retention and lets an evicted runtime reload its history. Requests holding a runtime keep their reference until they finish.
+
+### Idempotent durable runs
+
+Use `await agent.arun_once(text, session_id=request_id)` with
+`DurabilityOptions` and a dedicated session ID per logical request. Retrying
+the same text under the same session ID starts, resumes, or retrieves the run
+under one checkpoint claim. A different input for that session raises
+`ValueError`. Include the identity of any request-specific tool data when
+deriving the session ID. Keep the agent configuration stable while runs are
+in flight. Use a new session ID for a new request or `arun` for multi-turn
+conversations.
+
+Completed retries return the saved text, structured output, usage, and run ID
+with `metadata["replayed"] == True`. They make no model or tool calls. Trace
+and tool activity are available from the live run. Approval and unknown tool
+outcomes still require `acontinue_run` with explicit decisions. The replay
+window lasts until the session checkpoint is deleted.
+
+Set `mount_agent(..., max_concurrent_runs=16)` to cap admitted runs per mount and process. Streaming requests hold a slot until their response closes. At capacity, authenticated callers receive HTTP 429 with `Retry-After: 1`. Agent SSE buffers up to 128 pending frames per stream.
+
+Install `loomable[serve]` for FastAPI and Uvicorn, `loomable[mcp]` for MCP, and `loomable[examples]` for example scripts that load dotenv files.
+
 ---
 
 ## Team
@@ -279,18 +336,25 @@ agent = Agent(model=..., knowledge=["FAQ..."], embedder=OpenAIEmbedder(), knowle
 
 ```python
 Agent(model="openai:gpt-4o-mini")
-Agent(model="anthropic:claude-sonnet-4-20250514")
-Agent(model="gemini:gemini-2.0-flash")
-Agent(model="groq:llama-3.3-70b-versatile")
-Agent(model="ollama:mistral")
-Agent(model="azure:gpt-4.1-mini")
-Agent(model="bedrock:amazon.nova-lite-v1:0")  # or "aws:..."; Converse API (us./eu./apac. profiles)
+Agent(model="gemini:gemini-flash-latest")
 Agent(model="gpt-4o-mini")  # bare name → OpenAI
 ```
 
 Keys: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY` / `GOOGLE_API_KEY`, `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_DEPLOYMENT_NAME`.
 
-OpenAI-compatible: `OpenAIProvider(model="llama-3", base_url="http://localhost:8000/v1")`.
+### Provider plugins
+
+Pass an adapter instance directly, or register a factory once at application startup. The factory receives a model name and returns an adapter implementing async `complete(request)`. Implement `stream(request)` when the adapter supports streaming.
+
+```python
+from loomable import Agent
+from loomable.providers import OpenAIProvider, register_provider
+
+register_provider("company-openai", OpenAIProvider)
+agent = Agent(model="company-openai:gpt-4o-mini")
+```
+
+An installed Python distribution can declare an entry point under `[project.entry-points."loomable.providers"]`. Its name becomes the model prefix and its value points to the factory. Loomable loads that factory when an application selects the prefix. Built-in providers bypass plugin discovery.
 
 Amazon Bedrock: `pip install "loomable[bedrock]"`. Uses the standard AWS credential chain (env vars, shared profile, or SSO). Select with `BedrockProvider(model, region_name=..., profile_name=...)` or the `bedrock:` / `aws:` model-string prefix. Requires `bedrock:InvokeModel` permission and model access granted in the region.
 
@@ -314,17 +378,34 @@ city = agent.run("Info about Tokyo").structured
 
 ## Multimodal
 
-Media is on by default. Restrict with `modalities="text"` or `text_only=True`.
+The provider and model determine which attachments can be sent. Restrict an agent to text with `modalities="text"` or `text_only=True`. OpenAI Chat Completions accepts images on vision models. Its Loomable adapter rejects audio and video. For video analysis with an OpenAI vision model, extract frames and pass them as images.
 
 ```python
 from loomable.media import Image, Audio, Video, File
+from loomable import Agent, tool
+from loomable.providers import GeminiMediaProvider, OpenAIProvider
 
-result = await agent.arun("Describe this", images=["./chart.png"])
-result = await agent.arun("Summarize", videos=["./demo.mp4"], audio=["./clip.wav"])
-result.images[0].save("./out.png")   # also result.audio / result.videos / result.files
+vision = Agent(GeminiMediaProvider("gemini-flash-latest"))
+result = await vision.arun("Summarize", videos=["./demo.mp4"], audio=["./clip.wav"])
+
+artist = Agent(GeminiMediaProvider("gemini-3.1-flash-image", image_output=True))
+result = await artist.arun("Generate a blue circle on a white background")
+result.images[0].save("./native.png")
+
+async with OpenAIProvider("gpt-5.4-mini", timeout=120) as provider:
+    @tool(idempotent=False)
+    async def render_image(prompt: str) -> Image:
+        """Generate a PNG from a description."""
+        return await provider.generate_image(prompt, model="gpt-image-2")
+
+    designer = Agent(provider, tools=[render_image], feedback_media=False)
+    result = await designer.arun("Use render_image to create a blue circle.")
+    result.images[0].save("./tool.png")
 ```
 
-`Image` / `Audio` / `Video` / `File` take exactly one of `url=`, `filepath=`, `content=`. Tools may return media; `feedback_media=True` (default) injects it into later turns when the model supports that modality.
+`GeminiMediaProvider` uses native GenerateContent with inline attachments. Use a file path or inline bytes, and choose a model that supports the supplied modalities. This provider buffers the response and handles media turns without function calling. Use `GeminiProvider` for function calling. A function tool can call the native provider's `generate_image()` method when configured with an image model.
+
+`Image` / `Audio` / `Video` / `File` take exactly one of `url=`, `filepath=`, `content=`. Tools can return these objects. Read results through `result.images`, `result.audio`, `result.videos`, and `result.files`. With `feedback_media=True` (default), supported tool media is also sent back to the model. Disable feedback to deliver tool media directly to the caller without another media input charge. Passing an `AgentOutput` to another agent preserves its model-generated media. Tool artifacts are available separately on the originating `RunResult`.
 
 ---
 
@@ -391,21 +472,28 @@ built.events = CheckpointListener(
 )
 ```
 
-`PostgresCheckpointer` is for Case/Workflow resume — not Agent chat history.
+`PostgresCheckpointer` supports Case and Workflow checkpoints and the opt-in
+Agent execution journal configured through `DurabilityOptions`. For a
+PostgreSQL-backed journal, call
+`await cp.prune_completed_agent_sessions(older_than_seconds=604800, limit=100)`
+from scheduled maintenance. It deletes whole expired sessions in bounded
+batches, using the same claims as Agent runs. It skips owned sessions and
+preserves sessions whose latest checkpoint is incomplete. It returns the number
+of sessions deleted.
 
 ---
 
-## MCP tools
+## Production knobs
+
+### MCP tools
 
 Install `loomable[mcp]` to connect to MCP servers. Use `command` and `args` for stdio, or `url` for Streamable HTTP. Select `transport="sse"` explicitly for a legacy SSE endpoint. HTTP specs accept `headers` and all specs accept `connect_timeout` in seconds.
 
-MCP discovery closes its connection after listing tools. Agent runs open one session per server on first use, share it across tool calls, and close it at the end of the run. Session state is scoped to a single agent run. Use `discovery=True` to defer catalog connections and `tool_timeout=` to bound execution.
+MCP discovery closes its connection after listing tools. Each tool call opens and closes its own session, so MCP tools must work across independent sessions. A stdio command launches a fresh process for each invocation. Use `discovery=True` to defer the initial catalog connection and `tool_timeout=` to bound execution.
 
 Unique remote tool names are exposed as-is when they fit the model's tool schema. Colliding or incompatible names get a server-qualified alias. Use the exposed name in `require_confirmation` to gate side effects. Remote tools default to non-idempotent. List known repeat-safe remote names in the server spec's `idempotent_tools`.
 
 Structured results are available on the tool outcome. MCP images, audio, and embedded binary artifacts appear on the corresponding `RunResult` media properties. Resource links remain references and are never fetched automatically.
-
-## Production knobs
 
 All opt-in.
 

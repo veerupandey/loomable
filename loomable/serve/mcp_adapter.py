@@ -19,6 +19,10 @@ The translation logic is factored into pure helpers/methods
 (:meth:`output_to_mcp_content`, :meth:`run_tool`) that do not require a live MCP
 client, so the mapping and error handling can be unit tested directly.
 
+This module uses the low-level ``mcp.server.Server`` API, whose tool-call handler
+accepts a coroutine returning a :class:`mcp.types.CallToolResult` directly — which
+is exactly what :meth:`run_tool` produces.
+
 Depends on ``loomable.agent`` and ``loomable.content`` plus the ``mcp`` library.
 """
 
@@ -42,6 +46,52 @@ from loomable.content import (
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from loomable.agent import BuiltAgent
+
+
+#: JSON schema advertised for the run tool's input (Req 8.2). At minimum a ``text``
+#: string is accepted; a structured ``messages`` array allows multimodal parts.
+_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "text": {
+            "type": "string",
+            "description": "Plain-text input for the agent (a single user message).",
+        },
+        "messages": {
+            "type": "array",
+            "description": "Structured multimodal messages (overrides 'text' when present).",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "role": {"type": "string", "default": "user"},
+                    "parts": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "modality": {
+                                    "type": "string",
+                                    "enum": ["text", "image", "video"],
+                                },
+                                "media_type": {"type": "string"},
+                                "text": {"type": "string"},
+                                "data_base64": {"type": "string"},
+                                "uri": {"type": "string"},
+                            },
+                            "required": ["modality"],
+                        },
+                    },
+                },
+                "required": ["parts"],
+            },
+        },
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Pure translation helpers (no live MCP client / transport required)
+# ---------------------------------------------------------------------------
 
 
 def _part_from_dict(part: dict[str, Any]) -> MediaPart:
@@ -127,24 +177,24 @@ def _media_part_to_content(part: MediaPart) -> types.ContentBlock:
             type="resource_link",
             name=part.uri,
             uri=part.uri,
-            mimeType=part.media_type,
+            mime_type=part.media_type,
         )
 
     # Inline bytes → base64.
     encoded = base64.b64encode(part.data).decode("ascii") if part.data is not None else ""
 
     if part.modality is Modality.IMAGE:
-        return types.ImageContent(type="image", data=encoded, mimeType=part.media_type)
+        return types.ImageContent(type="image", data=encoded, mime_type=part.media_type)
 
     if part.modality is Modality.AUDIO:
-        return types.AudioContent(type="audio", data=encoded, mimeType=part.media_type)
+        return types.AudioContent(type="audio", data=encoded, mime_type=part.media_type)
 
     # Video is represented as an embedded resource.
     return types.EmbeddedResource(
         type="resource",
         resource=types.BlobResourceContents(
             uri=part.uri or f"resource://output.{_ext_for(part.media_type)}",
-            mimeType=part.media_type,
+            mime_type=part.media_type,
             blob=encoded,
         ),
     )
@@ -203,14 +253,14 @@ class MCPServerAdapter:
                     elif item.url:
                         content.append(types.ResourceLink(
                             type="resource_link", name=item.filename or item.url,
-                            uri=item.url, mimeType=item.mime_type,
+                            uri=item.url, mime_type=item.mime_type,
                         ))
                     else:
                         content.append(types.EmbeddedResource(
                             type="resource",
                             resource=types.BlobResourceContents(
                                 uri=f"resource://output.{item.format or 'bin'}",
-                                mimeType=item.mime_type or "application/octet-stream",
+                                mime_type=item.mime_type or "application/octet-stream",
                                 blob=base64.b64encode(item._resolve_bytes()).decode("ascii"),
                             ),
                         ))
@@ -222,7 +272,7 @@ class MCPServerAdapter:
                 if not isinstance(structured, dict):
                     structured = {"result": structured}
             return types.CallToolResult(
-                content=content, isError=False, structuredContent=structured,
+                content=content, is_error=False, structured_content=structured,
             )
         except Exception as exc:  # noqa: BLE001 - translate any failure to an error result
             return types.CallToolResult(
@@ -232,7 +282,7 @@ class MCPServerAdapter:
                         text=f"{type(exc).__name__}: {exc}",
                     )
                 ],
-                isError=True,
+                is_error=True,
             )
 
     # ------------------------------------------------------------------
@@ -242,12 +292,10 @@ class MCPServerAdapter:
     def server(self):
         """Build and return an MCP server exposing the agent as one tool.
 
-        The server advertises exactly one tool routed to :meth:`run_tool`.
+        Uses :class:`mcp.server.MCPServer` (current SDK). The server advertises
+        exactly one tool (``tool_name``) routed to :meth:`run_tool`.
         """
-        try:
-            from mcp.server import MCPServer
-        except ImportError:
-            from mcp.server.fastmcp import FastMCP as MCPServer
+        from mcp.server import MCPServer
 
         server = MCPServer("loomable-agent")
         tool_name = self._tool_name

@@ -128,3 +128,30 @@ def test_malformed_part_yields_4xx() -> None:
 
     assert response.status_code == 422
     assert "hologram" in response.json()["detail"].lower()
+
+
+async def test_mounted_agent_isolates_concurrent_sessions():
+    import asyncio
+    import httpx
+    from fastapi import FastAPI
+    from loomable.serve import mount_agent
+
+    class Provider:
+        async def complete(self, request):
+            await asyncio.sleep(0)
+            return ModelResponse(content=str(request.messages))
+
+    app = FastAPI()
+    mount_agent(app, Agent(Provider()), prefix="")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        async def run(session_id, text):
+            response = await client.post("/run", json={"session_id": session_id, "input_text": text})
+            assert response.status_code == 200
+            assert response.json()["session_id"] == session_id
+            return response.json()["output"][0]["text"]
+
+        first, second = await asyncio.gather(run("alice", "alice-only"), run("bob", "bob-only"))
+        assert "bob-only" not in first
+        assert "alice-only" not in second
+        assert "alice-only" in await run("alice", "follow-up")
+        assert "bob-only" not in await run("alice", "another follow-up")

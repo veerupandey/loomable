@@ -26,12 +26,12 @@ __all__ = [
 ]
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from loomable.agent.events import AgentEvents, Event
+    from loomable.agent.events import AgentEvents
 
 
 # ---------------------------------------------------------------------------
