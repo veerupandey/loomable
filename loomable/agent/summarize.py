@@ -11,9 +11,7 @@ from __future__ import annotations
 
 __all__ = ["LLMSummarizer"]
 
-import asyncio
 import re
-import threading
 from typing import TYPE_CHECKING
 
 from loomable.kernel.models import ModelRequest, ModelResponse, StructuredSummary, Turn
@@ -32,6 +30,7 @@ _SUMMARIZE_SYSTEM = (
     "OBJECTIVES: <semicolon-separated list of objectives/goals>\n"
     "DECISIONS: <semicolon-separated list of decisions made>\n"
     "SUMMARY: <concise narrative summary of what happened>\n"
+    "Copy identifiers, dates, and quantities verbatim when they matter to later turns. "
     "If there are no objectives or decisions, write NONE for that field."
 )
 
@@ -169,50 +168,6 @@ def _fallback_summary(turns: list[Turn]) -> StructuredSummary:
 
 
 # ---------------------------------------------------------------------------
-# Synchronous bridge for async model calls
-# ---------------------------------------------------------------------------
-
-
-def _run_async_sync(coro):
-    """Run an async coroutine synchronously.
-
-    Uses asyncio.run when no event loop is running. When an event loop is
-    already running (e.g., inside an async context), uses a dedicated worker
-    thread with its own event loop via run_coroutine_threadsafe.
-    """
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # No loop running — safe to use asyncio.run
-        return asyncio.run(coro)
-
-    # A loop is already running — run in a worker thread
-    result_future = asyncio.run_coroutine_threadsafe(coro, loop)
-    try:
-        return result_future.result(timeout=120)
-    except Exception:
-        # If run_coroutine_threadsafe doesn't work (e.g., the loop isn't in
-        # the right state), fall back to a new thread with its own loop.
-        result = None
-        exception = None
-
-        def _worker():
-            nonlocal result, exception
-            try:
-                result = asyncio.run(coro)
-            except Exception as exc:
-                exception = exc
-
-        thread = threading.Thread(target=_worker, daemon=True)
-        thread.start()
-        thread.join(timeout=120)
-
-        if exception is not None:
-            raise exception
-        return result
-
-
-# ---------------------------------------------------------------------------
 # LLMSummarizer
 # ---------------------------------------------------------------------------
 
@@ -231,6 +186,12 @@ class LLMSummarizer:
         self._max_tokens = max_tokens
 
     def summarize(self, turns: list[Turn]) -> StructuredSummary:
+        """Summarize from synchronous code."""
+        from loomable.kernel.stores import _run_sync
+
+        return _run_sync(self.asummarize(turns))
+
+    async def asummarize(self, turns: list[Turn]) -> StructuredSummary:
         """Render turns -> a summarization prompt, call the model, and parse the
         response into StructuredSummary(covers_steps, objectives, decisions, text,
         tokens). Falls back to a kernel-style regex summary if the model call fails,
@@ -247,14 +208,13 @@ class LLMSummarizer:
 
         # Try model-based summarization
         try:
-            response = self._call_model(turns)
+            response = await self._call_model(turns)
             return self._parse_response(response, turns)
         except Exception:
             # Fallback to kernel-style regex summary on any failure
             return _fallback_summary(turns)
 
-    def _call_model(self, turns: list[Turn]) -> ModelResponse:
-        """Call the model synchronously via the async bridge."""
+    async def _call_model(self, turns: list[Turn]) -> ModelResponse:
         request = ModelRequest(
             messages=[
                 {"role": "system", "content": _SUMMARIZE_SYSTEM},
@@ -264,10 +224,7 @@ class LLMSummarizer:
             temperature=0.3,
         )
 
-        async def _do_complete():
-            return await self._model.complete(request)
-
-        return _run_async_sync(_do_complete())
+        return await self._model.complete(request)
 
     def _parse_response(self, response: ModelResponse, turns: list[Turn]) -> StructuredSummary:
         """Parse a model response into a StructuredSummary."""

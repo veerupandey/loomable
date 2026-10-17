@@ -517,7 +517,9 @@ class BuiltAgent:
         # calls via the kernel SessionStore (Req 15.2): the input is recorded as a
         # user turn and the output as an assistant turn, the step counter advances,
         # then the session is saved.
-        self._persist_session(_input_text(agent_input), result.output.text())
+        await self._persist_session(_input_text(agent_input), result.output.text())
+        if self.memory_auto_extract and self.note_store is not None:
+            await self._extract_user_memory(_input_text(agent_input))
         if ctx._usage:
             result.usage = dict(ctx._usage)
         if self._journal is not None:
@@ -635,15 +637,18 @@ class BuiltAgent:
         system messages ahead of the retained raw turns so the model has compressed
         context of earlier conversation (Req 6.3).
         """
-        if not (include_history and self.use_memory and self.persist_session):
+        if not include_history:
             return []
 
         messages: list[dict] = []
+        conversation = self.use_memory and self.persist_session
 
         # Prepend L2 summaries as system/context messages (Req 6.3).
-        for summary in self.session.l2:
+        for summary in self.session.l2 if conversation else ():
+            facts = [fact for fact in (*summary.objectives, *summary.decisions) if fact not in summary.text]
+            text = "\n".join([summary.text, *facts])
             messages.append(
-                {"role": "system", "content": [{"type": "text", "text": summary.text}]}
+                {"role": "system", "content": [{"type": "text", "text": text}]}
             )
 
         # User-scoped long-term facts (from Memory.compose / NoteStore cache).
@@ -660,6 +665,9 @@ class BuiltAgent:
                     ],
                 }
             )
+
+        if not conversation:
+            return messages
 
         # Append the retained recent raw turns from L1.
         turns = self.session.l1
@@ -1997,7 +2005,7 @@ class BuiltAgent:
             provider_reasoning=provider_reasoning,
         )
 
-    def _persist_session(self, input_text: str, output_text: str) -> None:
+    async def _persist_session(self, input_text: str, output_text: str) -> None:
         """Record the run's turns into the session and persist it (Req 15.2).
 
         Appends a user turn for the input and an assistant turn for the output to
@@ -2013,23 +2021,21 @@ class BuiltAgent:
         """
         if not self.persist_session or self.session_store is None:
             return
-        self.session.l1.append(
+        turns = [
+            *self.session.l1,
             Turn(
                 role="user",
                 content=input_text,
                 tokens=0,
                 step=self.session.step,
-            )
-        )
-        self.session.l1.append(
+            ),
             Turn(
                 role="assistant",
                 content=output_text,
                 tokens=0,
                 step=self.session.step,
-            )
-        )
-        self.session.step += 1
+            ),
+        ]
 
         # --- Automatic memory compaction via ContextPolicy ---
         from loomable.agent.context_policy import ContextPolicy
@@ -2039,14 +2045,14 @@ class BuiltAgent:
             compaction_threshold=self.compaction_threshold,
             token_budget=self._token_budget or 8192,
         )
-        if self.summarizer is not None and policy.should_compact_turns(len(self.session.l1)):
-            new_l1, summaries, outcome = policy.compact_turns(
-                self.session.l1,
+        if self.summarizer is not None and policy.should_compact_turns(len(turns)):
+            compacted, summaries, outcome = await policy.acompact_turns(
+                turns,
                 pinned_steps=self.pinned_steps,
                 summarizer=self.summarizer,
             )
             if outcome.compacted:
-                self.session.l1 = new_l1
+                turns = compacted
                 self.session.l2.extend(summaries)
                 self.events.emit(Event(
                     kind="compaction",
@@ -2058,46 +2064,33 @@ class BuiltAgent:
                     },
                 ))
 
+        self.session.l1 = turns
+        self.session.step += 1
         self.session_store.save(self.session)
 
-        # Passive Always-mode lite: heuristic user-fact extraction into NoteStore.
-        if self.memory_auto_extract and self.note_store is not None and input_text:
-            try:
-                from loomable.kernel.stores import _run_sync
-                from loomable.memory.compose import auto_extract_into_notes
+    async def _extract_user_memory(self, input_text: str) -> None:
+        from loomable.memory.compose import auto_extract_into_notes
 
-                written = _run_sync(
-                    auto_extract_into_notes(
-                        self.note_store,
-                        input_text,
-                        user_id=self._memory_user_id,
-                        scope=self._memory_scope,
-                    )
-                )
-                if written:
-                    merged = list(dict.fromkeys([*written, *self._cached_user_facts]))
-                    self._cached_user_facts = merged[:20]
-            except Exception as exc:  # noqa: BLE001 — never break the run for memory hygiene
-                self.events.emit(Event(
-                    kind="memory_error",
-                    t=time.monotonic(),
-                    attributes={
-                        "op": "auto_extract",
-                        "error_type": type(exc).__name__,
-                        "error": str(exc)[:500],
-                    },
-                ))
+        try:
+            await auto_extract_into_notes(
+                self.note_store, input_text, user_id=self._memory_user_id, scope=self._memory_scope,
+            )
+        except Exception as exc:
+            self.events.emit(Event(
+                kind="memory_error",
+                t=time.monotonic(),
+                attributes={"op": "auto_extract", "error_type": type(exc).__name__,
+                            "error": str(exc)[:500]},
+            ))
 
     async def _refresh_user_memory_context(self, query: str) -> None:
         """Recall user notes into ``_cached_user_facts`` for the next prompt prefix."""
         if not self.memory_auto_recall or self.note_store is None:
             return
+        self._cached_user_facts = []
         try:
             hits = await self.note_store.recall(query or "user preferences identity", k=5)
-            if hits:
-                self._cached_user_facts = list(
-                    dict.fromkeys([*(h.text for h in hits), *self._cached_user_facts])
-                )[:20]
+            self._cached_user_facts = list(dict.fromkeys(h.text for h in hits))
         except Exception as exc:  # noqa: BLE001
             self.events.emit(Event(
                 kind="memory_error",

@@ -308,9 +308,26 @@ agent = Agent(model=..., memory=memory, session_id="conv-1", user_id="alice",
 
 Do not pass both `memory=` and flat `session_store=` / `note_store=` / `memory_backend=`. `resume=True` means the session row must already exist. `memory_tool=True` / `UserMemory(auto_extract=True)` without a note store raises. `user_id` / `scopes` stamp UserMemory (`MemoryScope.of(...)`).
 
+`ConversationMemory(enabled=False)` disables conversation replay while
+`UserMemory` continues to recall and save notes, including on calls without
+a session ID. Each turn recalls the current contents of the note store.
+Updating or deleting a note affects subsequent recall. Conversation history
+and summaries have their own lifecycle.
+
+Scoped notes use the scope prefix in the stored note ID as their ownership
+boundary. Scope tags are labels. Scope keys or values containing `%`, `|`,
+`=`, or `:` use escaped prefixes. To migrate notes written under a legacy
+unescaped prefix, verify their ownership before re-saving them through
+`ScopedNoteStore`.
+
 Default L3 vector store is Alibaba zvec (`pip install 'loomable[zvec]'`, `.loomable/memory_zvec`). Also: `engine="faiss"|"chroma"|"milvus"|"memory"` or `postgres_url=`. Embedders: `OpenAIEmbedder`, `GeminiEmbedder`, `AzureOpenAIEmbedder`, `HuggingFaceEmbedder`.
 
 Same compose object on Team (coordinator) and Case (`from_agent` copies memory). Team has no `scopes=` — set on members or coordinator memory.
+
+The live support console test exercises file-backed conversations and
+persistent FAISS notes through the HTTP adapter. Install `loomable[dev,faiss]`,
+set `LOOMABLE_LIVE_PROVIDER=openai` or `gemini` and its API key, then run
+`python -m pytest --live tests/integration/test_support_memory_live.py`.
 
 ---
 

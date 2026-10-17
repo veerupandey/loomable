@@ -7,8 +7,8 @@ from typing import Any
 import pytest
 
 from loomable.agent.builder import BuiltAgent
-from loomable.agent.events import Event, JSONTracer
-from loomable.kernel.long_term import InMemoryVectorBackend, LongTermStore
+from loomable.agent.events import JSONTracer
+from loomable.kernel.long_term import InMemoryVectorBackend
 from loomable.providers.vector_store import open_vector_store
 
 
@@ -97,37 +97,12 @@ async def test_memory_error_event_on_auto_extract_failure() -> None:
 
     tracer = JSONTracer(stream=io.StringIO())
     fake = _Stub()
-    fake.persist_session = True
-    fake.session_store = type("S", (), {"save": staticmethod(lambda s: None)})()
-    fake.session = type("Sess", (), {"l1": [], "l2": [], "step": 0})()
-    fake.session.l1 = []
-    fake.session.l2 = []
-    fake.session.step = 0
-    fake.summarizer = None
-    fake.context_policy = None
-    fake.memory_window = 8
-    fake.compaction_threshold = 16
-    fake.pinned_steps = set()
     fake.events = tracer
-    fake.memory_auto_extract = True
     fake.note_store = _BoomNotes()
     fake._memory_user_id = "u1"
     fake._memory_scope = None
-    fake._cached_user_facts = []
-    fake._token_budget = 8192
 
-    # Patch auto_extract to raise so we hit the emit path cleanly.
-    import loomable.memory.compose as compose_mod
-
-    async def _boom(*_a: Any, **_k: Any) -> list[str]:
-        raise RuntimeError("extract failed")
-
-    orig = compose_mod.auto_extract_into_notes
-    compose_mod.auto_extract_into_notes = _boom  # type: ignore[assignment]
-    try:
-        BuiltAgent._persist_session(fake, "My name is Sam", "Hello Sam")  # type: ignore[arg-type]
-    finally:
-        compose_mod.auto_extract_into_notes = orig  # type: ignore[assignment]
+    await BuiltAgent._extract_user_memory(fake, "My name is Sam")  # type: ignore[arg-type]
 
     err = next(e for e in tracer.trace if e.kind == "memory_error")
     assert err.attributes["op"] == "auto_extract"

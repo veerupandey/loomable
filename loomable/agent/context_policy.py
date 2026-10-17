@@ -79,6 +79,18 @@ class ContextPolicy:
 
         Returns ``(new_l1, new_summaries, result)``.
         """
+        retained, overflow, outcome = self._partition_turns(l1, pinned_steps, summarizer)
+        return retained, [summarizer.summarize(overflow)] if overflow else [], outcome
+
+    async def acompact_turns(self, l1, *, pinned_steps=None, summarizer=None):
+        """Compact with an async summarizer when available."""
+        summarize = getattr(summarizer, "asummarize", None)
+        if summarize is None:
+            return self.compact_turns(l1, pinned_steps=pinned_steps, summarizer=summarizer)
+        retained, overflow, outcome = self._partition_turns(l1, pinned_steps, summarizer)
+        return retained, [await summarize(overflow)] if overflow else [], outcome
+
+    def _partition_turns(self, l1, pinned_steps, summarizer):
         pinned = pinned_steps or set()
         before = len(l1)
         if not self.should_compact_turns(before) or summarizer is None:
@@ -102,15 +114,12 @@ class ContextPolicy:
         overflow_slice = l1[:overflow_count]
         pinned_turns = [t for t in overflow_slice if getattr(t, "step", -1) in pinned]
         non_pinned = [t for t in overflow_slice if getattr(t, "step", -1) not in pinned]
-        summaries: list[Any] = []
-        if non_pinned:
-            summaries.append(summarizer.summarize(non_pinned))
         new_l1 = pinned_turns + l1[overflow_count:]
-        return new_l1, summaries, CompactionResult(
-            compacted=bool(summaries),
+        return new_l1, non_pinned, CompactionResult(
+            compacted=bool(non_pinned),
             turns_before=before,
             turns_after=len(new_l1),
-            summaries_added=len(summaries),
+            summaries_added=int(bool(non_pinned)),
             reason="overflow_summarized",
         )
 

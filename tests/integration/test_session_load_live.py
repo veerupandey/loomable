@@ -67,7 +67,7 @@ async def test_live_durable_agent_excludes_second_worker(tmp_path):
 
     @tool
     async def read_fixture() -> str:
-        """Read the only valid verification code for this run."""
+        """Read the public fixture label for this run."""
         nonlocal calls
         calls += 1
         entered.set()
@@ -84,7 +84,7 @@ async def test_live_durable_agent_excludes_second_worker(tmp_path):
                 ),
             )
 
-        prompt = "Call read_fixture once. Reply with just the code it returns."
+        prompt = "Call read_fixture once. Reply with the exact public fixture label it returns."
         first, second = worker(), worker()
         owner = asyncio.create_task(first.arun(prompt))
         try:
@@ -105,5 +105,5 @@ async def test_live_durable_agent_excludes_second_worker(tmp_path):
                 SQLiteCheckpointer(str(tmp_path / "journal.sqlite"), max_checkpoints=8),
             ),
         )
-        result = await followup.arun("Repeat only the verification code from your last answer.")
+        result = await followup.arun("Repeat the exact public fixture label from your last answer, including letters and the hyphen.")
         assert "READY-726" in result.text

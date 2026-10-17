@@ -127,7 +127,8 @@ class OpenAIProvider(_HTTPClientScope):
             "temperature": request.temperature,
         }
         if request.max_tokens:
-            body["max_tokens"] = request.max_tokens
+            token_field = "max_completion_tokens" if self.model.startswith(("gpt-5", "o1", "o3", "o4")) else "max_tokens"
+            body[token_field] = request.max_tokens
         if request.tools:
             body["tools"] = request.tools
         if self._native_structured_output and "output_schema" in request.metadata:

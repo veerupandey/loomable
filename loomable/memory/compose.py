@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from urllib.parse import quote
 from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
 
@@ -117,7 +118,11 @@ class MemoryScope:
     @property
     def prefix(self) -> str:
         """Stable id prefix, e.g. ``claim_id=CLM-1|user_id=alice``."""
-        return "|".join(f"{k}={v}" for k, v in self.parts)
+        # Escape separators while preserving existing IDs that do not use them.
+        def escape(part: str) -> str:
+            return "".join(quote(c, safe="") if c in "%|=:" else c for c in part)
+
+        return "|".join(f"{escape(k)}={escape(v)}" for k, v in self.parts)
 
     @property
     def tags(self) -> list[str]:
@@ -436,6 +441,7 @@ class ScopedNoteStore:
         UserMemory-scale note sets (dozens to low hundreds), not huge corpora.
         """
         import math
+        from loomable.providers.embedders import embed_many
 
         owned = await self.list()
         if not owned or k <= 0:
@@ -443,7 +449,6 @@ class ScopedNoteStore:
         embedder = getattr(self._inner, "_embedder", None)
         if embedder is None:
             return owned[:k]
-        q_vec = await embedder.embed(query or "user preferences identity")
 
         def _cosine(a: list[float], b: list[float]) -> float:
             if len(a) != len(b):
@@ -456,20 +461,20 @@ class ScopedNoteStore:
             return dot / (mag_a * mag_b)
 
         scored: list[tuple[float, Any]] = []
-        for note in owned:
-            text = getattr(note, "text", "") or ""
-            n_vec = await embedder.embed(text)
-            scored.append((_cosine(q_vec, n_vec), note))
+        for start in range(0, len(owned), 64):
+            batch = owned[start:start + 64]
+            texts = [note.text for note in batch]
+            if start == 0:
+                q_vec, *vectors = await embed_many(embedder, [query or "user preferences identity", *texts])
+            else:
+                vectors = await embed_many(embedder, texts)
+            scored.extend((_cosine(q_vec, vector), note) for vector, note in zip(vectors, batch, strict=True))
         scored.sort(key=lambda x: x[0], reverse=True)
         return [note for _, note in scored[:k]]
 
     def _owns(self, note: Any) -> bool:
         nid = getattr(note, "note_id", "") or ""
-        tags = list(getattr(note, "tags", None) or [])
-        if nid.startswith(f"{self._prefix}:"):
-            return True
-        # Require ALL scope tags so claim_id isolation is strict.
-        return all(t in tags for t in self._tags)
+        return nid.startswith(f"{self._prefix}:")
 
 
 _FACT_PATTERNS: tuple[re.Pattern[str], ...] = (
