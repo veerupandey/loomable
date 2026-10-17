@@ -1,128 +1,95 @@
-<div align="center" id="top">
-  <h1>loomable</h1>
-  <p>Agent · Team · Workflow · Case · AG-UI SSE</p>
+<div align="center">
+  <h1>Loomable</h1>
+  <p>A lightweight Python framework for agents, specialist teams, and workflows.</p>
   <p>
-    <a href="https://github.com/veerupandey/loomable/actions/workflows/ci.yml"><img src="https://github.com/veerupandey/loomable/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
-    <img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+" />
-    <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT" />
-    <img src="https://img.shields.io/badge/status-beta-blue.svg" alt="Status: beta" />
+    <a href="https://github.com/veerupandey/loomable/actions/workflows/ci.yml"><img src="https://github.com/veerupandey/loomable/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+    <img src="https://img.shields.io/badge/Python-3.11%2B-3776AB" alt="Python 3.11 or newer">
+    <img src="https://img.shields.io/badge/status-beta-8250df" alt="Beta">
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2da44e" alt="MIT license"></a>
+  </p>
+  <p>
+    <a href="#quickstart">Quickstart</a> ·
+    <a href="examples/README.md">Examples</a> ·
+    <a href="docs/API.md">API reference</a> ·
+    <a href="CHANGELOG.md">Changelog</a>
   </p>
 </div>
 
-<p align="center">
-  <a href="#get-started">Get Started</a> ·
-  <a href="#api">API</a> ·
-  <a href="#examples">Examples</a> ·
-  <a href="docs/API.md">API Reference</a> ·
-  <a href="CHANGELOG.md">Changelog</a> ·
-  <a href="SECURITY.md">Security</a>
-</p>
+Start with a model and a Python function. As your application grows, add session memory, retrieval, specialist agents, or checkpointed workflows. The base install depends on HTTPX and Pydantic. HTTP serving, MCP, and PostgreSQL are optional extras.
 
-**Public beta (`0.2.0b0`)** — Agent, Team, Workflow, Case, Memory, AG-UI. Polish gaps expected. Limits: local workspace FS, cooperative cancel, shared API-key serve auth. Full surface: [docs/API.md](docs/API.md).
+## Quickstart
+
+Install from the repository with Python 3.11 or newer.
+
+```bash
+git clone https://github.com/veerupandey/loomable.git
+cd loomable
+python -m pip install -e '.[examples]'
+```
+
+Set `LOOMABLE_PROVIDER=openai` and `OPENAI_API_KEY` in your shell or the repository's ignored `.env` file. To use Gemini, set `LOOMABLE_PROVIDER=gemini` and `GEMINI_API_KEY`. Use [`.env.example`](.env.example) as a template.
+
+```bash
+python -m examples.agents.01_hello_world
+python -m examples.agents.02_with_tools
+```
+
+The second command asks the model to look up stock in a local inventory fixture. Here is the same pattern in a standalone script. Set the provider key in your shell before running it.
 
 ```python
-from loomable import Agent, Team, Workflow, Case, tool
+from loomable import Agent, tool
+
+inventory = {"WIDGET": 12, "SPROCKET": 0}
+
 
 @tool
-def search(query: str) -> str:
-    """Search the knowledge base."""
-    return "Python was created in 1991."
+def stock_count(sku: str) -> int:
+    """Return the number of units in stock for this SKU."""
+    return inventory[sku.upper()]
 
-agent = Agent(model="openai:gpt-4o-mini", tools=[search], knowledge_base=["./handbook.pdf"])
-print((await agent.arun("When was Python created?")).output.text())
-```
 
-## Get Started
-
-```bash
-pip install "loomable @ git+https://github.com/veerupandey/loomable.git@v0.2.0b0"
-# or
-pip install -e ".[dev,toolkits]"
-# Optional integrations
-pip install "loomable[serve,mcp]"
-```
-
-For examples that read a local `.env`, install the `examples` extra and copy [`.env.example`](.env.example) to `.env` (gitignored). For the base package, export `GEMINI_API_KEY` / `OPENAI_API_KEY`.
-
-```python
-import asyncio
-from loomable import Agent
-from loomable.providers.gemini import GeminiProvider
-
-agent = Agent(model=GeminiProvider(), instructions="Be concise.")
-print(asyncio.run(agent.arun("Capital of France?")).output.text())
-```
-
-## API
-
-| Primitive | Role |
-|-----------|------|
-| **Agent** | Model + tools + memory + `knowledge_base=` |
-| **Team** | `broadcast` / `sequential` (hard) · `coordinate` / `route` (soft) |
-| **Workflow** | `.step` / `.parallel` / `.branch` / `.loop` + HITL + checkpoints |
-| **Case** | Goal + WorkItems board + plan → dispatch → accept |
-| **Memory** | `Memory.compose(conversation=..., user=...)` |
-| **Deep agent** | `create_deep_agent(profile="research"\|"code")` |
-
-```python
-from loomable import Workflow, JsonFileCheckpointer, FlowPaused, Team, Case, create_deep_agent
-
-wf = (
-    Workflow("sev", session_id="inc-1", checkpointer=JsonFileCheckpointer("./ckpts"))
-    .step("gather", gatherer)
-    .parallel(analyst=analyst, visual=visual)
-    .step("scribe", scribe, confirm=True)
+agent = Agent(
+    model="openai:gpt-5.4-mini",
+    tools=[stock_count],
+    require_tools=["stock_count"],
+    strict_require_tools=True,
 )
-try:
-    result = await wf.arun(email)
-except FlowPaused:
-    await wf.approve("scribe")
-    result = await wf.arun(resume=True)
 
-team = Team(members=[sre, legal], mode="broadcast", hard=True)
-case = Case(model=provider, goal="Close INC-88421", board=True, dispatch="spawn", accept=ok)
-agent = create_deep_agent(provider, profile="research", workspace="./.deep_workspace")
+print(agent.run("How many WIDGET units are in stock?").text)
 ```
 
-```python
-from fastapi import FastAPI
-from loomable.serve import mount_agent, mount_case
+Use `await agent.arun(...)` in async applications. To switch providers, pass `model="gemini:gemini-flash-latest"` or a configured provider instance.
 
-app = FastAPI()
-mount_agent(app, agent, prefix="/agent", api_key="secret")  # POST /agent/run/events
-mount_case(app, case, prefix="/cases")                      # POST /cases/run/events
-```
+## Choose a building block
 
-NDJSON `/run/stream` is Agent-only. Disconnect on `mount_agent` / `mount_case` calls `cancel()`.
+| Building block | Use it when |
+|---|---|
+| [Agent](docs/API.md#agent) | A model needs tools, structured output, or conversation history. |
+| [Team](docs/API.md#team) | Specialists need to review in parallel, work in sequence, or delegate based on the request. |
+| [Workflow](docs/API.md#workflow) | Your application defines the steps, branches, state, and approval gates. |
+| [Case](docs/API.md#case) | Work starts from a goal and needs a plan, a work-item board, and an acceptance check. |
+| [Deep agent](docs/API.md#deep-agent) | A research or coding task needs planning, a workspace, and task delegation. |
 
-Providers: `OpenAIProvider`, `AzureOpenAIProvider`, `AnthropicProvider`, `BedrockProvider`, `GeminiProvider`, `GroqProvider`, `OllamaProvider`.
+These building blocks compose. An agent or team can run as a workflow step. [Memory](docs/API.md#memory), [document retrieval](docs/API.md#knowledge-and-retrieval), and [checkpointing](docs/API.md#checkpointing) can be added independently.
 
-```python
-from loomable import Agent
+## Learn by doing
 
-agent = Agent(model="openai:gpt-4o-mini")
-print(agent.run("What is the capital of France?").text)
-```
+| I want to build… | Start here |
+|---|---|
+| An agent that returns validated JSON | [Classify a support ticket](examples/agents/03_structured_io.py) |
+| A conversation that survives rebuilding the agent | [Resume a saved conversation](examples/memory/01_session_memory.py) |
+| A workflow that gathers evidence and writes a recommendation | [Run parallel reviews](examples/patterns/02_pipeline.py) |
+| A workflow with an approval gate | [Pause, approve, and resume](examples/advanced/03_checkpointing.py) |
+| An HTTP service with AG-UI events | [Serve an agent locally](examples/README.md#extend-and-serve) |
+| A complete application | [Read-only incident triage](examples/incident_triage/README.md) |
 
-## Examples
-
-The [incident triage agent](examples/incident_triage/README.md) uses live models and read-only tools to turn metrics and a runbook into a structured on-call handoff.
-
-```bash
-python examples/agents/01_hello_world.py
-python examples/agents/07_knowledge_base.py
-python examples/escalation_war_room/10_case.py
-```
-
-See [`examples/README.md`](examples/README.md).
+The [examples guide](examples/README.md) lists the commands, prerequisites, and expected outputs. The [API reference](docs/API.md) covers configuration and extension points.
 
 ## Development
 
 ```bash
-pip install -e ".[dev]"
+python -m pip install -e '.[dev,toolkits]'
 python -m pytest tests/unit -q
 ```
 
-## License
-
-[MIT](LICENSE)
+Loomable is in beta. See the [security policy](SECURITY.md) for serving, sandbox, and deployment boundaries. Released under the [MIT License](LICENSE).

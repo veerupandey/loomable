@@ -6,7 +6,7 @@ One factory: `create_deep_agent`. Skills specialize it. Same `arun()` as `Agent`
 from loomable import create_deep_agent
 
 agent = create_deep_agent(
-    model,                          # Gemini / OpenAI / Azure — see examples/_provider.py
+    model,                          # Gemini or OpenAI — see examples/_provider.py
     profile="research",             # or "code" / "general"
     workspace="./.deep_workspace",
 )
@@ -30,22 +30,24 @@ Planning (`TodoTools`), local workspace files, `task` / `task_batch`, skills
 ## Examples
 
 These call a **real model**. Copy `.env.example` → `.env` (`GEMINI_API_KEY` or
-`OPENAI_API_KEY` / Azure).
+`OPENAI_API_KEY`).
 
 | File | What it does |
 |------|----------------|
 | `01_research.py` | Web research → cited `reports/brief.md` |
-| `02_code.py` | Index a sample shop, fix a pricing bug, run a test |
-| `03_sandbox.py` | `run_python` over a CSV; optional Lightpanda browser MCP |
+| `02_code.py` | Index a sample shop and draft a pricing fix and regression test |
+| `03_sandbox.py` | Approve a known local script with `PythonTools` |
 | `live_gate.py` | CI correctness gate (not a tutorial) |
 
 ```bash
-python examples/deep_agent/01_research.py
-python examples/deep_agent/02_code.py
-python examples/deep_agent/03_sandbox.py
+python -m examples.deep_agent.01_research
+python -m examples.deep_agent.02_code
+python -m examples.deep_agent.03_sandbox
 ```
+
+Install `.[toolkits]` for the web research example. The code demo writes to an ignored sample workspace. The subprocess sandbox example only approves its bundled script.
 
 Override the research topic with `DEEP_RESEARCH_TOPIC='...'`.
 
 Custom skill packages live next to the agent (`skills/research/` is a readable
-copy of the bundled research skill). Load extras with `skills=["./skills/weather-lookup"]`.
+copy of the bundled research skill). Load extras with `skills=["./examples/skills/weather-lookup"]`.

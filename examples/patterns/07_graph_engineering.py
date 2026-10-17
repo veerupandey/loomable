@@ -14,7 +14,7 @@ Patterns in this file (no live model required):
 Related (different APIs — do not mix them up):
 
 - Agent / open-ended loop gates → ``patterns/01_retry_loop.py``
-- Happy-path parallel Agents only → ``patterns/03_fan_out.py``
+- Basic parallel reviews and chaining → ``patterns/02_pipeline.py``
 - N-way ``Command`` routing / ``get_state`` → ``patterns/08_route_command.py``
 """
 

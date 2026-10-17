@@ -1,60 +1,35 @@
-"""Plan and Execute — dynamic task decomposition via Workflow.map.
-
-USE WHEN: The task is too complex for a single agent and the steps
-aren't known in advance. A planner decomposes; workers execute; a
-synthesizer merges.
-"""
+"""Turn a typed model plan into independent work items, then merge the results."""
 
 import asyncio
-from dotenv import load_dotenv
 
-load_dotenv()
+from pydantic import BaseModel, Field
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _provider import require_provider  # noqa: E402
-
+from examples._provider import make_provider
 from loomable import Agent, Workflow
 
-provider = require_provider()
 
-planner = Agent(
-    model=provider,
-    role="Project Planner",
-    goal="Decompose complex tasks into clear steps",
-    instructions=(
-        "Break the task into 2-4 concrete steps. "
-        "Output a JSON list of step descriptions. "
-        "Each step should be independently executable."
-    ),
-)
+class Plan(BaseModel):
+    tasks: list[str] = Field(min_length=2, max_length=3)
 
-worker = Agent(
-    model=provider,
-    role="Task Worker",
-    goal="Execute a single task step thoroughly",
-    instructions="Complete the assigned step. Be thorough but concise.",
-)
 
-synthesizer = Agent(
-    model=provider,
-    role="Synthesizer",
-    goal="Combine step results into a coherent final answer",
-    instructions="Merge all step results into one cohesive response.",
-)
+async def main():
+    async with make_provider() as model:
+        planner = Agent(model, response_model=Plan, instructions="Create two independent review tasks.")
+        writer = Agent(model, instructions="Combine the review findings into a short recommendation.")
 
-wf = Workflow("plan-execute").map(
-    worker,
-    planner=planner,
-    synthesizer=synthesizer,
-)
+        async def plan(question):
+            result = await planner.arun(question)
+            return {"plan_steps": result.structured.tasks}
 
-result = asyncio.run(
-    wf.arun(
-        "Design a caching strategy for a social media feed API "
-        "that handles 10K requests/second."
-    )
-)
-print(result.output.text())
+        async def review(task):
+            # Each item gets its own runtime and shares the model's HTTP pool.
+            worker = Agent(model, instructions="Answer the assigned review task in one sentence.")
+            return await worker.arun(task)
+
+        workflow = Workflow("release review").map(review, planner=plan, synthesizer=writer)
+        result = await workflow.arun("Review a plan to cache checkout prices for five minutes.")
+        print(result.text)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

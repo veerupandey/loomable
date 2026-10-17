@@ -1,57 +1,41 @@
-"""MCP servers — external tools via Model Context Protocol.
-
-USE WHEN: You want filesystem / DB / browser tools from an MCP server.
-MCP tools register as normal Agent tools at build time (eager connect).
-
-This demo starts the official filesystem MCP server (requires ``npx``).
-For progressive discovery of MCP tools, see ``deep_agent/03_sandbox.py``.
-"""
-
-from __future__ import annotations
+"""Call a tool exposed by a real local MCP server over stdio."""
 
 import asyncio
-import shutil
 import sys
-import tempfile
-from pathlib import Path
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _provider import require_provider  # noqa: E402
-
+from examples._provider import make_provider
 from loomable import Agent
 
 
-async def main() -> None:
-    if not shutil.which("npx"):
-        raise SystemExit(
-            "npx not found — install Node.js to run the filesystem MCP demo,\n"
-            "or see examples/deep_agent/03_sandbox.py for MCP via skills."
+def serve():
+    from mcp.server import MCPServer
+
+    server = MCPServer("shipping")
+
+    def shipping_policy() -> str:
+        """Read the shipping policy from the example's local handbook."""
+        return "Orders placed before 14:00 ship on the same business day."
+
+    server.add_tool(shipping_policy)
+    server.run()
+
+
+async def main():
+    async with make_provider() as model:
+        agent = Agent(
+            model, mcp_servers=[{
+                "name": "shipping",
+                "command": sys.executable,
+                "args": ["-m", "examples.advanced.01_mcp_servers", "--server"],
+            }],
+            require_tools=["shipping_policy"], strict_require_tools=True,
+            instructions="Use the shipping policy tool before answering.",
         )
-
-    model = require_provider()
-    root = Path(tempfile.mkdtemp(prefix="loomable-mcp-"))
-    (root / "hello.txt").write_text("Hello from Loomable MCP demo.\n", encoding="utf-8")
-
-    agent = Agent(
-        model=model,
-        role="File Assistant",
-        goal="Read and summarize files using MCP filesystem tools",
-        instructions="Use the MCP filesystem tools. Be concise.",
-        mcp_servers=[
-            {
-                "command": "npx",
-                "args": ["-y", "@modelcontextprotocol/server-filesystem", str(root)],
-            }
-        ],
-        modalities="text",
-    )
-    result = await agent.arun(f"List files in {root} and summarize hello.txt")
-    print(result.output.text())
+        print((await agent.arun("Will an order placed at 13:00 ship today?")).text)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    if sys.argv[1:] == ["--server"]:
+        serve()
+    else:
+        asyncio.run(main())

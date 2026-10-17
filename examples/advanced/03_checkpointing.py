@@ -1,69 +1,45 @@
-"""Checkpointing — live Agents as Workflow steps.
+"""Pause before an external action, then approve and resume from SQLite."""
 
-Each Agent receives the previous Agent's output automatically.
-Requires a real LLM key (``GEMINI_API_KEY`` / OpenAI / Azure) — see ``.env.example``.
-
-Run::
-
-    python examples/advanced/03_checkpointing.py
-"""
-
-from __future__ import annotations
-
+import argparse
 import asyncio
-import shutil
-import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
-from loomable import Agent, JsonFileCheckpointer, Workflow
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _provider import require_provider  # noqa: E402
-
-ROOT = Path(__file__).resolve().parent / ".checkpoint_demo"
-SESSION = "checkpoint-demo"
+from examples._provider import make_provider
+from loomable import Agent, FlowPaused, SQLiteCheckpointer, Workflow
 
 
-async def main() -> None:
-    if ROOT.exists():
-        shutil.rmtree(ROOT)
-    ROOT.mkdir(parents=True)
+async def main(approve: bool):
+    with TemporaryDirectory() as directory:
+        root = Path(directory)
+        store = SQLiteCheckpointer(str(root / "release.sqlite"))
+        destination = root / "release-note.txt"
 
-    model = require_provider()
-    drafter = Agent(
-        model,
-        role="Drafter",
-        goal="Write a short draft on the topic",
-        instructions="Write 2-3 clear sentences. No preamble.",
-    )
-    reviewer = Agent(
-        model,
-        role="Reviewer",
-        goal="Review the draft and approve or request changes",
-        instructions=(
-            "You receive the previous agent's draft as your input. "
-            "Reply with APPROVED: followed by a one-line justification, "
-            "or CHANGES: with specific fixes."
-        ),
-    )
+        def publish(draft):
+            destination.write_text(draft.text(), encoding="utf-8")
+            return "Release note saved."
 
-    cp = JsonFileCheckpointer(str(ROOT / "checkpoints"))
-    wf = (
-        Workflow("checkpoint-demo", session_id=SESSION, checkpointer=cp)
-        .step("draft", drafter)
-        .step("review", reviewer)
-    )
-    result = await wf.arun("Why testing matters for flaky deployments")
-    print(result.output.text())
+        async with make_provider() as model:
+            def workflow():
+                drafter = Agent(model, instructions="Write a one-sentence release note.")
+                return (Workflow("release", session_id="release-42", checkpointer=store)
+                        .step("draft", drafter)
+                        .step("publish", publish, confirm=True))
 
-    saved = await cp.get(SESSION)
-    assert saved is not None and saved.complete is True
-    print(f"checkpoint complete={saved.complete} step={saved.step}")
+            try:
+                await workflow().arun("Checkout now retries a failed payment once.")
+            except FlowPaused as pause:
+                print(f"Paused before {pause.node_id}. Draft saved in the checkpoint.")
+                if approve:
+                    reopened = workflow()
+                    await reopened.approve(pause.node_id)
+                    print((await reopened.arun(resume=True)).text)
+                    print(destination.read_text(encoding="utf-8"))
+                else:
+                    print("Run with --approve to allow the demo to write the release note.")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--approve", action="store_true")
+    asyncio.run(main(parser.parse_args().approve))

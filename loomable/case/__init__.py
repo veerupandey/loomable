@@ -545,7 +545,13 @@ def build_case_workflow(
                     return r.output.text()
                 return str(r)
 
-            if concurrency:
+            from loomable.agent import Agent
+
+            if isinstance(worker, Agent):
+                # One Agent instance has one active runtime. Spawn mode uses
+                # independent agents when work items need to run concurrently.
+                texts = [await _work(step) for step in steps]
+            elif concurrency:
                 sem = asyncio.Semaphore(concurrency)
 
                 async def _bounded(step: str) -> str:

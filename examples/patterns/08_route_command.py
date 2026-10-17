@@ -11,7 +11,7 @@ Do **not** use this for:
 - Binary ``when`` / ``then`` / ``else_`` → ``Workflow.branch``
   (``advanced/02_workflow_branch.py``)
 - LLM picks a Team specialist → ``Team(mode="route")``
-  (``patterns/04_router.py``)
+  (``subagents/04_team_modes.py``)
 
 No live model required.
 """

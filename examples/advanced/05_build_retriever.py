@@ -26,7 +26,7 @@ from loomable import Agent, open_vector_store
 from loomable.retrieval import build_retriever, list_strategies
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _provider import require_provider  # noqa: E402
+from _provider import make_embedder, require_provider  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent / ".retrieval_demo"
 ROOT.mkdir(parents=True, exist_ok=True)
@@ -51,6 +51,7 @@ async def main() -> None:
         mode="hybrid",
         strategy="auto",
         store=open_vector_store(engine="memory"),
+        embedder=make_embedder(),
     )
     agent = Agent(
         model=require_provider(),

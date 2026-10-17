@@ -1,54 +1,25 @@
-"""Agent with Tools — Function calling via @tool decorator.
-
-USE WHEN: Your agent needs to interact with external systems
-(APIs, databases, file systems) or perform calculations.
-
-The @tool decorator turns plain Python functions into callable tools.
-The agent's LLM decides when to call them.
-"""
+"""Let a model call a typed, read-only inventory function."""
 
 import asyncio
-from dotenv import load_dotenv
 
-load_dotenv()
+from examples._provider import make_provider
+from loomable import Agent, tool
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _provider import require_provider  # noqa: E402
-
-from loomable.agent import Agent, tool
+INVENTORY = {"WIDGET": 12, "SPROCKET": 0}
 
 
 @tool
-def calculate(expression: str) -> str:
-    """Evaluate a mathematical expression safely."""
-    allowed = set("0123456789+-*/.(). ")
-    if not all(c in allowed for c in expression):
-        return "Error: only numeric expressions allowed"
-    return str(eval(expression))  # noqa: S307
+def stock_count(sku: str) -> int:
+    """Return the number of units in the local inventory fixture."""
+    return INVENTORY[sku.upper()]
 
 
-@tool
-def get_weather(city: str) -> str:
-    """Get current weather for a city (demo stub)."""
-    return f"Weather in {city}: 22°C, partly cloudy"
+async def main():
+    async with make_provider() as model:
+        agent = Agent(model, tools=[stock_count], require_tools=["stock_count"], strict_require_tools=True)
+        result = await agent.arun("How many units of WIDGET are in stock?")
+        print(result.text)
 
 
-provider = require_provider()
-
-agent = Agent(
-    model=provider,
-    role="Personal Assistant",
-    goal="Help with calculations and weather lookups",
-    instructions="Use your tools to answer questions. Be concise.",
-    tools=[calculate, get_weather],
-)
-
-result = asyncio.run(agent.arun("What's 42 * 17, and what's the weather in Tokyo?"))
-
-# Pretty-print shows output + tools used
-from loomable.display import pp
-
-pp(result)
+if __name__ == "__main__":
+    asyncio.run(main())

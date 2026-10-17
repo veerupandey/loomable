@@ -1,4 +1,4 @@
-"""Deep code — index a repo, search it, fix a bug, verify in the sandbox.
+"""Deep code — index a demo repo and draft a fix and regression test.
 
 USE WHEN: The agent should understand and change a codebase. ``profile="code"``
 loads the coding skill, indexes ``repo=`` (zvec when installed, in-memory
@@ -78,7 +78,7 @@ async def main() -> None:
         "In shop/pricing.py, apply_discount(199, 15) must return 169 "
         "(199 * 0.85 = 169.15, round half away from zero). The current "
         "integer truncation returns 170. Fix the function, add a test under "
-        "tests/, and run it with the sandbox until it passes."
+        "tests/. Leave execution for the reviewer."
     )
     print(result.output.text() or "(no final text)")
     print("tools:", ", ".join(_tool_names(result)) or "(none)")

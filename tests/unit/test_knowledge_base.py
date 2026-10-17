@@ -497,15 +497,6 @@ def test_example_07_knowledge_base_runs() -> None:
 
 @pytest.mark.live
 @pytest.mark.skipif(not _has_live_llm(), reason="needs live LLM API key")
-def test_example_08_team_knowledge_base_runs() -> None:
-    import runpy
-
-    script = Path(__file__).resolve().parents[2] / "examples" / "agents" / "08_team_knowledge_base.py"
-    runpy.run_path(str(script), run_name="__main__")
-
-
-@pytest.mark.live
-@pytest.mark.skipif(not _has_live_llm(), reason="needs live LLM API key")
 def test_example_build_retriever_runs() -> None:
     import runpy
 
@@ -520,8 +511,11 @@ def test_example_build_retriever_runs() -> None:
 
 @pytest.mark.live
 @pytest.mark.skipif(not _has_live_llm(), reason="needs live LLM API key")
-def test_example_checkpointing_runs() -> None:
+def test_example_checkpointing_runs(monkeypatch) -> None:
     import runpy
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["03_checkpointing.py", "--approve"])
 
     script = (
         Path(__file__).resolve().parents[2]

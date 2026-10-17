@@ -1,40 +1,21 @@
-"""Session Memory — Multi-turn conversation within a session.
-
-USE WHEN: You need the agent to remember what was said earlier
-in the same conversation (e.g. a chat session).
-
-session_id enables turn-by-turn memory that persists across
-multiple arun() calls within the same process.
-"""
+"""Recall an order reference after rebuilding an agent from saved history."""
 
 import asyncio
-from dotenv import load_dotenv
+from tempfile import TemporaryDirectory
 
-load_dotenv()
+from examples._provider import make_provider
+from loomable import Agent, open_session_store
 
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _provider import require_provider  # noqa: E402
+async def main():
+    with TemporaryDirectory() as directory:
+        async with make_provider() as model:
+            store = open_session_store("file", path=directory)
+            agent = Agent(model, session_id="ticket-42", session_store=store)
+            await agent.arun("The order reference is QZ-8421. Acknowledge it.")
+            reopened = Agent(model, session_id="ticket-42", session_store=store, resume=True)
+            print((await reopened.arun("What was the order reference?")).text)
 
-from loomable.agent import Agent
 
-provider = require_provider()
-
-agent = Agent(
-    model=provider,
-    role="Personal Tutor",
-    goal="Teach concepts building on previous explanations",
-    instructions="Build on what you've already explained. Reference prior turns.",
-    session_id="tutoring-session-001",
-    memory_window=8,
-)
-
-# Turn 1
-result = asyncio.run(agent.arun("Explain what a hash table is, for a beginner."))
-print(f"Turn 1: {result.output.text()}\n")
-
-# Turn 2: Agent remembers Turn 1
-result = asyncio.run(agent.arun("Now explain how collisions are handled."))
-print(f"Turn 2: {result.output.text()}")
+if __name__ == "__main__":
+    asyncio.run(main())

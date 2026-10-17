@@ -1,56 +1,44 @@
-# Loomable API
+# Loomable API reference
 
-Public beta **0.2.0b0**. One contract: `arun` → `RunResult`.
+Loomable's `arun()` method returns a `RunResult`. Start with the
+[quickstart](../README.md#quickstart) or follow a runnable example in the
+[examples guide](../examples/README.md).
 
-| Use | API |
-|-----|-----|
-| One model + tools | `Agent` |
-| Named orchestration | `Team` |
-| Multi-step process | `Workflow` |
-| Goal + WorkItems board | `Case` |
-| Long-horizon research/code | `create_deep_agent(profile=...)` |
-| Memory | `Memory.compose` |
-| Searchable RAG | `knowledge_base=` / `retrievers=` |
+| I want to… | Read |
+|---|---|
+| Run a model with tools and validated output | [Agent](#agent) · [Structured output](#structured-output) |
+| Coordinate specialists or define a graph | [Team](#team) · [Workflow](#workflow) |
+| Work toward a goal with a plan and acceptance check | [Case](#case) · [Deep agent](#deep-agent) |
+| Recall conversation history or search documents | [Memory](#memory) · [Knowledge and retrieval](#knowledge-and-retrieval) |
+| Select a provider or register an adapter | [Models](#models) |
+| Persist a run or wait for approval | [Durable tool approval](#durable-tool-approval) · [Checkpointing](#checkpointing) |
+| Stream output or expose an HTTP endpoint | [Streaming and serving](#streaming-and-serving) |
+| Extend an agent with MCP and tune execution | [Retries, limits, and MCP](#retries-limits-and-mcp) |
 
-Prefer `Workflow` / `Team`. Low-level `Flow` / `loomable.flow.helpers` are an escape hatch. Breaking changes are in [CHANGELOG.md](../CHANGELOG.md).
+Import the main building blocks from `loomable`. Use `loomable.agent`,
+`loomable.memory`, `loomable.providers`, and `loomable.persist` for configuration
+types and adapters. The lower-level [Flow API](#low-level-flow) is available
+when you need to define nodes and edges directly.
 
-Beta limits: local workspace FS, cooperative cancel (not hard-kill of provider HTTP), serve auth is a shared API key (not RBAC).
-
-### Package tiers (no separate `core`)
-
-| Tier | Packages | Who imports |
-|------|----------|-------------|
-| **Facade** | `loomable` | Everyone — progressive disclosure |
-| **Product** | `agent`, `memory`, `flow`, `case`, `toolkits`, `serve`, … | App / example code |
-| **Runtime** | `kernel`, `providers`, `persist` | Advanced / internals |
-
-`kernel` **is** the runtime core — do not add a parallel `loomable.core`. Prefer `loomable.memory` for L1/L2/L3 product APIs (`Memory.compose`, `NoteStore`); use `loomable.kernel` only when you need stores/contracts directly.
-
----
+See the [changelog](../CHANGELOG.md) for compatibility changes and the
+[security policy](../SECURITY.md) for deployment boundaries.
 
 ## Agent
 
+An `Agent` combines a model, instructions, and optional tools. The synchronous
+`run()` method wraps `arun()`. When tools are registered, Loomable executes
+requested tool calls and returns their results to the model.
+
 ```python
-from loomable import Agent, tool
+from loomable import Agent
 
-@tool
-def search(query: str) -> str:
-    """Search the web."""
-    return f"Results for: {query}"
-
-agent = Agent(
-    model="openai:gpt-4o-mini",  # or "anthropic:...", "gemini:...", provider instance
-    role="Researcher",
-    goal="Find accurate information",
-    instructions="Be concise.",
-    tools=[search],
-    knowledge_base=["./handbook.pdf"],  # vector DB → search_knowledge
-)
-result = await agent.arun("When was Python created?")
-print(result.output.text())
+agent = Agent(model="openai:gpt-5.4-mini", instructions="Explain concepts in one sentence.")
+result = agent.run("What is a database index?")
+print(result.text)
 ```
 
-`run()` is a sync wrapper. With tools, the tool loop runs automatically; without tools, a single model call. `complexity_router=` is opt-in (`SINGLE` / `TOOL_LOOP` / `PLAN`). `PLAN` uses `_run_plan` (`plan_and_execute`); when `planner=` is set, planning goes through the kernel `Planner`, and each step runs the tool loop when tools are registered. `planning_model=` sets the kernel planner's dedicated model/tier id. `plan_tool=True` exposes an on-demand plan tool with the same worker tool-loop behavior.
+The [typed-tool walkthrough](../examples/agents/02_with_tools.py) shows how to
+register a Python function with `@tool`.
 
 ```python
 result.output.text()
@@ -64,15 +52,13 @@ result.trace            # debug=True or events=JSONTracer()
 
 Persona fields (`role`, `goal`, `instructions`, `description`) assemble into the system prompt. `role` is reused in delegation labels.
 
-**HITL tools:** `require_confirmation=["deploy"]` gates tools; without a custom `approver`, the default is **deny** (headless-safe). Deep `code_exec` / `shell` auto-join that list.
-
-**Require tools:** `require_tools=["write_file:output/x.md"]` nudges until those side effects happen. `strict_require_tools=True` raises `RequireToolsError`. Same knobs inherit onto Agent steps via `Workflow(require_tools=...)` or `.step(..., require_tools=...)`.
-
-**Verifier:** `verifier=` is a callable `(output, context) -> bool` or a `Verifier`. `retry_on_failure=True` + `max_verify_retries=` re-asks with feedback.
-
-**HITL (tools):** `require_confirmation=["send_email"]` + `approver=` (default deny-all, headless-safe). Workflow step HITL is separate (`confirm=True`).
-
-**Cancel:** `agent.cancel()` / `built.cancel()` — cooperative at tool-loop boundaries.
+| Option | Behavior |
+|---|---|
+| `require_tools=["write_file:output/report.md"]` | Require a successful tool call, optionally to a matching path. `strict_require_tools=True` raises `RequireToolsError` when the requirement is unmet. |
+| `require_confirmation=["publish"]` | Ask an `approver` before dispatching a listed tool. Without an approver, ordinary runs deny the call. Durable runs can pause for a decision. |
+| `verifier=` | Check output with a callable `(output, context)` or a `Verifier`. Enable `retry_on_failure=True` and bound retries with `max_verify_retries=`. |
+| `complexity_router=` | Choose single-call, tool-loop, or plan execution. Set `planning_model=` for a dedicated planner model or enable `plan_tool=True` for on-demand planning. |
+| `agent.cancel()` | Request cooperative cancellation at execution boundaries. |
 
 ### Execution and streaming
 
@@ -80,7 +66,7 @@ Persona fields (`role`, `goal`, `instructions`, `description`) assemble into the
 
 Pass `session_id=` per call to keep histories separate on one Agent. Calls on the same runtime must run sequentially. Cancel a specific active session with `agent.cancel(session_id=...)`. Use a shared session store for conversation history across process restarts. For advanced limits, import `ExecutionOptions` from `loomable.agent` and pass it as `execution=`. Keep existing flat arguments or pass the options object for those settings.
 
-Use `async with OpenAIProvider(...) as provider` to reuse a client pool within one event loop, or inject a caller-owned `httpx.AsyncClient`. The same applies to `AzureOpenAIProvider`. Set `native_structured_output=True` on a compatible endpoint to send Pydantic JSON Schema in the request. Local validation still applies.
+Use `async with OpenAIProvider(...) as provider` to reuse a client pool within one event loop, or inject a caller-owned `httpx.AsyncClient`. The same pooling pattern works with `GeminiProvider`. Set `native_structured_output=True` on a compatible endpoint to send Pydantic JSON Schema in the request. Local validation still applies.
 
 ### Durable tool approval
 
@@ -127,34 +113,35 @@ and tool activity are available from the live run. Approval and unknown tool
 outcomes still require `acontinue_run` with explicit decisions. The replay
 window lasts until the session checkpoint is deleted.
 
-Set `mount_agent(..., max_concurrent_runs=16)` to cap admitted runs per mount and process. Streaming requests hold a slot until their response closes. At capacity, authenticated callers receive HTTP 429 with `Retry-After: 1`. Agent SSE buffers up to 128 pending frames per stream.
-
-Install `loomable[serve]` for FastAPI and Uvicorn, `loomable[mcp]` for MCP, and `loomable[examples]` for example scripts that load dotenv files.
-
 ---
 
 ## Team
 
+A Team gives specialist agents a shared task. Choose a mode based on how you
+want work assigned and results combined.
+
 ```python
 from loomable import Agent, Team
 
-team = Team(
-    members=[researcher, writer, critic],
-    model="openai:gpt-4o-mini",
-    mode="coordinate",  # coordinate | route | broadcast | sequential | tasks
-)
-result = await team.arun("Review our API design")
+model = "openai:gpt-5.4-mini"
+security = Agent(model, role="Security reviewer", instructions="Identify one access-control risk.")
+performance = Agent(model, role="Performance reviewer", instructions="Identify one scaling risk.")
+team = Team([security, performance], model=model, mode="broadcast")
+result = await team.arun("Review a new endpoint that exports orders as CSV.")
+print(result.text)
 ```
 
-| Mode | Default | Behavior |
-|------|---------|----------|
-| `coordinate` | soft | LLM delegates to all members, synthesizes |
-| `route` | soft | LLM picks one member |
-| `broadcast` | hard | Same input to all, merge labeled results |
-| `sequential` | hard | Chain members in order |
-| `tasks` | soft | Shared TodoTools checklist + delegate until done (`max_iterations=`) — Agno `TeamMode.tasks` parity |
+| Mode | Orchestration | Behavior |
+|---|---|---|
+| `coordinate` | Model-directed | Delegate across the roster and synthesize the results. |
+| `route` | Model-directed | Choose one specialist for the request. |
+| `broadcast` | Deterministic by default | Run every specialist on the same input and merge labeled outputs. |
+| `sequential` | Deterministic by default | Pass each specialist's output to the next. |
+| `tasks` | Model-directed | Maintain a checklist and delegate work within an iteration budget. |
 
-`hard=True` is only valid with `broadcast` / `sequential`. Soft `coordinate` auto-requires `delegate_to_*` and runs skipped members (`metadata["team_coordinate_fallback"]`). `Team.astream` mirrors `Agent.astream` for soft modes; hard modes chunk the merged `arun` result. Members may be nested `Team` instances (wrapped via `Team.as_agent()`).
+`hard=True` applies to broadcast and sequential modes. Coordinate mode can
+run members skipped by the coordinator and records them in
+`metadata["team_coordinate_fallback"]`. Teams can also contain other Teams.
 
 Route mode requires one successful specialist delegation per run. Its choice
 can be any roster member. A trailing `*` in `require_tools` matches a tool-name
@@ -169,26 +156,43 @@ Note: Agent `subagents=` (LLM delegation tools) is separate from kernel `Subagen
 
 ## Workflow
 
+A workflow connects agents, teams, or Python functions. Each step can consume
+the previous step's output or a named value from shared state.
+
 ```python
-from loomable import Agent, Workflow, FlowPaused, JsonFileCheckpointer
+import asyncio
 
-wf = (
-    Workflow("article", session_id="job-1", checkpointer=JsonFileCheckpointer("./ckpts"))
-    .step("research", researcher)
-    .parallel(analyst=analyst, visual=visual)
-    .branch(when=needs_human, then=approver, else_=auto)
-    .loop(polisher, until=quality_ok, max_iterations=3)
-    .step("publish", publisher, confirm=True)
-)
-try:
-    result = await wf.arun("AI agents in 2025")
-except FlowPaused:
-    await wf.approve("publish")
-    result = await wf.arun(resume=True)
+from loomable import FlowPaused, InMemoryCheckpointer, Workflow
 
-print(wf.explain())
-print(wf.state.get("research").text())
+
+def draft(change):
+    return f"Release note: {change}"
+
+
+def publish(note):
+    return note.text()
+
+
+async def main():
+    workflow = (
+        Workflow("release", session_id="release-42", checkpointer=InMemoryCheckpointer())
+        .step("draft", draft)
+        .step("publish", publish, confirm=True)
+    )
+    try:
+        result = await workflow.arun("Checkout retries a failed payment once.")
+    except FlowPaused as pause:
+        # In an application, obtain a reviewer decision before approving.
+        await workflow.approve(pause.node_id)
+        result = await workflow.arun(resume=True)
+    print(result.text)
+
+
+asyncio.run(main())
 ```
+
+This example runs offline. For persistence across worker restarts, use the
+[SQLite approval walkthrough](../examples/advanced/03_checkpointing.py).
 
 Declarative: `Workflow("pipe", steps=[Step("a", a), Step("b", b)])`.
 
@@ -196,10 +200,7 @@ Declarative: `Workflow("pipe", steps=[Step("a", a), Step("b", b)])`.
 
 Built-in checkpointers coordinate workflow execution and approval with a
 claim per checkpoint thread. A competing worker receives `CheckpointBusy`.
-The live release review test exercises parallel evidence gathering, routing,
-approval, resume, nested teams, and all five team modes. Run
-`python -m pytest --live tests/integration/test_release_review_live.py` with
-`LOOMABLE_LIVE_PROVIDER=openai` or `gemini` and the corresponding API key.
+See the [live release-review test](../tests/integration/test_release_review_live.py) for a workflow that combines parallel teams, routing, and approval.
 
 `Workflow(memory=True)` is a callable-step blackboard on `RunContext.memory` — **not** Agent chat memory. Agent steps share via SharedState output chaining.
 
@@ -207,28 +208,10 @@ Top-level runs also write `_workflow_input` (the original `arun` argument) into 
 
 `Loop(body=agent, verifier=..., max_iterations=3)` is a Runnable on its own. Workflow uses `.loop(..., until=)` or `.verify(body, check=..., max_retries=)` (bounded generate → check → repair).
 
-### Graph-engineering knobs
+### Graph controls
 
-```python
-from loomable import Command, Workflow
-
-wf = (
-    Workflow("job", session_id="t1", checkpointer=cp, reducers={"items": append})
-    .parallel(
-        Step("a", agent_a),
-        Step("b", agent_b, on_failure="skip"),
-    )
-    .route(
-        lambda change: Command(goto="full", update={"severity": "high"}),
-        quick=quick_review,
-        full=full_audit,
-    )
-    .step("draft", drafter, reads="evidence")
-    .verify(polisher, check=quality_ok, max_retries=2)
-)
-state = await wf.get_state()
-await wf.update_state({"note": "human edit"})
-```
+The offline examples show [routing with `Command`](../examples/patterns/08_route_command.py)
+and [failure policies, named inputs, and verification](../examples/patterns/07_graph_engineering.py).
 
 | Knob | Where | Effect |
 |------|--------|--------|
@@ -236,7 +219,7 @@ await wf.update_state({"note": "human edit"})
 | `max_retries=` | `Step` / `.step` | Extra primary attempts before `on_failure` applies (default `2` for `retry`, else `0`) |
 | `reads=` | `Step` / `.step` | Feeds `state[reads]` instead of ambient previous output (works for nested/root steps too) |
 | `.verify` | `Workflow` | Verifier gate with hard repair budget (`max_retries + 1` attempts) |
-| `.route` | `Workflow` | N-way Router (Agno / LangGraph multi-edge); chooser may return `Command(goto=…)` |
+| `.route` | `Workflow` | Choose among named branches. The chooser may return `Command(goto=…)` |
 | `Command` | step / chooser return | `goto` selects route arms; `update` patches SharedState (`resume` reserved / unwired) |
 | `Send` | chooser `Command.update` lists | Dynamic map payloads — `Send.node` is metadata only; use `Workflow.map_over(..., over="tasks")` |
 | `get_state` / `update_state` / `list_states` / `fork_session` | `Workflow` | Checkpoint control plane for resume / time-travel |
@@ -251,49 +234,62 @@ await wf.update_state({"note": "human edit"})
 
 ## Case
 
+A `Case` turns a goal into work items, dispatches them, synthesizes the
+results, and checks the handoff against your acceptance rule.
+
 ```python
 from loomable import Case
 
 case = Case(
-    model=provider,
-    goal="Close INC-88421 with SEV packet",
-    board=True,           # open → in_progress → blocked → done
-    dispatch="spawn",     # or "reuse"
-    accept=lambda out, ctx: "SEV-" in out.text(),
-    max_rounds=3,
+    model="openai:gpt-5.4-mini",
+    goal="Prepare a release handoff.",
+    accept=lambda output, context: "rollback" in output.text().lower(),
+    max_rounds=2,
 )
-result = await case.arun(email)
-print(result.metadata["board"])
-
-# Same pipeline:
-Agent(model=provider, mode="case", dispatch="reuse", accept=check)
+result = await case.arun("Checkout now retries a failed payment once. Include a rollback check.")
+print(result.text)
 ```
 
-`Case.as_workflow()` returns a nestable `Workflow`. Board mutations stream as `STATE_SNAPSHOT` / `STATE_DELTA`. Case has no `astream` / NDJSON — use `astream_events` / SSE. `checkpointer=` / `max_rounds=` / `dispatch=` on `Agent` require `mode="case"`.
+Use `dispatch="reuse"` for a shared worker or `dispatch="spawn"` for
+independent specialists. `Case.as_workflow()` exposes the pipeline as a
+nestable workflow. To observe board changes, consume `STATE_SNAPSHOT` and
+`STATE_DELTA` from `astream_events()`.
 
----
+The [Case example](../examples/advanced/09_case.py) shows a bounded release
+review with an acceptance check.
 
 ## Deep agent
+
+`create_deep_agent()` configures an Agent with a workspace, planning tools,
+and specialist delegation. Install `loomable[toolkits]` for the research
+example's web and document integrations.
 
 ```python
 from loomable import create_deep_agent
 
 agent = create_deep_agent(
-    model="openai:gpt-4o-mini",
-    profile="research",          # skills=["research"] + report/citation gates
+    model="openai:gpt-5.4-mini",
+    profile="research",
     workspace="./.deep_workspace",
-    knowledge_base=store,        # same Agent kwarg
 )
-await agent.arun("Research the topic; write reports/brief.md")
-
-agent = create_deep_agent(model, profile="code", repo="./my-app")
+result = await agent.arun("Research database indexes and write reports/brief.md with sources.")
+print(result.text)
 ```
 
-`arun()` builds the agent. Call `agent.build()` only when you need the `BuiltAgent` (inspect tools, attach listeners).
+| Profile | Starting configuration |
+|---|---|
+| `general` | Planning, workspace tools, and delegation |
+| `research` | Web research, source registration, and a report acceptance check |
+| `code` | Codebase indexing, editing, and execution tools |
+| `sandbox` | Python and shell tools for a configured sandbox |
 
-Planning (`TodoTools`), local workspace FS, `task` / `task_batch` specialists, skills (`load_skill`), discovery (`search_tools` / `activate_tool`). `discovery_core="research-slim"` is experimental. Profiles: `general` | `research` | `code` | `sandbox` (`sandbox` = general + `code_exec` / `shell` with exec tools in the discovery core). Case-only kwargs (`dispatch`, `max_rounds`, `checkpointer`) require `mode="case"`. `board=False` is allowed without case mode.
+Use `arun()` to build and run the agent. Call `build()` directly when
+inspecting the runtime or attaching listeners. Progressive discovery exposes
+`search_tools`, `activate_tool`, and `load_skill` when configured.
+`discovery_core="research-slim"` is experimental.
 
----
+See the [Deep Agent examples](../examples/deep_agent/README.md) and the
+[execution sandbox policy](../SECURITY.md#execution-sandbox-beta).
 
 ## Memory
 
@@ -307,8 +303,13 @@ memory = Memory.compose(
     conversation=ConversationMemory(store=open_session_store("sqlite", path="sessions.db"), window=8),
     user=UserMemory(note_store=notes, memory_tool=True, auto_extract=True),
 )
-agent = Agent(model=..., memory=memory, session_id="conv-1", user_id="alice",
-              scopes={"claim_id": "CLM-4421"})
+agent = Agent(
+    model="openai:gpt-5.4-mini",
+    memory=memory,
+    session_id="conv-1",
+    user_id="alice",
+    scopes={"claim_id": "CLM-4421"},
+)
 ```
 
 | Layer | Class | Stores |
@@ -343,7 +344,7 @@ set `LOOMABLE_LIVE_PROVIDER=openai` or `gemini` and its API key, then run
 
 ---
 
-## Knowledge / RAG
+## Knowledge and retrieval
 
 ```python
 agent = Agent(model=..., knowledge_base=["./handbook.pdf", "./runbooks"])
@@ -357,14 +358,14 @@ agent = Agent(model=..., knowledge=["FAQ..."], embedder=OpenAIEmbedder(), knowle
 
 `knowledge=` without `embedder=` raises. Prefer `knowledge_base=` for search tools. Team / Case / Workflow inherit `knowledge_base=` onto Agent members that do not already have one.
 
-`loomable.retrieval` (`ingest`, `build_agentic_retriever`) is experimental — prefer `knowledge_base=` / `retrievers=` on Agent. See `examples/advanced/06_agentic_retriever.py`.
+`loomable.retrieval` (`ingest`, `build_agentic_retriever`) is experimental — prefer `knowledge_base=` / `retrievers=` on Agent. See [building a retriever from documents](../examples/advanced/05_build_retriever.py).
 
 ---
 
 ## Models
 
 ```python
-Agent(model="openai:gpt-4o-mini")
+Agent(model="openai:gpt-5.4-mini")
 Agent(model="gemini:gemini-flash-latest")
 Agent(model="gpt-4o-mini")  # bare name → OpenAI
 ```
@@ -380,7 +381,7 @@ from loomable import Agent
 from loomable.providers import OpenAIProvider, register_provider
 
 register_provider("company-openai", OpenAIProvider)
-agent = Agent(model="company-openai:gpt-4o-mini")
+agent = Agent(model="company-openai:gpt-5.4-mini")
 ```
 
 An installed Python distribution can declare an entry point under `[project.entry-points."loomable.providers"]`. Its name becomes the model prefix and its value points to the factory. Loomable loads that factory when an application selects the prefix. Built-in providers bypass plugin discovery.
@@ -398,7 +399,7 @@ class CityInfo(BaseModel):
     name: str
     population: int
 
-agent = Agent(model="openai:gpt-4o-mini", response_model=CityInfo)
+agent = Agent(model="openai:gpt-5.4-mini", response_model=CityInfo)
 city = agent.run("Info about Tokyo").structured
 # or per-call: await agent.arun("...", output_schema=CityInfo)
 ```
@@ -438,7 +439,7 @@ async with OpenAIProvider("gpt-5.4-mini", timeout=120) as provider:
 
 ---
 
-## Streaming, SSE, serving
+## Streaming and serving
 
 ```python
 async for chunk in agent.astream("hello"):
@@ -465,21 +466,42 @@ async for ev in case.astream_events(prompt):
 | Graph | `NODE_STARTED`, `NODE_FINISHED` |
 | State | `STATE_SNAPSHOT`, `STATE_DELTA` |
 
+Install `loomable[serve]` to mount a runnable in FastAPI.
+
 ```python
+import os
+
 from fastapi import FastAPI
-from loomable.serve import mount_agent, mount_case, mount_team, mount_workflow
+
+from loomable import Agent
+from loomable.serve import mount_agent
 
 app = FastAPI()
-mount_agent(app, agent, prefix="/agent", api_key="secret")
-mount_team(app, team, prefix="/teams", api_key="secret")      # alias of mount_agent
-mount_case(app, case, prefix="/cases", api_key="secret")
-mount_workflow(app, wf, prefix="/workflows", api_key="secret")
-# POST /agent/run          JSON  (resume= on body when supported)
-# POST /agent/run/events   SSE  (disconnect → cancel; RUN_PAUSED on Workflow HITL)
-# POST /agent/run/stream   NDJSON, Agent only (omitted for Case / mode=case)
-# GET/PATCH /workflows/state — Workflow get_state / update_state
-# POST /workflows/approve  — HITL approve (+ auto_run to resume; optional session_id on body)
+mount_agent(
+    app,
+    Agent(model="openai:gpt-5.4-mini"),
+    prefix="/agent",
+    api_key=os.environ["LOOMABLE_API_KEY"],
+    max_concurrent_runs=16,
+)
 ```
+
+| Endpoint | Response |
+|---|---|
+| `POST /agent/run` | Completed run as JSON |
+| `POST /agent/run/events` | AG-UI events over server-sent events (SSE) |
+| `POST /agent/run/stream` | Newline-delimited JSON for targets with `astream()` |
+| `GET /agent/health` | Health response |
+
+Use `mount_team`, `mount_case`, or `mount_workflow` for the corresponding
+runnable. Workflow mounts also expose `GET/PATCH /state` and
+`POST /approve` under their prefix. Agent admission limits apply per mount
+and process. Streaming requests hold a slot until the response closes. At
+capacity, authenticated callers receive HTTP 429 with `Retry-After: 1`.
+
+See the [local serving walkthrough](../examples/README.md#extend-and-serve)
+and [serving security boundaries](../SECURITY.md#trust-boundaries-beta).
+
 
 ---
 
@@ -512,7 +534,12 @@ of sessions deleted.
 
 ---
 
-## Production knobs
+## Retries, limits, and MCP
+
+Configure provider retries with `RetryPolicy`. Set `tool_timeout` and
+`tool_concurrency` separately to bound tool execution. Use `token_budget` to
+shape the context window and `max_run_tokens` to cap cumulative model usage
+at execution boundaries.
 
 ### MCP tools
 
@@ -524,14 +551,17 @@ Unique remote tool names are exposed as-is when they fit the model's tool schema
 
 Structured results are available on the tool outcome. MCP images, audio, and embedded binary artifacts appear on the corresponding `RunResult` media properties. Resource links remain references and are never fetched automatically.
 
-All opt-in.
+See the [local stdio example](../examples/advanced/01_mcp_servers.py) for a
+working server and client in one file.
+
+### Execution settings
 
 ```python
+from loomable import Agent
 from loomable.providers import RetryPolicy
 
 agent = Agent(
-    model="openai:gpt-4o-mini",
-    tools=[search],
+    model="openai:gpt-5.4-mini",
     resilience=RetryPolicy(max_attempts=3, base_delay=0.5),
     tool_timeout=5.0,
     tool_concurrency=3,
@@ -540,10 +570,6 @@ agent = Agent(
     think_tool=True,
     plan_tool=True,
     debug=True,
-    mcp_servers=[
-        {"command": "uvx", "args": ["some-mcp-server"]},
-        {"url": "http://localhost:8080/sse", "headers": {"Authorization": "Bearer ..."}},
-    ],
 )
 ```
 
@@ -562,9 +588,9 @@ show_graph(wf.flow)                       # prints Mermaid (paste into mermaid.l
 
 ---
 
-## Flow (escape hatch)
+## Low-level Flow
 
-Prefer `Workflow.step` / `.parallel` / `.branch` / `.map`. `Flow`, `Node`, `Edge`, engines, and `loomable.flow.helpers` (`sequential`, `parallel`, `route`, `coordinate`) remain for power users. `FlowClass` / `start` / `listen` / `router` are experimental.
+Use `Flow` with `Node` and `Edge` for explicit graph construction and engine selection. The `loomable.flow.helpers` module provides `sequential`, `parallel`, `route`, and `coordinate` builders. `FlowClass` / `start` / `listen` / `router` are experimental.
 
 ```python
 from loomable.flow import Flow, Loop, Workflow, Step, FlowPaused
@@ -573,14 +599,14 @@ from loomable.flow.helpers import sequential  # advanced only
 
 ---
 
-## Moved / renamed
+## Compatibility
 
 | Old | Use |
 |-----|-----|
 | `from loomable.agent import NoteStore` | `from loomable.memory import NoteStore` (compat re-export still works) |
 | `loomable/case.py` | `loomable.case` package (imports unchanged) |
 
-## Removed names (no shims)
+### Removed options
 
 | Old | Use |
 |-----|-----|

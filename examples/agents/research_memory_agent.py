@@ -11,7 +11,7 @@ and caches the runtime automatically.
 
 Run (requires a live LLM key — see repo ``.env.example``)::
 
-    python examples/agents/09_research_memory_agent.py
+    python -m examples.agents.09_research_memory_agent
 
 Or import the factory::
 
@@ -20,8 +20,6 @@ Or import the factory::
 
 from __future__ import annotations
 
-import asyncio
-import sys
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -250,55 +248,3 @@ def build_research_agent(
         max_delegations=8,
         max_depth=3,
     )
-
-
-async def demo() -> None:
-    """Run a short demo: simple question, then a complex multi-track question."""
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from _provider import make_embedder, require_provider  # noqa: E402
-
-    model = require_provider()
-    embedder = make_embedder()
-    root = Path(__file__).resolve().parent / ".workspace_research_agent"
-    root.mkdir(parents=True, exist_ok=True)
-
-    # Drop sample PDF paths here, or put PDFs in .workspace_research_agent/documents/
-    agent = build_research_agent(
-        model,
-        embedder=embedder,
-        workspace=root,
-        session_id="research-demo-1",
-        user_id="researcher",
-        pdf_paths=[],  # e.g. [root / "documents" / "report.pdf"]
-    )
-
-    print("=== Turn 1: preference (L3 memory) ===")
-    r1 = await agent.arun(
-        "My name is Sam. I prefer bullet summaries and care most about EU AI regulation."
-    )
-    print(r1.output.text()[:800])
-
-    print("\n=== Turn 2: simple recall ===")
-    r2 = await agent.arun("What do you remember about my preferences?")
-    print(r2.output.text()[:800])
-
-    print("\n=== Turn 3: complex (plan + subagents + web) ===")
-    r3 = await agent.arun(
-        "Research deeply: What are the top 3 EU AI Act obligations for "
-        "general-purpose AI providers in 2025?\n"
-        "Compare official guidance with recent news. "
-        "If I uploaded PDFs, cross-check against those too. "
-        "Structure: summary, findings, sources, gaps."
-    )
-    print(r3.output.text()[:2000])
-    if r3.tool_activity:
-        tools = [
-            (o.result.metadata or {}).get("tool_name", "?")
-            for o in r3.tool_activity
-            if o.result
-        ]
-        print("\nTools used:", ", ".join(t for t in tools if t))
-
-
-if __name__ == "__main__":
-    asyncio.run(demo())
