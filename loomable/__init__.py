@@ -1,4 +1,4 @@
-"""loomable — enterprise AI agent framework.
+"""loomable — a lightweight Python framework for agents, specialist teams, and workflows.
 
 High-level imports::
 

@@ -1,7 +1,7 @@
 [project]
 name = "loomable"
 version = "0.2.0b0"
-description = "Enterprise AI agent framework — Agent, Team, Workflow, Case, AG-UI SSE"
+description = "Lightweight Python framework for agents, specialist teams, and workflows — Agent, Team, Workflow, Case, AG-UI SSE"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
