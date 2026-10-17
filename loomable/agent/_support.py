@@ -290,7 +290,8 @@ def _parse_require_tool_specs(specs: list[str]) -> list[tuple[str, str | None]]:
 
     Supports plain names (``\"write_file\"``) and path constraints
     (``\"write_file:output/brief.md\"``) so scribes cannot "satisfy" the
-    contract by writing to an arbitrary path.
+    contract by writing to an arbitrary path. A trailing ``*`` matches a tool
+    name prefix.
     """
     parsed: list[tuple[str, str | None]] = []
     for raw in specs:
@@ -329,7 +330,7 @@ def _format_require_tools_nudge(missing: list[str]) -> str:
                 f"call {name} with path matching {path!r} (exact or ending with /{path})"
             )
         else:
-            parts.append(f"call {item}")
+            parts.append(f"call a tool whose name starts with {item[:-1]}" if item.endswith("*") else f"call {item}")
     return (
         "You finished without satisfying required tools: "
         + "; ".join(parts)

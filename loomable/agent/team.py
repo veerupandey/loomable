@@ -11,6 +11,7 @@ run members deterministically (enterprise predictability). Soft modes
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from .builder import Agent
@@ -180,6 +181,8 @@ class Team:
         self._mode = mode
         self._instructions = instructions
         self._session_id = session_id
+        if mode == "route":
+            max_delegations = 1 if max_delegations is None else min(max_delegations, 1)
         self._max_delegations = max_delegations
         self._max_depth = max_depth
         self._max_iterations = max_iterations
@@ -200,9 +203,7 @@ class Team:
         if mode == "tasks":
             from loomable.toolkits.todo_tools import TodoTools
 
-            todo_workspace = (
-                f".team_todos/{session_id}" if session_id else ".team_todos/default"
-            )
+            todo_workspace = f".team_todos/{session_id}" if session_id else None
             self._todo_tools = TodoTools(workspace=todo_workspace)
             extra_tools.append(self._todo_tools)
 
@@ -270,25 +271,20 @@ class Team:
             self._agent._require_tools = [
                 name for _, name in delegation_tool_names(self._members)
             ]
-        # Soft route: require at least the first delegate tool (parity with coordinate).
+        # Route accepts any successful specialist and permits one delegation.
         if mode == "route" and not self._hard and not self._agent._require_tools:
-            from .delegation import delegation_tool_names
-
-            names = [name for _, name in delegation_tool_names(self._members)]
-            if names:
-                self._agent._require_tools = [names[0]]
+            self._agent._require_tools = ["delegate_to_*"]
+            self._agent._strict_require_tools = True
         # Soft tasks: nudge write_todos + at least one delegation.
         if mode == "tasks" and not self._agent._require_tools:
-            from .delegation import delegation_tool_names
-
-            names = [name for _, name in delegation_tool_names(self._members)]
-            self._agent._require_tools = ["write_todos", *names[:1]]
+            self._agent._require_tools = ["write_todos", "delegate_to_*"]
+            self._agent._strict_require_tools = True
 
     def as_agent(self, *, index: int = 0) -> Agent:
         """Expose this Team as a single Agent for nesting in another Team.
 
-        The wrapper Agent's only tool is ``run_nested_team``, which forwards to
-        :meth:`arun`. Used automatically when a :class:`Team` is passed as a member.
+        Delegation forwards the team's result directly. The wrapper also
+        exposes ``run_nested_team`` when built as a standalone Agent.
         """
         from loomable.agent.tools import FunctionTool
 
@@ -300,6 +296,12 @@ class Team:
             result = await team.arun(task)
             return result.output.text()
 
+        class NestedTeamAgent(Agent):
+            async def arun(self, input, *, images=None, videos=None, audio=None,
+                           output_schema=None, context=None, session_id=None):
+                return await team.arun(input, images=images, videos=videos, audio=audio,
+                                       output_schema=output_schema, context=context)
+
         tool = FunctionTool(
             run_nested_team,
             name="run_nested_team",
@@ -308,7 +310,7 @@ class Team:
                 "the synthesized result."
             ),
         )
-        return Agent(
+        return NestedTeamAgent(
             model=self._model,
             name=label,
             role=label,
@@ -319,6 +321,7 @@ class Team:
             ),
             tools=[tool],
             require_tools=["run_nested_team"],
+            strict_require_tools=True,
             max_tool_iterations=4,
         )
 
@@ -342,6 +345,30 @@ class Team:
         """The team member agents."""
         return list(self._members)
 
+    @staticmethod
+    async def _run_member(member, label, bridge, task, **options):
+        if bridge is None:
+            return await member.arun(task, **options)
+
+        import time
+
+        from loomable.stream import NODE_FINISHED, NODE_STARTED
+
+        start = time.monotonic()
+        bridge.publish(NODE_STARTED, {"node_id": label, "role": label})
+        event = {"node_id": label, "success": True}
+        try:
+            return await member.arun(task, **options)
+        except asyncio.CancelledError:
+            event.update(success=False, error="cancelled")
+            raise
+        except Exception as exc:
+            event.update(success=False, error=str(exc))
+            raise
+        finally:
+            event["duration_ms"] = int((time.monotonic() - start) * 1000)
+            bridge.publish(NODE_FINISHED, event)
+
     async def _run_broadcast(
         self,
         task: str,
@@ -350,6 +377,7 @@ class Team:
         videos: "list[str | Any] | None" = None,
         audio: "list[str | Any] | None" = None,
         output_schema: type | None = None,
+        bridge: Any = None,
     ) -> "RunResult":
         from loomable.agent.run import RunResult
         from loomable.content import AgentOutput, Text
@@ -357,8 +385,8 @@ class Team:
         async def _one(member: Agent, index: int) -> tuple[str, str]:
             label = _member_label(member, index)
             try:
-                result = await member.arun(
-                    task,
+                result = await self._run_member(
+                    member, label, bridge, task,
                     images=images,
                     videos=videos,
                     audio=audio,
@@ -370,9 +398,14 @@ class Team:
                     raise
                 return label, f"ERROR: {exc}"
 
-        pairs = await asyncio.gather(
-            *[_one(m, i) for i, m in enumerate(self._members)]
-        )
+        tasks = [asyncio.create_task(_one(member, index)) for index, member in enumerate(self._members)]
+        try:
+            pairs = await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
         member_errors = any(
             text.startswith("ERROR:") for _, text in pairs
         )
@@ -395,6 +428,7 @@ class Team:
         videos: "list[str | Any] | None" = None,
         audio: "list[str | Any] | None" = None,
         output_schema: type | None = None,
+        bridge: Any = None,
     ) -> "RunResult":
         from loomable.agent.run import RunResult
         from loomable.content import AgentOutput, Text
@@ -402,6 +436,7 @@ class Team:
         current = task
         trail: list[str] = []
         member_errors = False
+        result = None
         for i, member in enumerate(self._members):
             label = _member_label(member, i)
             prompt = current if i == 0 else (
@@ -409,8 +444,8 @@ class Team:
                 f"Continue the pipeline for the original task:\n{task}"
             )
             try:
-                result = await member.arun(
-                    prompt,
+                result = await self._run_member(
+                    member, label, bridge, prompt,
                     images=images if i == 0 else None,
                     videos=videos if i == 0 else None,
                     audio=audio if i == 0 else None,
@@ -422,6 +457,7 @@ class Team:
                     raise
                 member_errors = True
                 current = f"ERROR from {label}: {exc}"
+                result = None
             trail.append(f"[{label}] {current[:500]}")
         meta: dict[str, Any] = {
             "team_mode": "sequential",
@@ -430,6 +466,8 @@ class Team:
         }
         if member_errors:
             meta["member_errors"] = True
+        if result is not None:
+            return replace(result, session_id=self._session_id or "", metadata={**result.metadata, **meta})
         return RunResult(
             output=AgentOutput(parts=[Text(current)]),
             session_id=self._session_id or "",
@@ -623,7 +661,7 @@ class Team:
             parts = result.output.parts
             last = len(parts) - 1
             for index, part in enumerate(parts):
-                yield RunChunk(delta=part, done=index == last)
+                yield RunChunk(delta=part, done=index == last, result=result if index == last else None)
             return
 
         # Coordinate needs full arun for member fallback; other soft modes stream live.
@@ -638,13 +676,14 @@ class Team:
             parts = result.output.parts
             last = len(parts) - 1
             for index, part in enumerate(parts):
-                yield RunChunk(delta=part, done=index == last)
+                yield RunChunk(delta=part, done=index == last, result=result if index == last else None)
             return
 
-        async for chunk in self._agent.astream(input, output_schema=output_schema):
+        async for chunk in self._agent.astream(input, images=images, videos=videos, audio=audio,
+                                               output_schema=output_schema):
+            if chunk.done and self._mode == "tasks":
+                self._verify_tasks_todos()
             yield chunk
-        if self._mode == "tasks" and not self._hard:
-            self._verify_tasks_todos()
 
     async def astream_events(
         self,
@@ -665,9 +704,8 @@ class Team:
         """
         # Soft / LLM-coordinated path: reuse Agent SSE (tools include delegates).
         if not (self._hard and self._mode in ("broadcast", "sequential")):
-            if session_id:
-                self.bind_session(session_id)
             from loomable.stream import (
+                RUN_ERROR,
                 RUN_FINISHED,
                 TEXT_MESSAGE_CONTENT,
                 TEXT_MESSAGE_END,
@@ -699,6 +737,15 @@ class Team:
                 ):
                     finished = ev
                     continue
+                if ev.type == RUN_FINISHED and self._mode == "tasks":
+                    from .errors import RequireToolsError
+
+                    try:
+                        self._verify_tasks_todos()
+                    except RequireToolsError as exc:
+                        ev = replace(ev, type=RUN_ERROR, data={
+                            "message": str(exc), "error_type": type(exc).__name__,
+                        })
                 yield ev
             if finished is not None:
                 from loomable.agent.run import RunResult
@@ -747,9 +794,10 @@ class Team:
                         session_id=sid,
                         data={},
                     )
+                    finished = replace(finished, data={
+                        **finished.data, "text": f"{finished.data.get('text', '')}\n\n{extra_text}".strip(),
+                    })
                 yield finished
-            if self._mode == "tasks" and not self._hard:
-                self._verify_tasks_todos()
             return
 
         import uuid
@@ -775,18 +823,18 @@ class Team:
             try:
                 bridge.publish(RUN_STARTED, {"input": text[:500], "team_mode": self._mode})
                 if self._mode == "broadcast":
-                    result = await self._run_broadcast_streaming(
+                    result = await self._run_broadcast(
                         text,
-                        bridge,
+                        bridge=bridge,
                         images=images,
                         videos=videos,
                         audio=audio,
                         output_schema=output_schema,
                     )
                 else:
-                    result = await self._run_sequential_streaming(
+                    result = await self._run_sequential(
                         text,
-                        bridge,
+                        bridge=bridge,
                         images=images,
                         videos=videos,
                         audio=audio,
@@ -817,129 +865,3 @@ class Team:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
-
-    async def _run_broadcast_streaming(
-        self,
-        task: str,
-        bridge: Any,
-        *,
-        images: "list[str | Any] | None" = None,
-        videos: "list[str | Any] | None" = None,
-        audio: "list[str | Any] | None" = None,
-        output_schema: type | None = None,
-    ) -> "RunResult":
-        import time
-
-        from loomable.agent.run import RunResult
-        from loomable.content import AgentOutput, Text
-        from loomable.stream import NODE_FINISHED, NODE_STARTED
-
-        async def _one(member: Agent, index: int) -> tuple[str, str]:
-            label = _member_label(member, index)
-            t0 = time.monotonic()
-            bridge.publish(NODE_STARTED, {"node_id": label, "role": label})
-            try:
-                result = await member.arun(
-                    task,
-                    images=images,
-                    videos=videos,
-                    audio=audio,
-                    output_schema=output_schema,
-                )
-                text = result.output.text()
-                bridge.publish(
-                    NODE_FINISHED,
-                    {
-                        "node_id": label,
-                        "duration_ms": int((time.monotonic() - t0) * 1000),
-                        "success": True,
-                    },
-                )
-                return label, text
-            except Exception as exc:  # noqa: BLE001
-                bridge.publish(
-                    NODE_FINISHED,
-                    {
-                        "node_id": label,
-                        "duration_ms": int((time.monotonic() - t0) * 1000),
-                        "success": False,
-                        "error": str(exc),
-                    },
-                )
-                return label, f"ERROR: {exc}"
-
-        pairs = await asyncio.gather(
-            *[_one(m, i) for i, m in enumerate(self._members)]
-        )
-        lines = [f"## {label}\n{text}" for label, text in pairs]
-        merged = "\n\n".join(lines)
-        return RunResult(
-            output=AgentOutput(parts=[Text(merged)]),
-            session_id=self._session_id or "",
-            metadata={"team_mode": "broadcast", "hard": True},
-        )
-
-    async def _run_sequential_streaming(
-        self,
-        task: str,
-        bridge: Any,
-        *,
-        images: "list[str | Any] | None" = None,
-        videos: "list[str | Any] | None" = None,
-        audio: "list[str | Any] | None" = None,
-        output_schema: type | None = None,
-    ) -> "RunResult":
-        import time
-
-        from loomable.agent.run import RunResult
-        from loomable.content import AgentOutput, Text
-        from loomable.stream import NODE_FINISHED, NODE_STARTED
-
-        current = task
-        trail: list[str] = []
-        for i, member in enumerate(self._members):
-            label = _member_label(member, i)
-            prompt = current if i == 0 else (
-                f"Prior output from previous team member:\n{current}\n\n"
-                f"Continue the pipeline for the original task:\n{task}"
-            )
-            t0 = time.monotonic()
-            bridge.publish(NODE_STARTED, {"node_id": label, "role": label})
-            try:
-                result = await member.arun(
-                    prompt,
-                    images=images if i == 0 else None,
-                    videos=videos if i == 0 else None,
-                    audio=audio if i == 0 else None,
-                    output_schema=output_schema if i == len(self._members) - 1 else None,
-                )
-                current = result.output.text()
-                bridge.publish(
-                    NODE_FINISHED,
-                    {
-                        "node_id": label,
-                        "duration_ms": int((time.monotonic() - t0) * 1000),
-                        "success": True,
-                    },
-                )
-            except Exception as exc:  # noqa: BLE001
-                current = f"ERROR from {label}: {exc}"
-                bridge.publish(
-                    NODE_FINISHED,
-                    {
-                        "node_id": label,
-                        "duration_ms": int((time.monotonic() - t0) * 1000),
-                        "success": False,
-                        "error": str(exc),
-                    },
-                )
-            trail.append(f"[{label}] {current[:500]}")
-        return RunResult(
-            output=AgentOutput(parts=[Text(current)]),
-            session_id=self._session_id or "",
-            metadata={
-                "team_mode": "sequential",
-                "hard": True,
-                "trail": trail,
-            },
-        )

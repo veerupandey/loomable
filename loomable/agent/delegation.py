@@ -8,9 +8,12 @@ Failures are isolated: exceptions become error strings instead of crashing the p
 from __future__ import annotations
 
 import re
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 from .tools import FunctionTool
+
+delegation_counts: ContextVar[dict[object, int] | None] = ContextVar("delegation_counts", default=None)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .builder import Agent
@@ -114,7 +117,8 @@ def make_delegation_tools(
     """
     tools: list[FunctionTool] = []
     used_slugs: set[str] = set()
-    call_count = {"n": 0}
+    budget_key = object()
+    standalone_counts = {}
 
     for index, subagent in enumerate(subagents):
         role = _subagent_label(subagent, index)
@@ -131,14 +135,19 @@ def make_delegation_tools(
             """Delegate a task to this subagent and return its text response."""
             if depth >= max_depth:
                 return (
-                    f"Subagent '{_role}' skipped: max delegation depth "
+                    f"Error: Subagent '{_role}' skipped: max delegation depth "
                     f"{max_depth} reached."
                 )
-            if max_delegations is not None and call_count["n"] >= max_delegations:
+            counts = delegation_counts.get()
+            if counts is None:
+                counts = standalone_counts
+            count = counts.get(budget_key, 0)
+            if max_delegations is not None and count >= max_delegations:
                 return (
-                    f"Subagent '{_role}' skipped: max_delegations="
+                    f"Error: Subagent '{_role}' skipped: max_delegations="
                     f"{max_delegations} budget exhausted."
                 )
+            counts[budget_key] = count + 1
             prev_depth = getattr(_subagent, "_delegation_depth", 0)
             prev_chain_max = getattr(_subagent, "_delegation_max_depth", None)
             target_depth = depth + 1
@@ -148,10 +157,10 @@ def make_delegation_tools(
                 _subagent._built = None
             try:
                 result = await _subagent.arun(task)
-                call_count["n"] += 1
                 return result.output.text()
             except Exception as exc:  # noqa: BLE001 - isolate subagent failures
-                return f"Subagent '{_role}' failed: {exc}"
+                counts[budget_key] -= 1
+                return f"Error: Subagent '{_role}' failed: {exc}"
             finally:
                 if target_depth != prev_depth:
                     _subagent._delegation_depth = prev_depth

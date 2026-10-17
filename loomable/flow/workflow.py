@@ -759,17 +759,22 @@ class Workflow:
             )
         if self._checkpointer is None or self._session_id is None:
             raise RuntimeError("approve() requires checkpointer and session_id")
-        cp = await self._checkpointer.get(self._session_id)
-        if cp is None or not cp.pending:
-            raise RuntimeError(f"No pending HITL action for session {self._session_id!r}")
-        matched = False
-        for pa in cp.pending:
-            if pa.tool_name == node_id or pa.args.get("node_id") == node_id:
-                pa.status = status
-                matched = True
-        if not matched:
-            raise RuntimeError(f"No pending HITL action matching node {node_id!r}")
-        await self._checkpointer.put(cp)
+        from contextlib import nullcontext
+
+        session_id = self._session_id
+        claim = getattr(self._checkpointer, "claim", None)
+        async with claim(session_id) if claim else nullcontext():
+            cp = await self._checkpointer.get(session_id)
+            if cp is None or cp.complete or not cp.pending:
+                raise RuntimeError(f"No pending HITL action for session {session_id!r}")
+            matched = False
+            for pa in cp.pending:
+                if pa.tool_name == node_id or pa.args.get("node_id") == node_id:
+                    pa.status = status
+                    matched = True
+            if not matched:
+                raise RuntimeError(f"No pending HITL action matching node {node_id!r}")
+            await self._checkpointer.put(cp)
 
     async def clear_checkpoint(self) -> None:
         """Mark any incomplete checkpoint complete so the next run starts fresh."""

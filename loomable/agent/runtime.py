@@ -344,6 +344,9 @@ class BuiltAgent:
 
         self._active_ctx = ctx
         ctx._usage.clear()
+        from .delegation import delegation_counts
+
+        delegation_token = delegation_counts.set({})
         try:
             async with AsyncExitStack() as resources:
                 if self.durability is not None:
@@ -372,6 +375,7 @@ class BuiltAgent:
                     await self._refresh_user_memory_context(_input_text(agent_input))
                 return await self._arun_with_context(agent_input, output_schema=output_schema, ctx=ctx)
         finally:
+            delegation_counts.reset(delegation_token)
             self._journal = None
             if self._active_ctx is ctx:
                 self._active_ctx = None
@@ -1547,7 +1551,7 @@ class BuiltAgent:
                     and not str(outcome.result.content or "").startswith("Error:")
                 )
                 for name, path_sub in require_tool_specs:
-                    if tc.tool_name != name:
+                    if tc.tool_name != name and not (name.endswith("*") and tc.tool_name.startswith(name[:-1])):
                         continue
                     if not ok:
                         continue

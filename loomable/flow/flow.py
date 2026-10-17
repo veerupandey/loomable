@@ -320,6 +320,7 @@ class Flow:
         *,
         context: "RunContext | None" = None,
         resume: bool | None = None,
+        session_id: str | None = None,
     ) -> "RunResult":
         """Execute the flow end-to-end.
 
@@ -330,7 +331,18 @@ class Flow:
             continue from it (raises if none).
             ``False`` — ignore any incomplete checkpoint and start fresh.
             ``None`` (default) — auto-resume when an incomplete checkpoint exists.
+        session_id:
+            Optional checkpoint thread override for this execution.
         """
+        thread = session_id or self._session_id
+        claim = getattr(self._checkpointer, "claim", None)
+        nested = context is not None and context.shared_state is not None
+        if claim is not None and not nested:
+            async with claim(thread or "default"):
+                return await self._arun(input, context=context, resume=resume, session_id=thread)
+        return await self._arun(input, context=context, resume=resume, session_id=thread)
+
+    async def _arun(self, input, *, context, resume, session_id):
         from loomable.agent.context import RunContext
         from loomable.flow.state import SharedState
 
@@ -371,13 +383,13 @@ class Flow:
         #    Nested flows skip replace-restore so they cannot wipe the parent state.
         completed_node_ids: set[str] | None = None
         pending_decisions: dict[str, str] | None = None
-        if self._checkpointer is not None and self._session_id is not None:
-            existing_cp = await self._checkpointer.get(self._session_id)
+        if self._checkpointer is not None and session_id is not None:
+            existing_cp = await self._checkpointer.get(session_id)
             has_incomplete = existing_cp is not None and not existing_cp.complete
             if resume is True and not has_incomplete:
                 raise RuntimeError(
                     f"resume=True but no incomplete checkpoint for session_id="
-                    f"{self._session_id!r}"
+                    f"{session_id!r}"
                 )
             if resume is False and has_incomplete:
                 # Start fresh: mark old run complete so it won't auto-restore
@@ -385,7 +397,7 @@ class Flow:
 
                 await self._checkpointer.put(
                     Checkpoint(
-                        thread_id=self._session_id,
+                        thread_id=session_id,
                         step=existing_cp.step if existing_cp else 0,
                         session_state=dict(existing_cp.session_state) if existing_cp else {},
                         complete=True,
@@ -411,6 +423,8 @@ class Flow:
                             reducers=self._reducers,
                         )
                         ctx.shared_state = state
+                if not nested and input is None:
+                    input = state.get("_workflow_input")
                 # HITL resume: extract pending action decisions (Req 16.3)
                 if existing_cp.pending:
                     pending_decisions = {}
@@ -444,7 +458,7 @@ class Flow:
             engine_kwargs["completed_node_ids"] = completed_node_ids
         if self._checkpointer is not None:
             engine_kwargs["checkpointer"] = self._checkpointer
-            engine_kwargs["session_id"] = self._session_id
+            engine_kwargs["session_id"] = session_id
         if pending_decisions is not None:
             engine_kwargs["pending_decisions"] = pending_decisions
         if nested:
@@ -495,7 +509,7 @@ class Flow:
                 ) if result.sub_results else []
 
             final_cp = Checkpoint(
-                thread_id=self._session_id or "default",
+                thread_id=session_id or "default",
                 step=len(done_ids),
                 session_state={
                     "shared_state": state.snapshot(),
@@ -548,15 +562,10 @@ class Flow:
         ctx = context or RunContext()
         ctx.events = bridge
 
-        # Bind checkpoint thread to the stream session_id for this run.
-        prev_session = self._session_id
-        if session_id:
-            self._session_id = session_id
-
         async def _runner() -> None:
             try:
                 bridge.publish(RUN_STARTED, {"input": str(input)[:500] if input is not None else ""})
-                result = await self.arun(input, context=ctx, resume=resume)
+                result = await self.arun(input, context=ctx, resume=resume, session_id=session_id)
                 text = ""
                 if result.output is not None and hasattr(result.output, "text"):
                     text = result.output.text() or ""
@@ -585,7 +594,6 @@ class Flow:
                         {"message": str(exc), "error_type": type(exc).__name__},
                     )
             finally:
-                self._session_id = prev_session
                 await bus.close()
 
         task = asyncio.create_task(_runner())
@@ -599,7 +607,6 @@ class Flow:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
-            self._session_id = prev_session
 
     def _resolve_engine(self) -> Any:
         """Resolve which engine to use for this flow run.

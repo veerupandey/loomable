@@ -156,6 +156,11 @@ result = await team.arun("Review our API design")
 
 `hard=True` is only valid with `broadcast` / `sequential`. Soft `coordinate` auto-requires `delegate_to_*` and runs skipped members (`metadata["team_coordinate_fallback"]`). `Team.astream` mirrors `Agent.astream` for soft modes; hard modes chunk the merged `arun` result. Members may be nested `Team` instances (wrapped via `Team.as_agent()`).
 
+Route mode requires one successful specialist delegation per run. Its choice
+can be any roster member. A trailing `*` in `require_tools` matches a tool-name
+prefix. The final `Team.astream` chunk carries the run result. In sequential
+mode, the final member's structured output is available on that result.
+
 Or pass `subagents=[...]` on a parent `Agent` — each becomes `delegate_to_<role>`. Nested subagents are allowed; `max_depth` (default 4) is an absolute nest budget from the top parent (child rebuilds at `depth+1`). `max_delegations` caps successful `delegate_to_*` calls in one parent run.
 
 Note: Agent `subagents=` (LLM delegation tools) is separate from kernel `SubagentManager` (used by Workflow parallel/map engines).
@@ -188,6 +193,13 @@ print(wf.state.get("research").text())
 Declarative: `Workflow("pipe", steps=[Step("a", a), Step("b", b)])`.
 
 `confirm=True` requires `checkpointer=` + `session_id=`. Not supported inside `.parallel()` / `.branch()` / `.loop()` / `.route()`. Catch `FlowPaused` and use `.node_id` (or `pending.tool_name`) before `approve` + `arun(resume=True)`.
+
+Built-in checkpointers coordinate workflow execution and approval with a
+claim per checkpoint thread. A competing worker receives `CheckpointBusy`.
+The live release review test exercises parallel evidence gathering, routing,
+approval, resume, nested teams, and all five team modes. Run
+`python -m pytest --live tests/integration/test_release_review_live.py` with
+`LOOMABLE_LIVE_PROVIDER=openai` or `gemini` and the corresponding API key.
 
 `Workflow(memory=True)` is a callable-step blackboard on `RunContext.memory` — **not** Agent chat memory. Agent steps share via SharedState output chaining.
 
