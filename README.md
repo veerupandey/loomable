@@ -5,6 +5,7 @@
     <a href="https://github.com/veerupandey/loomable/actions/workflows/ci.yml"><img src="https://github.com/veerupandey/loomable/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
     <img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+" />
     <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT" />
+    <img src="https://img.shields.io/badge/status-beta-blue.svg" alt="Status: beta" />
   </p>
 </div>
 
@@ -17,7 +18,7 @@
   <a href="SECURITY.md">Security</a>
 </p>
 
-**Loomable** — Agent, Team, Workflow, Case, Memory, AG-UI. Limits: local workspace FS, cooperative cancel, shared API-key serve auth. Full surface: [docs/API.md](docs/API.md).
+**Public beta (`0.2.0b0`)** — Agent, Team, Workflow, Case, Memory, AG-UI. Polish gaps expected. Limits: local workspace FS, cooperative cancel, shared API-key serve auth. Full surface: [docs/API.md](docs/API.md).
 
 ```python
 from loomable import Agent, Team, Workflow, Case, tool
